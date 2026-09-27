@@ -33,7 +33,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from .relay_crypto import b64url_encode, canonical_json_bytes, key_id, public_key_bytes, sign_p1363
+from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
+from .sealed_alerts import seal_alert, seal_avatar
 from .session_state import open_profile_store
 
 ORIGIN = "https://link.loopdy.app"
@@ -166,6 +167,8 @@ class ManagedNotifications:
                 CREATE INDEX IF NOT EXISTS pending_due ON pending(state,next_attempt);
                 CREATE TABLE IF NOT EXISTS approval_attention(event_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, tool_call_id TEXT NOT NULL, owner TEXT NOT NULL, state TEXT NOT NULL, expires INTEGER NOT NULL, reason TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS approval_scope ON approval_attention(grant_id,profile,session_id,turn_id);
+                CREATE TABLE IF NOT EXISTS recipients(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, public_key TEXT NOT NULL, key_id TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS avatar_keys(grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, sha256 TEXT NOT NULL, key BLOB NOT NULL, nonce BLOB NOT NULL, PRIMARY KEY(grant_id,sha256));
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
 
@@ -215,6 +218,7 @@ class ManagedNotifications:
             clarification_loaded = bool(self._clarification_profiles)
         return {"version": 1, "hostKeyId": self.key_id, "hostPublicKey": self.public_key,
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
+                "sealedAlerts": {"version": 2},
                 "richLiveActivitySupported": True, "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
@@ -295,6 +299,47 @@ class ManagedNotifications:
             db.execute("INSERT OR IGNORE INTO grants VALUES(?,?,'active',?)", (grant_id, encoded, grant["expiresAt"]))
         return {"version": 1, "grant": grant}
 
+    def register_recipient(self, grant_id: str, public_key: str):
+        """The phone's content key for this enrollment, sent directly by the phone.
+        Later alerts for the grant are sealed so only that phone can read them."""
+        self._grant(grant_id)
+        try:
+            raw = b64url_decode(public_key, expected_length=65)
+            public_key_from_x963(raw)
+        except ValueError as error:
+            raise ManagedNotificationError("notification_recipient_key_invalid", 422) from error
+        recipient_id = key_id(raw)
+        with self._db() as db:
+            db.execute("INSERT INTO recipients VALUES(?,?,?) ON CONFLICT(grant_id) DO UPDATE SET public_key=excluded.public_key, key_id=excluded.key_id",
+                       (grant_id, public_key, recipient_id))
+        return {"version": 1, "recipientKeyId": recipient_id}
+
+    def _sealed_event(self, db, grant_id: str, recipient_public_key: str, *, event_id: str, event_type: str,
+                      session_reference: str, turn_id: str, occurred_at: int, title: str, text: str,
+                      avatar: dict[str, Any]) -> bytes:
+        image = base64.b64decode(avatar["data"].split(",", 1)[1], validate=True)
+        row = db.execute("SELECT key,nonce FROM avatar_keys WHERE grant_id=? AND sha256=?", (grant_id, avatar["sha256"])).fetchone()
+        if row:
+            avatar_key, avatar_nonce = bytes(row["key"]), bytes(row["nonce"])
+        else:
+            # One key per image keeps the encrypted avatar identical, so the service stores it once.
+            avatar_key, avatar_nonce = os.urandom(32), os.urandom(12)
+            db.execute("INSERT INTO avatar_keys VALUES(?,?,?,?)", (grant_id, avatar["sha256"], avatar_key, avatar_nonce))
+        sealed_avatar = seal_avatar(grant_id=grant_id, image=image, key=avatar_key, nonce=avatar_nonce)
+        cipher_sha256 = hashlib.sha256(sealed_avatar).hexdigest()
+        envelope = seal_alert(
+            grant_id=grant_id, event_id=event_id, event_type=event_type, title=title, body=text,
+            avatar={"mimeType": avatar["mimeType"], "sha256": avatar["sha256"], "cipherSha256": cipher_sha256,
+                    "key": b64url_encode(avatar_key), "nonce": b64url_encode(avatar_nonce)},
+            recipient_public_key=b64url_decode(recipient_public_key, expected_length=65),
+            sender_private_key=self._key, issued=occurred_at)
+        return canonical_json_bytes({
+            "version": 3, "eventId": event_id, "eventType": event_type, "sessionReference": session_reference,
+            "turnId": turn_id, "occurredAt": occurred_at, "sealed": envelope,
+            "avatar": {"sha256": cipher_sha256,
+                       "data": "data:application/octet-stream;base64," + base64.b64encode(sealed_avatar).decode("ascii")},
+            "sound": True})
+
     def _grant(self, grant_id: str) -> dict[str, Any]:
         _identifier(grant_id, _UUID)
         with self._db() as db:
@@ -323,6 +368,8 @@ class ManagedNotifications:
             db.execute("DELETE FROM subscriptions WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM pending WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM activities WHERE grant_id=?", (grant_id,))
+            db.execute("DELETE FROM recipients WHERE grant_id=?", (grant_id,))
+            db.execute("DELETE FROM avatar_keys WHERE grant_id=?", (grant_id,))
         return {"version": 1, "state": "removed", "grantId": grant_id}
 
     def _session(self, profile: str, session_id: str):
@@ -643,10 +690,17 @@ class ManagedNotifications:
                                (event_id, grant["grantId"], profile, session_id, turn_id, tool_call_id,
                                 self._approval_owner, "pending", expires, "observed"))
                 reference = session_reference(profile, session_id)
-                raw = canonical_json_bytes({"version": 2, "eventId": event_id,
-                    "eventType": event_type, "sessionReference": reference, "turnId": turn_id,
-                    "occurredAt": now, "agent": {"id": profile, "name": agent_name, "avatar": avatar},
-                    "content": {"kind": content_kind, "text": content_text}, "sound": True})
+                recipient = db.execute("SELECT public_key FROM recipients WHERE grant_id=?", (grant["grantId"],)).fetchone()
+                if recipient:
+                    # End to end: only the enrolled phone can read the name, text and avatar.
+                    raw = self._sealed_event(db, grant["grantId"], recipient["public_key"], event_id=event_id,
+                        event_type=event_type, session_reference=reference, turn_id=turn_id, occurred_at=now,
+                        title=agent_name, text=content_text, avatar=avatar)
+                else:
+                    raw = canonical_json_bytes({"version": 2, "eventId": event_id,
+                        "eventType": event_type, "sessionReference": reference, "turnId": turn_id,
+                        "occurredAt": now, "agent": {"id": profile, "name": agent_name, "avatar": avatar},
+                        "content": {"kind": content_kind, "text": content_text}, "sound": True})
                 db.execute("INSERT INTO events VALUES(?,?,?,?)",
                            (event_id, grant["grantId"], canonical_json_bytes(detail).decode(), now))
                 due = now + _APPROVAL_GRACE_SECONDS if approval else now

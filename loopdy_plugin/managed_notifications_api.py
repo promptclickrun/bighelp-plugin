@@ -22,6 +22,10 @@ class EnrollmentBody(VersionedBody):
     grantId: str = Field(pattern=_UUID)
 
 
+class RecipientKeyBody(VersionedBody):
+    publicKey: str = Field(pattern=r"^[A-Za-z0-9_-]{87}$")
+
+
 class SessionBody(VersionedBody):
     profile: str = Field(pattern=_PROFILE)
     sessionId: str = Field(pattern=_ID)
@@ -77,6 +81,12 @@ def enrollment(grant_id: str):
 @router.delete("/enrollments/{grant_id}")
 def remove(grant_id: str):
     return _call(lambda: get_managed_notifications().remove(grant_id))
+
+
+@router.put("/enrollments/{grant_id}/recipient-key")
+def recipient_key(grant_id: str, body: RecipientKeyBody):
+    """The phone's own content key, sent directly to this host so notification text is end-to-end sealed."""
+    return _call(lambda: get_managed_notifications().register_recipient(grant_id, body.publicKey))
 
 
 @router.put("/enrollments/{grant_id}/sessions")

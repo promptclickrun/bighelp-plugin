@@ -1,0 +1,36 @@
+{
+  "description": "Sealed alert v2 test vector shared by the bighelp plugin and the iOS app. Keys are test-only.",
+  "recipientPrivateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaKzxNXm8",
+  "recipientPublicKey": "BKyJq1tp924L7MYUfEeQy9SURDdU15TPtXvWShV4lwCxvDTXKSB-XFzPxWv9vbA3LZ44SowtX4uAIk1QefjB1rE",
+  "senderPublicKey": "BK8QBhGFijYF2Ww_Rj0wluWpOz4t03RI-aQZuP4RdxYZr08nIdgQIyPQNZbD4Mh-1ZYsZu22YgFzMD6dxzOTHro",
+  "envelope": {
+    "v": 2,
+    "grantId": "0f8b5d2e-3c4a-4b6e-9d1f-2a3b4c5d6e7f",
+    "eventId": "0f8b5d2e-3c4a-4b6e-9d1f-2a3b4c5d6e7f:47422196208f67c40d2aa342978e9212de651bbd9d22b9d8f87bc7776a55e3ed",
+    "recipientKeyId": "6ayoB-tYsoMf-GBljov-hUad6MoQyusYpy1C9WR3kpY",
+    "senderKeyId": "fV1kKKcy5hugjZOa4lMSYnzD1a1KIxxI4GLKeX4JIOQ",
+    "issued": 1800000000,
+    "ephemeralPublicKey": "BKPkt6WcLvtK2D1WJh4XcF1uS_MDQ5j8CkmJ4GMjIed4YeDd7vad-vk0LC_U5aPzj15OK5aykHAhLD4d08wxmp4",
+    "salt": "ACZMcpi-5AowVnyiyO4UOmCGrNL4HkRqkLbcAihOdJo",
+    "nonce": "oMbsEjhehKrQ9hxC",
+    "ciphertext": "ck5gdnfbZUDsBRv_PWauPp-u3o1CHHZLdpBgoFjuzJpy3jeUTldOZj8d3s3TnLeUIxjm35XXSkMUXUuNUb3exbd2xzF2L_f4HugUf6dhG387PV3keJ5L1C91_CiC-G_zPRSy6COrdy2r-Ul2Etj7H7uDuVaJEszvCSqiy5psCXN4-oh39E_6uu_YexeKE6qRVY3Uh03RPsWElyHPIsG8j-FRoiHFJTyC2nvjnE3iawIhPw1aGP2Jtkr61jptmk-kJ2Ohn9rIwtfWtfMw3wFXtr5Z4AeJoYVf7EI9vozRLCfIPNpN-TCLJm6-BqhdbKgH96BT6A9f2H8z8iZFp_RYrtI3yT-MQ1223SabxaEuFnqA06dPXXn27oKXq779RMJwzy_U2RQ5z-lOI8I4ts5wc7bFFMuGrpZPaHDFcvcSuPyrMa8YEXRawbkyU7VfRvetN4KlfUA3Ok1MLZmVFfmbRk38TN6gykbDDbR7R5WzurBMsdU1ejX3tsuvyObu8bQououIuqkvZkVMJyTjIZVXnRg7D5l8ZsH_zIT2A4GViKvjt3u0nuUI5cs",
+    "tag": "fHXK5moBPRJsCF0MUvDk9w",
+    "signature": "vO_rce4BzpVGG4WDbkSZ9r-nQoPOZJm-mBlx5WFRppl0iYPdvCdTWGOyW8rjK_JnnzNgdhUil58rW73ha8t2Lg"
+  },
+  "plaintext": {
+    "v": 2,
+    "eventId": "0f8b5d2e-3c4a-4b6e-9d1f-2a3b4c5d6e7f:47422196208f67c40d2aa342978e9212de651bbd9d22b9d8f87bc7776a55e3ed",
+    "eventType": "session.completed",
+    "title": "Juno",
+    "body": "Your flight to Denver is booked for Friday at 7:40 AM. 🛫 Seat 12A — confirmation sent to your email.",
+    "avatar": {
+      "mimeType": "image/png",
+      "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9",
+      "cipherSha256": "d5821545b4a99d79d92a9cca79b7190e1ad28cb848c3f6f345667cc32ddcacd8",
+      "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "nonce": "ZGVmZ2hpamtsbW5v"
+    }
+  },
+  "avatarImage": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn-AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq-wsbKztLW2t7i5uru8vb6_wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t_g4eLj5OXm5-jp6uvs7e7v8PHy8_T19vf4-fr7_P3-_wABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5_gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-v8DBwsPExcbHyMnKy8zNzs_Q0dLT1NXW19jZ2tvc3d7f4OHi4-Tl5ufo6err7O3u7_Dx8vP09fb3-Pn6-_z9_v8AAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr_AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-Dh4uPk5ebn6Onq6-zt7u_w8fLz9PX29_j5-vv8_f7_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn-AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq-wsbKztLW2t7i5uru8vb6_wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t_g4eLj5OXm5-jp6uvs7e7v8PHy8_T19vf4-fr7_P3-_w",
+  "avatarBlob": "SBrcZX3sUJk2a1Xj1mhk8lLTFBmfeeVlv8i2U-e-u1e0yGLjaDe9I9XaUhTRb-TgK2qq1BR_dx_CyJbt07ybtUjNmU2SDn1CwyanCF3Hf6k0KU1n85DbkYeobJ8nThAO7hDwHQ8o3hnbk7SuzmDWh1Ja8my1DM9DygDpyqbJdriyHhor7bfErEHA3I4FDdINBlZv1cTeEAWpCOTWfIw7ZTCQhf80eUdHw_ELXEDZDWEmQH8agwbkeMC4q_N-PaFxCu7EKWzQssaKtqGoifc8x5CZRNFTjdpqKsHYDzA4zzSuxkAYRmDN2fJFtjpEuG4-oCf1WAcxGzw_CeCQ3sMEZHdyiIN5LJLRtQHcj_SrEB-4ml85sSpmcsFaXElzZ1ps89U3SFxAm89IsXy339r4hDcgadp9MHjvIuBUIertUhbgEK-yX01Xq8qRSX7WNClq57lZbNFXu4_sj_Hdc-uQSbrltP0Mcl6f2fjejjZohxd2uNYk67OZwH5uhcNEt5yU_Z7NyTAWRrUbS_oe11E0GkatlJ5F7w5oMcGi9nWDoK7Wo8PfVoBagSnjOkMzrVDRxjmvJBPTz1C6RCo3z9BW7PCcntx1z4a_9RY6ypDq0tl40x89iKdpi4aQ85wRYSBN2LsM9-TKDkxK2ll-ZjkhnJdKK_1HX_K8m5QwIFdg-3ajHuvFb6ueaOutLgy6vb3r9eJkukRUn-CoS_oQboYQpNKCzui_J9aR1Tn2HYQ0ufm0bY4tHrQuhSnYQjBbDmPqrAZLwg1vt8u1tkrILiRUhWIBL1UXWxENNz80OrCGueUhityeJXnT30pUaqSUViEjJ-EpgtkYRAGyQjNvBwAUqGIohCSo211HdjgrfGNtyFeYJX67TowMOkWJ4AmNNfPWCiR-9ONqNGBqfQAY2fkhRlUNbPOiXpc3JPZUFyYeJetuMnIQaB-tHo73iThE8J7T5zK5Yf4fH3mLCsaMfCwjnwwInrLtzGgeZos_n8NaoBe2ykmLjv91va9XKUTnjmlnAlq8EpzCCYxr8dA_p4DGA04FYbNThspvqXveDuD66X4TOZkhyRGLmvI_BpE28ygesriezUAxr9vHTs3s6VNsMjISdcA69RCGs_XwFwCQQdq18wnz4g5BxC40ew20IxCnvnnKmoS9xl9D8XhAKBp1iZZD-KI7mHBgDWKbNmXZYlOxlvXhufXx4EIOsH6CSTQ0aXwFOZhnG_NtCfFhC7bDrJP0ugu8c6cO8QjVYURo4Hf28j6gptll0PG8clBc5buthR2jpguC1K8LQJRelxD-cf3XVXSUuI4ve4mc63DzFNwcjA_WZP41MlFPEN2v4Z74ZV6mI2Gt3qJhSniPMTtu3da6jnJptzofMOYA-a-EZgE"
+}
