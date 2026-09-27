@@ -53,7 +53,7 @@ class LoopdyCardToolTests(unittest.TestCase):
 
         self.assertEqual(1, context.names.count("loopdy_render_card"))
         self.assertEqual(
-            [*LEGACY_RENDERERS, "loopdy_render_checklist", "loopdy_render_selection", "loopdy_render_automation", "loopdy_render_card", "loopdy_await_form_response", "loopdy_marketplace_prepare_upload", "loopdy_react_to_message"],
+            [*LEGACY_RENDERERS, "loopdy_render_checklist", "loopdy_render_selection", "loopdy_render_automation", "loopdy_render_card", "loopdy_await_form_response", "loopdy_marketplace_prepare_upload", "loopdy_react_to_message", "bighelp_request_secure_input"],
             context.names,
         )
 

@@ -634,6 +634,7 @@ def register(
     request_id_factory: Callable[[], str] | None = None,
 ):
     from .reactions import register as register_reactions
+    from .secure_input import register as register_secure_input
 
     selected_profile = str(profile or getattr(ctx, "profile_name", "default") or "default")
     clock = now or (lambda: datetime.now(timezone.utc))
@@ -793,3 +794,4 @@ def register(
             )
     # Unsupported hosts omit the capability instead of registering a no-op.
     register_reactions(ctx)
+    register_secure_input(ctx)

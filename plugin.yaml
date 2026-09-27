@@ -2,7 +2,7 @@ manifest_version: 1
 name: loopdy
 label: Loopdy
 kind: platform
-version: "2.16.1"
+version: "2.17.0"
 license: Apache-2.0
 description: >
   Native authenticated Hermes workspace controls, media voice, approvals, and
@@ -72,6 +72,7 @@ provides_tools:
   - loopdy_render_card_template
   - loopdy_marketplace_prepare_upload
   - loopdy_react_to_message
+  - bighelp_request_secure_input
   - bighelp_board
 platforms:
   - linux

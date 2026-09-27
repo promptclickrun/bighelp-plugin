@@ -116,6 +116,11 @@ class ToolRegistrationTests(unittest.TestCase):
                     self.assertNotIn("calendarID", renderer_schema["parameters"]["properties"])
                     self.assertNotIn("occurrenceStart", renderer_schema["parameters"]["properties"])
                 continue
+            if tool_name == "bighelp_request_secure_input":
+                from loopdy_plugin.secure_input import PARAMETERS as SECURE_INPUT_PARAMETERS
+                self.assertEqual(renderer_schema["parameters"], SECURE_INPUT_PARAMETERS)
+                self.assertIn("never see it", description)
+                continue
             if tool_name == "loopdy_react_to_message":
                 from loopdy_plugin.reactions import PARAMETERS
                 self.assertEqual(renderer_schema["parameters"], PARAMETERS)
