@@ -36,7 +36,7 @@ from .relay_crypto import (
 
 VERSION = 2
 # Leaves room for BuzzKit's routing fields inside the 4 KB push payload.
-MAX_ENVELOPE_BYTES = 3_000
+MAX_ENVELOPE_BYTES = 2_300
 _AAD_LABEL = "loopdy-sealed-alert-v2"
 _KEY_LABEL = b"loopdy-sealed-alert-key-v2\0"
 _SIGNATURE_LABEL = b"loopdy-sealed-alert-signature-v2"
