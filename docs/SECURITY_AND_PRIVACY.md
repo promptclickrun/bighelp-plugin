@@ -15,6 +15,7 @@ current code. It isn't legal advice or an independent audit.
 | Live voice audio | Not stored | Flows directly between your phone and the voice provider |
 | Notification content | Pending events under `plugin-data/loopdy/managed-notifications/` | Sealed for your phone with current app builds; see below |
 | Context usage | Token counts only, no text | To the app |
+| Provider usage | Cached in memory for five minutes | Keys go only to their own provider; usage numbers (no keys, emails or account IDs) go to the app. See [Provider usage](PROVIDER_USAGE.md) |
 
 All plugin data lives under the active Hermes profile home in `plugin-data/loopdy/`, with owner-only
 permissions. Nothing is sent to bighelp except notifications you turned on.

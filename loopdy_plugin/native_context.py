@@ -261,4 +261,9 @@ def _native_features(
         features.append(restart_capability)
     else:
         skip(restart_capability, "in-place restart needs a POSIX host.")
+    from .provider_usage import CAPABILITY as usage_capability, available as usage_available
+    if usage_available():
+        features.append(usage_capability)
+    else:
+        skip(usage_capability, "public profile helpers are unimportable.")
     return profile, tuple(features)

@@ -151,6 +151,7 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.host_restart import available as restart_available
         if restart_available():
             expected.append("native-host-restart-v1")
+        expected.append("native-provider-usage-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

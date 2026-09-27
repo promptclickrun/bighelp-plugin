@@ -1,7 +1,7 @@
 """Finite stock-serve HTTP adapters for existing Loopdy domain services."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 import json
 import logging
 import re
@@ -430,3 +430,33 @@ async def board_approvals(request: Request) -> Response:
 @router.post("/board/identity")
 async def board_identity(request: Request) -> Response:
     return await _board_request(request, _Body, "identity", _BOARD_LIST_BYTES)
+
+
+class _Usage(_Body):
+    refresh: StrictBool = False
+
+
+def _usage_for_profile(agent_id: str, refresh: bool) -> dict:
+    from .provider_usage import usage
+    from .workspace_capabilities import profile_scope
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(profile_scope(agent_id))
+        except ValueError:
+            raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.") from None
+        return usage(agent_id, refresh=refresh)
+
+
+@router.post("/usage/list")
+async def provider_usage(request: Request) -> Response:
+    """Usage and limits for the AI tools and providers on this host (bighelp app: Usage)."""
+    from .provider_usage import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "usage_unavailable", "Usage isn't available on this host.")
+    body = await _body(request, _Usage)
+    value = await run_in_threadpool(_usage_for_profile, body.agentId, body.refresh)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response({"agentId": body.agentId, **value}, owner, request_id)
