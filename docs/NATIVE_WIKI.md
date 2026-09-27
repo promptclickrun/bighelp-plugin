@@ -1,4 +1,4 @@
-# Native Wiki: Hermes login is sufficient
+# Wiki: Hermes login is enough
 
 Native Wiki uses the authenticated Hermes Session's verified provider/user ID
 and the explicitly selected existing profile. There is **no additional pairing,
@@ -6,10 +6,8 @@ key proof, device enrollment, device epoch, or host approval ceremony**. Add Wik
 is normal explicit folder selection. Same-principal sessions on different
 devices share native Wiki connections and can reconcile the same upload.
 
-This is separate from the existing paired Link authority, which keeps its own
-account/device checks. No native principal is disguised as a device ID. iOS
-Health/Calendar/Reminders consent and model-turn provenance are separate and are
-not granted by native Wiki authentication.
+iOS Health/Calendar/Reminders consent and model-turn provenance are separate and
+are not granted by Wiki access.
 
 ## HTTP contract
 
@@ -71,7 +69,7 @@ Revision remains `wiki-v1:<32hex grant generation>:<64hex hash>`; new-file
 base revision is `wiki-new-v1:<32hex grant generation>`. Maximum save 1 MiB
 Markdown, decoded chunk 65536 bytes, list/search 100 entries and conservative
 encoded payload/result 120000 bytes. Existing strict path, type, byte and
-pagination validation is shared with Link.
+pagination validation is shared by every Wiki operation.
 
 ## Authority and folder safety
 
@@ -86,21 +84,18 @@ metadata requirements and optimistic content revisions remain authoritative.
 Root selection is not permission to access arbitrary paths outside that root.
 Windows/hosts without secure traversal do not gain a weakened fallback.
 
-Native and Link use the **same grant registry and `wiki.lock`**, preventing
-independent authorities from creating racing overlapping roots. Cross-profile,
-cross-principal and non-exact overlaps remain denied. An exact existing Link
-root yields `WIKI_AUTHORITY_CONFLICT`409: explicitly remove the existing Link
-connection using the existing host operation, then reconnect natively if desired.
-There is no automatic adoption, upgrade, file deletion or ownership migration.
-Existing legacy connections and recovery material are not relabeled native.
+All connections share one grant registry and `wiki.lock`, so overlapping roots
+can't race each other. Cross-profile, cross-principal and non-exact overlaps are
+denied. A folder still registered by an older (legacy) connection returns
+`WIKI_AUTHORITY_CONFLICT`409; remove that connection on the host, then connect
+again from the app. Nothing is adopted, migrated or deleted automatically.
 
 ## Explicit Disconnect
 
 `native-wiki-disconnect-v1` separately advertises `disconnect`. Invoke it only
 after an explicit user Disconnect action, never automatic logout or local cache
 clearing. It removes this principal/profile's connection across its devices,
-not Hermes login, a Link connection, physical files, or the upload/recovery
-journal. An unavailable source folder does not prevent registry removal.
+not Hermes login, physical files, or the upload/recovery journal. An unavailable source folder does not prevent registry removal.
 
 Disconnect shares the same lock as upload commit. A commit holding the lock
 finishes before disconnect; a commit admitted after disconnect cannot access
@@ -133,8 +128,7 @@ identity is rechecked around I/O, and context is checked across awaits.
 Database rebuild, copied rows, ownership constraints, triggers, foreign-key
 validation and schema-version commit occur atomically. Failure rolls back the
 migration without leaving temporary tables or changing recovery ownership.
-Unknown schema versions fail closed. Updated plugin code keeps old Link/app wire
-contracts intact; running a pre-migration plugin binary against version-2 storage
+Unknown schema versions fail closed. Running a pre-migration plugin binary against version-2 storage
 is **not a supported downgrade**, particularly its positional upload inserts.
 Activate matching plugin code in all processes sharing this state before use.
 No installation or activation is performed by this source change.
@@ -144,8 +138,7 @@ a prior commit did not happen. Query `save/status` using the same operation ID
 under a fresh valid context; do not create a new mutation identity. Interrupted
 submitted uploads are indeterminate, not silently repeated. Native token
 revocation controls future admission; the plugin does not claim stronger
-instantaneous revocation or recall of already delivered bytes. Signing out of an
-optional Loopdy account does not delete independent native-principal Wiki data.
+instantaneous revocation or recall of already delivered bytes.
 
 ## Errors and verification
 
@@ -158,7 +151,7 @@ credentials, private data or internal exceptions.
 
 Tests exercise actual stock-serve auth and native connect/save/status in a
 synthetic home, same-principal cross-device partial uploads, wrong-principal
-denial, no Link adoption, migration fault rollback/FKs/recovery, legacy pending
+denial, no legacy adoption, migration fault rollback/FKs/recovery, legacy pending
 uploads/device checks, shared-lock concurrency, stale revisions, unsafe paths,
 read-only sources and uncertain commit recovery. No real host mutation,
 deployment, restart, cloud dependency or provider/model call is required.

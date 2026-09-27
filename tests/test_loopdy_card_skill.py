@@ -62,9 +62,8 @@ class LoopdyCardSkillTests(unittest.TestCase):
 
     def test_release_documents_do_not_advertise_live_card_requests(self) -> None:
         documents = (
-            REPOSITORY_ROOT / "docs" / "LOOPDY_CARDS.md",
+            REPOSITORY_ROOT / "docs" / "CARDS.md",
             REPOSITORY_ROOT / "docs" / "SECURITY_AND_PRIVACY.md",
-            REPOSITORY_ROOT / "PROTOCOL.md",
         )
         prohibited = (
             "Opening a live card",

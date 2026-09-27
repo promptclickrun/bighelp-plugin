@@ -1,6 +1,6 @@
 # Context usage reporting
 
-Loopdy consumes Hermes's public `post_api_request` usage summary. The observer stores only bounded numeric token fields with session/model correlation, not prompts, response text, credentials, or raw provider payloads.
+The plugin consumes Hermes's public `post_api_request` usage summary. The observer stores only bounded numeric token fields with session/model correlation, not prompts, response text, credentials, or raw provider payloads.
 
 ```text
 provider -> Hermes canonical usage -> post_api_request

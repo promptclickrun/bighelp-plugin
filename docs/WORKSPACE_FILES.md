@@ -1,12 +1,12 @@
-# Workspace Files foundation
+# Workspace Files
 
-Status: source candidate for review. This is a plugin-side API/CLI feature, not an enabled mobile Files screen. Mobile and encrypted Link integration are a later phase.
+Read-only access to folders the host operator grants, through the plugin API and the `hermes loopdy files` CLI. The bighelp app browses granted folders with it.
 
 ## Ownership and access
 
 The host operator grants a specific existing directory to an opaque workspace ID. A grant is a read-only file-access permission, not a Hermes Project or session record. Hermes remains authoritative for its own Projects/sessions; this service neither reads their private databases nor registers/moves them.
 
-No roots are granted by default. Remote API callers cannot create, change or revoke grants. A grant cannot silently change to another directory; revoke it before granting the replacement. Only the configured profile's plugin data stores grants. The regular host plugin-API authentication governs remote callers, who may inspect all grants exposed by that host/profile. This initial API is **not a per-device Link grant** or a session-bound access token.
+No roots are granted by default. Remote API callers cannot create, change or revoke grants. A grant cannot silently change to another directory; revoke it before granting the replacement. Only the configured profile's plugin data stores grants. The regular host plugin-API authentication governs remote callers, who may inspect all grants exposed by that host/profile. A grant is not a per-device permission or a session-bound access token.
 
 ```text
 local operator → explicit read-only root grant
@@ -73,7 +73,7 @@ The example root is a placeholder for a directory the operator explicitly approv
 
 ## API contract, schema version 1
 
-All paths below are relative to the stock `/api/plugins/loopdy` mount. Host authentication is required. Link pairing credentials do not authorize these routes; do not ship a mobile origin/token fallback. A future Link adapter must enforce its own verified device boundary and the same host grants.
+All paths below are relative to the stock `/api/plugins/loopdy` mount. Host authentication is required.
 
 | Method / path | Request | Result |
 | --- | --- | --- |
@@ -101,8 +101,5 @@ PYTHONPATH="$PWD:/path/to/hermes-agent" \
   -m unittest discover -s tests -p 'test_workspace_files*.py' -v
 ```
 
-The focused tests exercise real files and Git repositories, opaque-byte pagination, revocation during I/O, root replacement, path/link/credential refusals, registered CLI commands, actual stock plugin discovery/mount, authentication denial and runtime disablement. The host-mount and CLI tests create their own credential-free temporary homes and do not modify a live installation. Existing Git, registration and Link contract suites remain relevant compatibility checks. Native Windows secure traversal is not implemented or verified.
+The focused tests exercise real files and Git repositories, opaque-byte pagination, revocation during I/O, root replacement, path/link/credential refusals, registered CLI commands, actual stock plugin discovery/mount, authentication denial and runtime disablement. The host-mount and CLI tests create their own credential-free temporary homes and do not modify a live installation. Existing Git and registration suites remain relevant compatibility checks. Native Windows secure traversal is not implemented or verified.
 
-## Delivery boundary
-
-Review and merge this foundation before adapting mobile clients. The existing Link operation allowlist and capability envelopes remain unchanged. A later integration must bind the mobile account/host/workspace, negotiate the new operations without breaking older strict clients, and preserve the same grant enforcement. A public PR is not an installation, restart, app release or proof of live mobile availability.

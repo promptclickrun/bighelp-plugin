@@ -1,15 +1,15 @@
-# Native workspace plugin foundation
+# Native workspace API
 
 These routes extend stock authenticated `hermes serve` at `/api/plugins/loopdy`.
-They do not use the plugin's paired Direct listener or require a Loopdy account.
+They need no bighelp account or extra listener.
 Network/Tailscale/TLS configuration and host activation remain operator-owned.
 Stock Hermes REST and `/api/ws` still own native chat and workspace execution.
 
 This is not full native parity. Optional
 [room tool observations](NATIVE_ROOM_ACTIVITY.md) extend this foundation on
 supported main builds. [Native Wiki](NATIVE_WIKI.md) uses the same verified
-principal without extra pairing. Phone-tool and personalized hosted-group
-ingress remain separate proof-gated capabilities.
+principal without extra pairing. [iPhone tools](IPHONE_DEVICE_TOOLS.md) use a
+short-lived phone channel on the same routes.
 
 ## Authentication and context
 
@@ -43,7 +43,7 @@ The app's local auth/connection generations reject stale callbacks. Native
 workspace access does not create a per-profile ACL or phone permission.
 
 `runtimeId` identifies this loaded native plugin HTTP module lifetime, not
-installed source, release freshness, Link identity, or a device. Process profile
+installed source, release freshness, or a device. Process profile
 is obtained only with the public
 `profile_name_for_home(get_process_hermes_home())` helpers, ignoring request-local
 home overrides. Missing/unproven profile is null, never inferred as `default`.
@@ -85,7 +85,7 @@ All paths below start `/api/plugins/loopdy/native/cards/templates/`:
 An exact existing canonical profile ID is required. No fallback, arbitrary
 method/path, actor/device/host override or new remote template fetching is
 accepted. All three routes reuse the serving plugin's existing profile-keyed
-template store and the same summary projection as Link.
+template store and summary projection.
 
 Summary fields: `id,version,name,summary,author,license,minimum_card_version,sha256`.
 Bundle adds exactly `parameters_schema,document`; see
@@ -136,21 +136,19 @@ re-probe roots after reconnect.
 
 | Capability | Current native boundary |
 | --- | --- |
-| Wiki | Native Session principal/profile ownership shares the existing registry/lock, with no additional pairing. Link ownership stays separate; existing Link roots are not adopted. See the exact native Wiki contract and versioned storage boundary. |
-| Phone tools | Registration/poll auth alone cannot bind a native model/tool turn to a verified phone. No public generic ToolExecutionContext override in native prompt ingress was verified; ordinary chat stays native. |
+| Wiki | Session principal/profile ownership with one shared registry/lock and no additional pairing. See [Wiki](NATIVE_WIKI.md). |
+| Phone tools | A phone channel is bound to one agent and session; Hermes' tool execution middleware routes `iphone_*` calls to it using Hermes' own turn and tool-call IDs. See [iPhone tools](IPHONE_DEVICE_TOOLS.md). |
 | Hosted person context | Public pre-LLM hooks lack authoritative hosted room/member/discussion/task-generation/person binding. Generic native durable actor remains honest; no private/task-title/text inference. |
 | Group activity | Optional main-only public observer feeds are asynchronous, lossy and local-member-only; see the exact HTTP polling contract. No durable replay or completion-success inference. |
-| Group result size | Link negotiates `groups-results-v1` separately; native room readiness still requires protocol 2 and a running driver. See [PROTOCOL](../PROTOCOL.md). |
 
-Native auth is not a phone grant; optional cloud account erasure does not revoke
-independent native credentials. Raw microphone transcription remains local to
+Native auth is not a phone grant. Raw microphone transcription remains local to
 the phone, and provider credentials are never exposed by these routes.
 
 ## Verification and activation
 
 `tests/test_native_api.py` covers real Hermes auth middleware and stock serve
 plugin discovery in synthetic homes, not a substitute production auth provider.
-Focused groups, Link, templates, forms, attachments and Files suites cover
+Focused groups, templates, forms, attachments and Files suites cover
 compatibility. Use the real Hermes Python with explicit source/candidate import
 paths and a credential-free temporary HOME/HERMES_HOME before any imports.
 No installation, restart, deployment, release or activation follows from these

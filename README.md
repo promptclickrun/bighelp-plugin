@@ -51,16 +51,16 @@ launchd or Linux user systemd.
 | --- | --- | --- |
 | Agent board | Each agent's Feed, Ideas, Goals, Activity and approval history, next to its chat. Agents post with the `bighelp_board` tool. | [Agent board](docs/AGENT_BOARD.md) |
 | Apps tab | Files the agent recently made or changed, and the pictures and videos it delivered. | [Artifacts and media](docs/APPS_ARTIFACTS_AND_MEDIA.md) |
-| Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, via the `loopdy_render_*` tools. Card templates can be saved and reused. | [Cards guide](docs/LOOPDY_CARDS.md) |
+| Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, via the `loopdy_render_*` tools. Card templates can be saved and reused. | [Cards guide](docs/CARDS.md) |
 | Reactions | Agents can react to your messages with an emoji (`loopdy_react_to_message`). | |
 | Agent templates | Save an agent's setup as a template and start new agents from it. | |
 | iPhone tools | `iphone_health` (read-only), `iphone_calendar` and `iphone_reminders`. Each is off until you allow it for a host on your phone. They only work while bighelp is open and in the foreground. | [iPhone tools](docs/IPHONE_DEVICE_TOOLS.md) |
-| Live voice | Talk with your agent in real time. It uses the Codex subscription signed in on the host (or an API key); the work itself runs as a normal Hermes chat. | [Live voice](docs/DIRECT_STREAMING_AND_LIVE_VOICE.md) |
+| Live voice | Talk with your agent in real time. It uses the Codex subscription signed in on the host (or an API key); the work itself runs as a normal Hermes chat. | [Live voice](docs/LIVE_VOICE.md) |
 | Files and projects | Browse workspace folders you grant, and see a project's Git status and diffs. Read-only. | [Workspace files](docs/WORKSPACE_FILES.md), [Project Git](docs/NATIVE_PROJECT_GIT.md) |
 | Wiki | Connect a folder of Markdown notes and read or edit it from the app, using your Hermes login. | [Wiki](docs/NATIVE_WIKI.md) |
 | Group chat activity | See which tools each agent in a group chat is using, live. Needs a Hermes host with the `on_room_member_activity` hook. | [Room activity](docs/NATIVE_ROOM_ACTIVITY.md) |
 | Context usage | How much of the model's context the last request used. | [Context usage](docs/CONTEXT_USAGE.md) |
-| Generated media and files | Agent-made images, videos and files show up in chat. Hermes' own media rules decide what can be shared, and host paths are never exposed. | [Generated media](docs/GENERATED_MEDIA.md) |
+| Generated media and files | Agent-made images, videos and files show up in chat. Hermes' own media rules decide what can be shared, and host paths are never exposed. | [Agent attachments](docs/AGENT_ATTACHMENTS.md) |
 | Model names | `model-names.json` gives friendly model names. The app can refresh it without a plugin update. | |
 
 ### Cards: rules for agents
@@ -98,7 +98,7 @@ Notifications and Live Activities are opt-in per host from the app. Chat never d
 - **Live Activities.** Lock Screen and Dynamic Island updates carry only a phase, a fixed label (such as
   "Your agent is working") and counts. They never include message text.
 
-More detail: [Notifications](docs/NATIVE_NOTIFICATIONS.md).
+More detail: [Notifications](docs/NOTIFICATIONS.md).
 
 ## Approvals
 
@@ -121,7 +121,7 @@ hermes loopdy wiki …                     Host-side wiki grants
 Earlier versions paired hosts through a bighelp Link account and sent notifications through a relay or direct
 APNs. The app no longer uses any of that. The related code, settings and commands (`hermes loopdy link …`,
 `provider`, `configure-apns`, `direct …`) remain only so existing data and compatibility tests keep working.
-Don't set them up on new hosts. [PROTOCOL.md](PROTOCOL.md) documents that older wire format.
+Don't set them up on new hosts.
 
 ## Development
 

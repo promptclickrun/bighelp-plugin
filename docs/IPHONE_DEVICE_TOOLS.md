@@ -1,211 +1,46 @@
-# iPhone tools for Hermes
+# iPhone tools
 
-Status: released to internal TestFlight in Loopdy 2.0.1 (13), with plugin 2.11.0.
-Apple processing and membership in all four internal groups were verified on
-September 10, 2026 for build 504a2307-1bbb-4443-bd40-ee24b05bf660. Build 11 does
-not contain this feature; upload 12 failed processing. Physical-device
-Health/EventKit acceptance remains pending and is separate from source and
-simulator results.
+Agents can use three tools that run on your iPhone:
 
-Plugin 2.11.1 fixes pre-send `invalid_arguments` for valid Health queries by
-accepting Hermes' canonical composite turn IDs. Update the host plugin; build 13
-already accepts these IDs and does not require new permissions or an app update.
-
-Plugin 2.11.2 fixes immediate `delivery_uncertain` after validation: async Hermes
-tools run on worker loops, while Link locks and WebSocket delivery belong to the
-gateway loop. Update the plugin and restart the host gateway. No iOS rebuild or
-permission reset is needed for this threading fix.
-
-## User contract
-
-Permissions contains independent Apple Health, Calendar and Reminders controls.
-Every control starts off. Enabling one requests its native iOS permission from
-that explicit foreground action. Calendar and Reminders authorize direct reads,
-creation, updates and deletion after enablement, with no per-operation approval.
-Health is read-only. OS permission by itself never enables agent access.
-
-Grants are scoped to the current phone, phone authorization epoch and selected
-host. Turning a control off invalidates active work immediately. Switching host,
-signing out, backgrounding or losing protected-data access invalidates in-flight
-operations. Account erasure deletes persisted grants and mutation outcomes.
-Re-enabling a grant cannot revive a read started under an older grant revision.
-
-The phone must be open, unlocked and connected. No background execution or wake-up
-guarantee is offered. Unavailable or denied access is a failure, never fabricated
-empty data. Apple deliberately does not disclose Health read authorization;
-an empty Health result may mean no records or denied access. The UI must preserve
-this distinction.
-
-Requested data is sent to the selected Hermes host and its AI provider. It may
-be retained in the ordinary conversation/tool history. It is not used for
-advertising or analytics. Loopdy's mutation journal stores only request hashes,
-expiry and identity/reconciliation metadata, never Health samples, event text,
-reminder text or request arguments. The journal is protected, atomically written,
-excluded from backups and bounded to 512 records / 2 MB. No raw Apple data should
-be added to diagnostics.
-
-Hermes and the future Loopdy Native harness remain complementary. The unfinished
-Native harness is not required and is not treated as operational.
-
-## Components and required versions
-
-| Component | Responsibility |
+| Tool | What it can do |
 | --- | --- |
-| Hermes `ToolExecutionContext` extension | Carries immutable authenticated ingress ownership to official plugin handlers and hooks, with official session/turn/tool-call IDs. |
-| Loopdy plugin 2.11.2 | Registers `iphone_health`, `iphone_calendar`, `iphone_reminders`; uses the gateway connection loop to target the verified originating phone and correlate results using canonical Hermes turn IDs. |
-| Link relay with `directed-frames-v1` | Negotiates exact-recipient delivery and queues only for that active paired device. Legacy sockets never receive a broadcast fallback. |
-| iOS `DeviceToolPermissions` | Persists opt-in grants and fences asynchronous work by scope/revision. |
-| iOS `DeviceToolCoordinator` | Validates envelopes, deadlines, ownership and grants; bounds concurrency and journals mutation outcomes. |
-| iOS `AppleDeviceToolService` | Executes the finite HealthKit/EventKit operations with authorization checks around native boundaries. |
-| iOS live socket | Receipts authenticated requests before native execution and sends directed correlated results without blocking chat streaming. |
+| `iphone_health` | Read Health samples of a given type between two dates (read-only; at most 31 days and 200 records). |
+| `iphone_calendar` | List events in a date range, create events, and update or delete an exact event. |
+| `iphone_reminders` | List reminders (optionally by list, completion or date), create reminders, and update or delete an exact reminder. |
 
-The generic Hermes source extension is documented in
-`docs/TOOL_EXECUTION_CONTEXT.md` in the Hermes checkout. It is required: plugin
-registration omits phone tools on older Hermes versions. The context is
-runtime-only, excluded from prompts, tool schemas, transcripts and session
-persistence. Queued events retain exact ownership; different owners are not
-merged or steered into each other's turns. CLI, cron, restart-recovered events
-and delegated children lack phone context and fail closed. Never infer a phone
-from the last active chat or model-provided arguments.
+Updates and deletes name the exact item and the revision the agent last saw, so a stale request can't
+overwrite a newer change.
 
-The plugin constructs context from the verified Link frame's phone ID and
-phone epoch, with the authenticated host ID as an attribute and profile as
-scope. Phone and host authorization epochs are independent.
+## Your control
 
-## Transport and ownership
+- Each tool is off until you turn it on for a host in bighelp. Turning one on asks for the iOS permission at
+  that moment; the iOS permission alone never gives an agent access.
+- Health is read-only. Calendar and Reminders can make changes once enabled, without asking each time.
+- The tools only work while bighelp is open, unlocked and showing that host's chat. Leaving the chat,
+  switching hosts, turning a tool off or backgrounding the app stops them, and anything in flight is dropped
+  rather than retried later.
+- If the phone isn't available, the agent gets a clear "phone unavailable" result, never made-up or empty data.
+  Apple doesn't reveal whether Health read access was denied, so an empty Health result can mean either no
+  data or no access.
 
-The adapter binds the bridge to its running gateway event loop during connection
-and detaches it during disconnect. Hermes' async tool worker must dispatch the
-whole operation to that owner loop: validation against live status, sending,
-pending-future creation, response matching and outcome recording belong together.
-Scheduling only the WebSocket send still leaves result futures on the wrong loop.
-Reject a stopped loop or a client replacement before queued work starts. Continue
-honoring disable/disconnect while waiting; never weaken those checks to make a
-cross-thread call complete. Activity publishing and chat streaming retain their
-existing loop ownership and ordering.
+What the tools return goes to your Hermes host and its AI provider, and may stay in the chat's normal history.
+The app keeps only small records needed to avoid repeating a change, never the Health, calendar or reminder
+contents.
 
-The existing encrypted Link connection carries version-1
-`device.tool.status`, `device.tool.request` and `device.tool.result` payloads.
-The outer frame's `targetDeviceId` must identify an active opposite-role device
-in the same account. Unknown, revoked, wrong-role, self or unsupported targets
-are rejected without fan-out. This controls routing; existing account content
-encryption is shared across paired account participants, not a new
-recipient-specific encryption scheme.
+## How it works
 
-Requests and results bind `requestId`, `deviceId`, `hostId`,
-`authorizationEpoch`, `sessionId`, `agentId`, `turnId`, `operation` and
-`sentAt`; requests also carry `expiresAt` and bounded arguments. Official
-tool-call coordinates generate a stable request ID. Reusing that ID with
-different arguments produces a conflict. The native request limit is 20 KB;
-the plugin additionally limits arguments to 16 KB. Native results are bounded
-to 128 KB. Host timeout is normally 30 seconds (bounded to 20–60 seconds);
-the native envelope permits no more than 120 seconds.
+The phone opens a short-lived channel for the exact agent and chat it has open, then keeps it alive:
 
-Hermes turn coordinates are runtime identities such as `session:task:nonce`,
-not the relay's base64url-style device IDs. Preserve them verbatim in both request
-and result validation, including colon separators and the native 512-byte bound.
-Do not hash, strip separators, or regenerate turn IDs to pass validation. Keep
-the existing strict validators for device, host, session and request identities.
-Test the registered handler through the real bridge with composite turn IDs;
-tests using only a synthetic `turn-1` miss this integration boundary.
+- `POST /api/plugins/loopdy/native/device-tools/connect` with the chat's agent and session and the tools you
+  enabled
+- `…/poll` to pick up requests, and `…/result` to return each answer
+- `…/close` when the chat closes
 
-Status is advisory. Every operation still checks the live native grant,
-foreground/protected-data state, selected host, account and expiry. Results
-recheck those conditions after native execution and while waiting for the
-outbox. Reconnect or backpressure cannot replay private results after permission
-revocation, ownership change or downgrade to a legacy relay. A pending private
-result without its original in-memory authorization guard is retired through
-authenticated outbox reconciliation.
+A channel expires after 30 seconds without a poll. When an agent calls an `iphone_*` tool, Hermes' public tool
+execution middleware hands the call to the phone that holds a channel for that exact agent and session, using
+Hermes' own session, turn and tool-call IDs. Nothing is taken from the model's arguments to decide which phone
+to use. With no open channel, the tool fails with `phone_unavailable`. A call the phone doesn't answer in time fails
+rather than being retried.
 
-Native work permits at most four active operations and one mutation. The plugin
-keeps bounded pending requests and metadata-only mutation outcomes; read payloads
-are returned only to their active caller, not cached for later retries.
-
-## Supported operations
-
-| Tool | Operations and constraints |
-| --- | --- |
-| `iphone_health` | Read bounded raw samples by type, explicit ISO-8601 start/end and IANA time zone. Maximum 31 days and 200 total records. |
-| `iphone_calendar` | List events in a bounded date range; create; update/delete an exact ID with expected revision. |
-| `iphone_reminders` | List with optional list IDs, completion and undated filters; create; update/delete an exact ID with expected revision. An optional date filter requires start, end and time zone together. |
-
-Health covers steps, walking/running distance, active/basal energy, flights,
-exercise/stand time, sleep, heart rate, resting/walking heart rate, HRV, oxygen
-saturation, respiratory rate, blood pressure, height, mass, BMI, lean mass, body
-fat and workouts. The schema is the authoritative finite catalog.
-
-Health results include query coverage (`start`, `end`, `timeZone`, `limit`,
-`returnedCount`, `truncated`, `aggregation: raw_samples`). They are not
-HealthKit statistical aggregates. Never describe a truncated raw query or empty
-result as a complete daily/weekly total or zero health activity.
-
-Calendar creation accepts title/start/end/time zone and optional calendar,
-location, notes and URL. Recurring event results carry `occurrenceStart`;
-updates/deletes of recurring events require that exact occurrence and use
-EventKit's single-occurrence span. Whole-series writes are not exposed.
-Read-only calendars and stale revisions fail explicitly.
-
-Reminders accept title, list, start/due date, time zone, notes and priority;
-updates also accept completion. Both native APIs recheck system authorization
-before execution. Neither API is bridged through arbitrary selectors, an
-additional HTTP service or model-supplied executable code.
-
-## Mutation reconciliation
-
-Persist the request fingerprint as started before calling EventKit. Completed
-mutations retain only ID/revision/deleted metadata. A duplicate completed request
-returns the known result. A started request without a confirmed outcome returns
-`outcome_unknown` and is never automatically executed again. A callback failure
-after a possible commit is also uncertain; inspect current native state before
-proposing a fresh change. The host must never turn a timeout into a blind write
-retry with a new identity.
-
-Permission, stale-owner, expired, unsupported, busy, stale-revision, unavailable,
-persistence and uncertain outcomes remain distinct. Error strings must be bounded
-and sanitized. No operation should make the chat composer unusable or block the
-socket receive loop while an Apple permission prompt/query is pending.
-
-## Release metadata
-
-Keep both HealthKit usage-description keys in the app Info.plist because the
-shared authorization API is linked even for reads. The update description must
-truthfully state that Loopdy does not change Health data. Both authorization
-calls pass an empty toShare set; health.write is not an allowed operation.
-Do not mistake an Info.plist description for permission to add Health writes.
-
-## Regression and acceptance requirements
-
-Native suites:
-`DeviceToolPermissionsTests`, `AppleDeviceToolServiceTests`,
-`DeviceToolCoordinatorTests`, `DeviceToolFileJournalTests`,
-`LoopdyLinkDirectedDeviceToolTests`, existing socket/backpressure and account
-erasure suites, and `DeviceToolPermissionsUITests`.
-
-Plugin tests exercise registration with/without supported Hermes context,
-authenticated ownership, independent phone/host epochs, same-second grant
-transitions, directed frames, correlation, timeouts, concurrent identities,
-mutation deduplication, uncertain writes and non-caching of private reads.
-Hermes tests cover runtime-only context propagation, queued owner separation,
-delegation isolation and official tool-call identifiers. Relay tests verify
-single-device queues and negative routing without legacy fallback.
-
-The registered Health test must also run on a separate tool-worker loop against
-the real Link client with a contended gateway send lock, verify exactly one
-encrypted directed frame and keep response futures on the gateway loop. Include
-cross-loop permission disable, disconnect and stopped-loop cases. Same-loop
-injected clients alone do not qualify the Hermes-to-phone delivery boundary.
-
-Run iPhone and iPad composer interaction checks alongside this integration.
-Preserve the full visible input focus target and microphone/Send alignment in
-`ComposerInteractionUITests` and the chat interaction contract.
-
-Physical-device acceptance requires real, explicitly enabled OS permissions:
-read a known Health sample; list and create/update/delete disposable Calendar
-and Reminders records; verify exact revision conflicts; turn each permission
-off during a pending read; switch host; lock/background; reconnect. Simulator
-and injected-boundary tests do not establish those real-data outcomes.
-
-Apple references:
-[HealthKit privacy](https://developer.apple.com/documentation/healthkit/protecting-user-privacy),
-[Health authorization](https://developer.apple.com/documentation/healthkit/authorizing-access-to-health-data),
-[EventKit calendar access](https://developer.apple.com/documentation/eventkit/accessing-calendar-using-eventkit-and-eventkitui).
+The plugin advertises `native-device-tools-v1` only when the Hermes host supports tool execution middleware.
+The routes use the usual native session checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)).

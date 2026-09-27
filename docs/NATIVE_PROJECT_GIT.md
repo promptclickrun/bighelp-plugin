@@ -1,9 +1,9 @@
-# Native Project Git: read-only review
+# Project Git: read-only review
 
 The optional `native-project-git-read-v1` capability adds three fixed POST routes
 under stock `/api/plugins/loopdy/native/projects/git`. It reuses the existing
 `WorkspaceGitService`, not the weaker stock native Git projection. No new
-filesystem-grant database, Link identity, arbitrary command proxy, remote
+filesystem-grant database, arbitrary command proxy, remote
 operation or mutation route is introduced.
 
 Native Hermes login is sufficient. Project/session selection is an explicit
@@ -24,7 +24,7 @@ middleware may reject earlier without those headers.
 | `diff` | `{agentId,sessionId,workspaceId,path,side,statusToken,offset,limit}` |
 
 `agentId` is the canonical profile ID (64 characters maximum). `sessionId` is
-the **full native stored session ID**, not a Link chat coordinate, runtime ID,
+the **full native stored session ID**, not a runtime ID,
 prefix, title or guessed continuation (128 ASCII identifier characters).
 `workspaceId` is the exact native registered Project ID (80 ASCII identifier
 characters), not a Files grant ID or project slug. The latter two accept
@@ -140,8 +140,8 @@ rejected. Unknown errors never become an empty successful diff.
 
 The native engine policy is always `operations:["status"]`, no remotes/branches,
 mutations disabled, even if legacy host policy enables writes. Its new
-read-only construction skips the unused mutation ledger entirely. Existing
-Link and Files constructors/policies keep their prior behavior.
+read-only construction skips the unused mutation ledger entirely. The Files
+constructor and policy keep their own behavior.
 
 ## Failures and validation
 
