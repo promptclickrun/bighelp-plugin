@@ -183,6 +183,26 @@ class ManagedNotificationTests(unittest.TestCase):
         with sqlite3.connect(self.service.db_path) as db:
             self.assertEqual(db.execute("SELECT state FROM pending").fetchone()[0],"accepted")
 
+    def test_reply_alert_is_queued_when_the_reply_is_saved_not_after_post_turn_work(self):
+        # Hermes fires on_session_end only after external memory sync and reviews,
+        # which can take seconds; the alert must not wait for it.
+        self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-a",assistant_response="Here is your answer.")
+        with sqlite3.connect(self.service.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM pending WHERE state='pending'").fetchone()[0],1)
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()],["session.completed"])
+        # The later turn end, completed or failed, sends nothing more.
+        self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-a",completed=True,platform="desktop")
+        self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-b",assistant_response="I couldn't finish: the provider failed.")
+        self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-b",failed=True,error="provider failed",platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()],["session.completed","session.completed"])
+
+    def test_failed_turn_without_a_reply_still_alerts_at_turn_end(self):
+        self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-a",failed=True,error="provider failed",platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()],["session.failed"])
+
     def test_unsubscribed_other_profile_children_and_cancellation_do_not_alert(self):
         for change in [dict(profile="other"),dict(platform="subagent"),dict(interrupted=True)]:
             payload=dict(profile="default",session_id="native-session",turn_id="turn-a",completed=True,platform="desktop")|change

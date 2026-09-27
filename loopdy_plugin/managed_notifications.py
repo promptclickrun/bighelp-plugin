@@ -123,6 +123,10 @@ def _private_file(path: Path) -> None:
         raise ManagedNotificationError("notification_private_storage_required", 503)
 
 
+class _AlreadyAlerted(Exception):
+    """The turn's reply alert already went out from post_llm_call."""
+
+
 class ManagedNotifications:
     """One process-owned observer/worker; SQLite serializes other API processes."""
     def __init__(self, directory: Path, *, transport: Callable = _https_request,
@@ -149,6 +153,9 @@ class ManagedNotifications:
         self._approval_owner = str(uuid.uuid4())
         self._work: OrderedDict[tuple[str, str, str], dict[str, Any]] = state["work"]
         self._responses: OrderedDict[tuple[str, str, str], str] = state["responses"]
+        # Turns whose reply alert already went out from post_llm_call (setdefault: a
+        # state dict made by an older copy of this module in the same process).
+        self._alerted: OrderedDict[tuple[str, str, str], bool] = state.setdefault("alerted", OrderedDict())
         self._child_owners: dict[tuple[str, str, str], str] = state["child_owners"]
         self._child_goals: dict[tuple[str, str, str], str] = state["child_goals"]
         self._key = self._identity()
@@ -743,6 +750,22 @@ class ManagedNotifications:
                     self._responses.move_to_end(coordinate)
                     while len(self._responses) > 256:
                         self._responses.popitem(last=False)
+            # Hermes fires post_llm_call once per finished, uninterrupted turn, right after the
+            # reply is saved. on_session_end comes only after post-turn work (external memory
+            # sync, reviews) that can take several seconds, so the reply alert goes out now.
+            if response_text and not child_hook:
+                scheduled = payload.get("platform") == "cron" or _CRON_SESSION.fullmatch(session_id) is not None
+                try:
+                    self._queue_event(profile, session_id, turn,
+                                      "scheduled.completed" if scheduled else "session.completed",
+                                      content_text=response_text)
+                except (ValueError, OSError):
+                    logger.warning("Notification presentation unavailable; work state remains authoritative")
+                else:
+                    with self._lock:
+                        self._alerted[coordinate] = True
+                        while len(self._alerted) > 256:
+                            self._alerted.popitem(last=False)
         if not child_hook and isinstance(turn, str) and _ID.fullmatch(turn):
             if hook == "on_session_end":
                 self._retire_approval_scope(profile, session_id, turn, "", "turn_end")
@@ -754,9 +777,13 @@ class ManagedNotifications:
                 and payload.get("interrupted") is not True):
             with self._lock:
                 content = self._responses.pop((profile, session_id, turn), "")
+                alerted = self._alerted.pop((profile, session_id, turn), False)
             # Alert presentation must not prevent the authoritative work/Activity
             # terminal below, including turns with no text or unavailable avatars.
+            # A turn already alerted from post_llm_call gets no second alert, not even
+            # "failed": that alert already carried the reply Hermes wrote about it.
             try:
+                if alerted: raise _AlreadyAlerted()
                 scheduled = payload.get("platform") == "cron" or _CRON_SESSION.fullmatch(session_id) is not None
                 if payload.get("failed") is True:
                     content = self._rich_text(payload.get("error") or content)
@@ -767,6 +794,8 @@ class ManagedNotifications:
                     self._queue_event(profile, session_id, turn,
                                       "scheduled.completed" if scheduled else "session.completed",
                                       content_text=content)
+            except _AlreadyAlerted:
+                pass
             except (ValueError, OSError):
                 logger.warning("Notification presentation unavailable; work state remains authoritative")
         with self._lock:
@@ -916,7 +945,9 @@ class ManagedNotifications:
         while not self._stop.is_set():
             try: self.drain_pending()
             except (ValueError, OSError, sqlite3.Error): logger.warning("Managed notification journal unavailable")
-            self._wake.wait(5); self._wake.clear()
+            # Short wait: another Hermes process may have queued the alert (this process
+            # owns the sender), and its wake-up doesn't reach this thread.
+            self._wake.wait(1); self._wake.clear()
 
     def _approval_transport_ready(self, row) -> bool:
         """Last local fence after signing, immediately before the HTTPS call.
@@ -1002,7 +1033,8 @@ _SHARED_OBSERVATIONS = "_loopdy_managed_notification_observations"
 
 def _new_observations() -> dict[str, Any]:
     return {"lock": threading.RLock(), "wake": threading.Event(),
-            "work": OrderedDict(), "responses": OrderedDict(), "child_owners": {}, "child_goals": {},
+            "work": OrderedDict(), "responses": OrderedDict(), "alerted": OrderedDict(),
+            "child_owners": {}, "child_goals": {},
             "loaded_profiles": set(), "approval_profiles": set(), "clarification_profiles": set()}
 
 
