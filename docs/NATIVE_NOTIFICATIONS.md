@@ -239,3 +239,13 @@ accepted timestamp window. No account bearer, arbitrary relay URL, shared HMAC, 
 APNs secret is accepted by the host enrollment API. All redirect responses are
 rejected. New clients must negotiate these routes through capabilities rather than
 assuming that equal package version strings imply loaded support.
+
+## Sealed alerts (end to end)
+
+From 2.16.0, `/capabilities` includes `"sealedAlerts": {"version": 2}`. A bighelp app that sees it sends its own
+content key straight to this host with `PUT /enrollments/{grantId}/recipient-key` (`{"version": 1, "publicKey": …}`,
+an uncompressed P-256 key, unpadded base64url). From then on every alert for that grant is posted to the notification
+service as event `version: 3`: the title, text and avatar are sealed for that phone and signed with this host's
+notification key, so the notification service and BuzzKit only forward opaque bytes. The format is in
+`loopdy_plugin/sealed_alerts.py`; `fixtures/contracts/sealed-alert-v2-vector.json` is shared with the app's tests.
+Grants without a registered key keep the earlier `version: 2` events. Revoking a grant deletes its key.
