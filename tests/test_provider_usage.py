@@ -88,13 +88,13 @@ OPENCODE = """
 import sys
 days = sys.argv[sys.argv.index("--days") + 1]
 assert "--pure" in sys.argv
-cost = {"7": "$1.50", "30": "$538.19"}[days]
+cost = {"7": "$1.50", "30": "$42.10"}[days]
 print("┌──────────────────┐")
 print("│                       OVERVIEW                         │")
 print("│Sessions                                             45 │")
 print("│Total Cost                                      " + cost + " │")
-print("│Input                                             24.2M │")
-print("│Output                                           860.3K │")
+print("│Input                                              3.1M │")
+print("│Output                                           120.5K │")
 print("│ read               ███ 3576 (33.5%)   │")
 """
 
@@ -143,22 +143,22 @@ class Base(unittest.TestCase):
 
 class ClaudeTests(Base):
     login = {"accessToken": "sk-ant-oat-fixture", "expiresAt": (time.time() + 3600) * 1000,
-             "subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"}
+             "subscriptionType": "max", "rateLimitTier": "default_claude_max_5x"}
 
     def test_claude_code_login_reads_known_windows_and_plan(self):
         self.clis["claude"] = "/bin/claude"
         pu.claude_code_logins.return_value = [self.login]
         self.http[pu._CLAUDE_URL] = {
-            "five_hour": {"utilization": 20.0, "resets_at": "2026-09-27T22:10:00.003624+00:00"},
-            "seven_day": {"utilization": 35.0, "resets_at": "2026-09-30T09:00:00Z"},
-            "iguana_necktie": {"utilization": 3.0},  # unnamed internal buckets are not shown
+            "five_hour": {"utilization": 42.0, "resets_at": "2026-10-02T18:00:00.003624+00:00"},
+            "seven_day": {"utilization": 61.0, "resets_at": "2026-09-30T09:00:00Z"},
+            "unnamed_bucket": {"utilization": 3.0},  # unnamed internal buckets are not shown
             "extra_usage": {"is_enabled": True, "used_credits": 25, "monthly_limit": 100, "utilization": None},
         }
         report = self.reports()["claude"]
-        self.assertEqual((report["status"], report["plan"], report["detectedVia"]), ("ok", "Max 20x", ["cli"]))
+        self.assertEqual((report["status"], report["plan"], report["detectedVia"]), ("ok", "Max 5x", ["cli"]))
         self.assertEqual([(w["label"], w["usedPercent"]) for w in report["windows"]],
-                         [("Session (5 hours)", 20.0), ("Week", 35.0), ("Extra usage this month", 25.0)])
-        self.assertEqual(report["windows"][0]["resetsAt"], "2026-09-27T22:10:00Z")
+                         [("Session (5 hours)", 42.0), ("Week", 61.0), ("Extra usage this month", 25.0)])
+        self.assertEqual(report["windows"][0]["resetsAt"], "2026-10-02T18:00:00Z")
         self.assertEqual(self.seen[0][1]["Authorization"], "Bearer sk-ant-oat-fixture")
         self.assertNotIn("sk-ant", json.dumps(report))
 
@@ -245,16 +245,16 @@ class CodexTests(Base):
 class CopilotTests(Base):
     payload = {"copilot_plan": "enterprise", "token_based_billing": True, "quota_reset_date_utc": "2026-10-01T00:00:00Z",
                "login": "someone", "quota_snapshots": {"premium_interactions": {
-                   "unlimited": False, "entitlement": 10_000_000, "credits_used": 719_931, "remaining": 9_280_069,
-                   "percent_remaining": 92.8, "overage_count": 0}}}
+                   "unlimited": False, "entitlement": 1_000_000, "credits_used": 250_000, "remaining": 750_000,
+                   "percent_remaining": 75.0, "overage_count": 0}}}
 
     def test_exact_credits_from_github(self):
         self.env["COPILOT_GITHUB_TOKEN"] = "ghu_fixture"
         self.http[pu._COPILOT_URL] = self.payload
         report = self.reports()["copilot"]
         self.assertEqual((report["plan"], report["approximate"], report["detectedVia"]), ("Enterprise", False, ["hermes"]))
-        self.assertEqual(report["windows"], [{"label": "Monthly credits", "usedPercent": 7.2,
-                                              "resetsAt": "2026-10-01T00:00:00Z", "detail": "719,931 of 10,000,000 used"}])
+        self.assertEqual(report["windows"], [{"label": "Monthly credits", "usedPercent": 25.0,
+                                              "resetsAt": "2026-10-01T00:00:00Z", "detail": "250,000 of 1,000,000 used"}])
         self.assertNotIn("someone", json.dumps(report))
 
     def test_classic_tokens_are_skipped_and_github_logins_without_copilot_are_dropped(self):
@@ -319,8 +319,8 @@ class OpenCodeTests(Base):
         report = self.reports()["opencode"]
         self.assertEqual(report["facts"], [
             {"label": "Last 7 days", "value": "$1.50 · 45 sessions"},
-            {"label": "Last 30 days", "value": "$538.19 · 45 sessions"},
-            {"label": "Tokens (30 days)", "value": "24.2M in · 860.3K out"}])
+            {"label": "Last 30 days", "value": "$42.10 · 45 sessions"},
+            {"label": "Tokens (30 days)", "value": "3.1M in · 120.5K out"}])
 
     def test_go_limits_through_hermes_and_zen_only(self):
         self.keys["opencode-go"] = ("key", "https://opencode.ai/zen/go")

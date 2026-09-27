@@ -49,13 +49,13 @@ The provider Hermes chats with is listed first and marked.
       "name": "Claude",
       "status": "ok",
       "message": null,
-      "plan": "Max 20x",
+      "plan": "Pro",
       "detectedVia": ["cli"],
       "activeInHermes": true,
       "windows": [
-        {"label": "Session (5 hours)", "usedPercent": 26.0, "resetsAt": "2026-09-27T22:10:00Z", "detail": null}
+        {"label": "Session (5 hours)", "usedPercent": 42.0, "resetsAt": "2026-10-02T18:00:00Z", "detail": null}
       ],
-      "facts": [{"label": "Balance", "value": "$10.96"}],
+      "facts": [{"label": "Balance", "value": "$25.00"}],
       "manageUrl": "https://claude.ai/settings/usage",
       "approximate": false
     }
