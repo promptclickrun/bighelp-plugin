@@ -148,6 +148,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.native_attachments import available as attachments_available
         if attachments_available():
             expected.extend(("native-agent-attachments-v1", "native-agent-media-v1"))
+        from loopdy_plugin.host_restart import available as restart_available
+        if restart_available():
+            expected.append("native-host-restart-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

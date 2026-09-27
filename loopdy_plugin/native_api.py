@@ -98,6 +98,27 @@ async def device_tools(operation: str, request: Request) -> Response:
     return await native_device_tools.request(operation, request)
 
 
+class _HostRestart(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    confirm: Literal[True]
+
+
+@router.post("/host/restart")
+async def host_restart(request: Request) -> Response:
+    """Restart this Hermes process in place so an updated plugin loads (bighelp app Update)."""
+    from .host_restart import CAPABILITY, schedule
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "host_restart_unavailable", "This host can't restart from the app.")
+    await _body(request, _HostRestart)
+    try:
+        value = schedule()
+    except RuntimeError:
+        raise NativeAPIError(503, "host_restart_unavailable", "This host can't restart from the app.") from None
+    return _response({**value, "runtimeId": owner.runtime_id}, owner, request_id)
+
+
 @router.post("/attachments/{operation}")
 async def agent_attachments(operation: str, request: Request) -> Response:
     from .native_attachments import request as attachments_request

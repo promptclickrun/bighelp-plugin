@@ -256,4 +256,9 @@ def _native_features(
     except ImportError:
         skip("native-agent-attachments-v1", "native attachment support is unimportable.")
         skip("native-agent-media-v1", "native attachment support is unimportable.")
+    from .host_restart import CAPABILITY as restart_capability, available as restart_available
+    if restart_available():
+        features.append(restart_capability)
+    else:
+        skip(restart_capability, "in-place restart needs a POSIX host.")
     return profile, tuple(features)

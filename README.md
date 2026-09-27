@@ -45,6 +45,11 @@ The updater pins `main` to an exact commit, validates it, backs up the current c
 own installer. Your settings stay in place. It refuses to overwrite a modified install. Self-update needs macOS
 launchd or Linux user systemd.
 
+The bighelp app shows when a host's plugin is out of date (Settings › Hosts) and can update it, restart the
+messaging gateway, and restart the Hermes process it's connected to so the new version loads. It then checks that
+the new version is running. The in-place restart (`native-host-restart-v1`) keeps the same process, so launchd,
+systemd and Hermes Desktop keep supervising it; chats running on that process stop.
+
 ## What it adds
 
 | Feature | What you get in bighelp | Details |
