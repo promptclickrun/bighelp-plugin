@@ -1,6 +1,13 @@
 """In-place restart used by the bighelp app after it updates the plugin."""
+import json
+import os
+import subprocess
 import sys
+import textwrap
+import time
 import unittest
+import urllib.request
+from pathlib import Path
 from unittest import mock
 
 from loopdy_plugin import host_restart
@@ -48,6 +55,78 @@ class HostRestartTests(unittest.TestCase):
             self.assertFalse(host_restart.available())
             with self.assertRaises(RuntimeError):
                 host_restart.schedule(execv=lambda *_: None)
+
+
+# A tiny server that restarts itself exactly like a Hermes process does when the
+# app asks: same PID, same command line, listening socket released and bound again.
+_SERVER = textwrap.dedent("""
+    import json, os, sys, uuid
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    sys.path.insert(0, sys.argv[1])
+    from loopdy_plugin import host_restart
+    RUNTIME = uuid.uuid4().hex
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def reply(self, value):
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def do_GET(self):
+            self.reply({"pid": os.getpid(), "runtime": RUNTIME, "argv": sys.orig_argv[1:]})
+        def do_POST(self):
+            self.reply(host_restart.schedule(delay=0.2))
+    server = ThreadingHTTPServer(("127.0.0.1", int(sys.argv[2])), Handler)
+    print(server.server_address[1], flush=True)
+    server.serve_forever()
+""")
+
+
+@unittest.skipUnless(host_restart.available(), "in-place restart needs a POSIX host")
+class RealRestartTests(unittest.TestCase):
+    def test_process_restarts_in_place_and_serves_again(self):
+        import socket
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        root = str(Path(__file__).resolve().parents[1])
+        script = Path(self.id().replace(".", "_") + ".py")
+        tmp = Path(os.environ.get("TMPDIR", "/tmp")) / script
+        tmp.write_text(_SERVER)
+        self.addCleanup(tmp.unlink, missing_ok=True)
+        child = subprocess.Popen([sys.executable, str(tmp), root, str(port)], stdout=subprocess.PIPE, text=True)
+
+        def stop():
+            child.kill()
+            child.wait(timeout=5)
+            child.stdout.close()
+        self.addCleanup(stop)
+        self.assertEqual(int(child.stdout.readline()), port)
+
+        def get(method="GET"):
+            request = urllib.request.Request(f"http://127.0.0.1:{port}/", method=method, data=b"" if method == "POST" else None)
+            with urllib.request.urlopen(request, timeout=2) as response:
+                return json.load(response)
+
+        before = get()
+        self.assertEqual(get("POST"), {"restarting": True, "alreadyScheduled": False})
+        after = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            time.sleep(0.2)
+            try:
+                value = get()
+            except OSError:
+                continue
+            if value["runtime"] != before["runtime"]:
+                after = value
+                break
+        self.assertIsNotNone(after, "the process never came back")
+        # Same process for launchd/systemd, same flags, fresh code.
+        self.assertEqual(after["pid"], before["pid"])
+        self.assertEqual(after["argv"], before["argv"])
+        self.assertIsNone(child.poll())
 
 
 if __name__ == "__main__":
