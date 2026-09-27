@@ -62,7 +62,6 @@ class LoopdyCardSkillTests(unittest.TestCase):
 
     def test_release_documents_do_not_advertise_live_card_requests(self) -> None:
         documents = (
-            REPOSITORY_ROOT / "README.md",
             REPOSITORY_ROOT / "docs" / "LOOPDY_CARDS.md",
             REPOSITORY_ROOT / "docs" / "SECURITY_AND_PRIVACY.md",
             REPOSITORY_ROOT / "PROTOCOL.md",
@@ -81,6 +80,10 @@ class LoopdyCardSkillTests(unittest.TestCase):
                 self.assertIn("build 3", content.lower())
                 for phrase in prohibited:
                     self.assertNotIn(phrase, content)
+        # The README summarizes features rather than release history.
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        for phrase in prohibited:
+            self.assertNotIn(phrase, readme)
 
 
 if __name__ == "__main__":
