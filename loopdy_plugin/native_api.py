@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import sys
-from typing import Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -334,6 +334,18 @@ class _BoardUpdate(_Body):
     liked: StrictBool | None = None
     dismissed: StrictBool | None = None
     status: Literal["active", "done"] | None = None
+    rating: Literal["up", "down", "none"] | None = None
+    reason: str | None = Field(default=None, max_length=120)
+    read: StrictBool | None = None
+
+
+class _BoardRead(_Body):
+    itemIds: list[Annotated[str, Field(pattern=_BOARD_ITEM_ID)]] = Field(min_length=1, max_length=200)
+    read: StrictBool = True
+
+
+class _BoardItem(_Body):
+    itemId: str = Field(pattern=_BOARD_ITEM_ID)
 
 
 class _BoardMedia(_Body):
@@ -368,7 +380,12 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
                                            include_dismissed=body.includeDismissed)}
         elif operation == "update" and isinstance(body, _BoardUpdate):
             result = {"item": store.set_flags(body.itemId, liked=body.liked, dismissed=body.dismissed,
-                                              status=body.status)}
+                                              status=body.status, rating=body.rating, reason=body.reason,
+                                              read=body.read)}
+        elif operation == "read" and isinstance(body, _BoardRead):
+            result = {"updated": store.mark_read(body.itemIds, read=body.read)}
+        elif operation == "promote" and isinstance(body, _BoardItem):
+            result = {"item": store.promote_idea(body.itemId)}
         elif operation == "media" and isinstance(body, _BoardMedia):
             mime, data = store.image(body.itemId, body.index)
             result = media_payload(mime, data)
@@ -410,6 +427,16 @@ async def board_list(request: Request) -> Response:
 @router.post("/board/update")
 async def board_update(request: Request) -> Response:
     return await _board_request(request, _BoardUpdate, "update", MAX_BODY_BYTES)
+
+
+@router.post("/board/read")
+async def board_read(request: Request) -> Response:
+    return await _board_request(request, _BoardRead, "read", MAX_BODY_BYTES)
+
+
+@router.post("/board/promote")
+async def board_promote(request: Request) -> Response:
+    return await _board_request(request, _BoardItem, "promote", MAX_BODY_BYTES)
 
 
 @router.post("/board/media")

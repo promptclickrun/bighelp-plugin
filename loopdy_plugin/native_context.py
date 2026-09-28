@@ -237,13 +237,16 @@ def _native_features(
         skip("native-workspace-recent-v1", "workspace file support is unimportable.")
     try:
         from .agent_board import CAPABILITY as board_capability
+        from .agent_board import FEEDBACK_CAPABILITY as board_feedback_capability
         from .agent_board import available as board_available
         if board_available():
-            features.append(board_capability)
+            features.extend((board_capability, board_feedback_capability))
         else:
             skip(board_capability, "public profile helpers are unimportable.")
+            skip(board_feedback_capability, "public profile helpers are unimportable.")
     except ImportError:
         skip("native-agent-board-v1", "agent board support is unimportable.")
+        skip("native-agent-board-feedback-v1", "agent board support is unimportable.")
     try:
         from .native_attachments import CAPABILITY as attachments_capability
         from .native_attachments import MEDIA_CAPABILITY as media_capability

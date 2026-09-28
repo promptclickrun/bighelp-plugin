@@ -83,6 +83,76 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertIn("error", json.loads(handle_tool({"action": "launch"}, self.store)))
 
 
+    def test_feedback_rates_items_with_a_reason_and_the_agent_sees_it(self):
+        post = self.store.publish("feed", title="Evening AI news", source="Evening AI news")
+        other = self.store.publish("feed", title="Stock tips")
+        self.assertEqual((post["rating"], post["reason"], post["read"]), ("none", "", False))
+        liked = self.store.set_flags(post["id"], rating="up")
+        self.assertEqual((liked["rating"], liked["liked"]), ("up", True))
+        down = self.store.set_flags(other["id"], rating="down", reason="Not relevant")
+        self.assertEqual((down["rating"], down["reason"], down["liked"]), ("down", "Not relevant", False))
+        # A reason belongs to a thumbs down only.
+        self.assertEqual(self.store.set_flags(post["id"], reason="Too frequent")["reason"], "")
+        # Older apps still send liked.
+        self.assertEqual(self.store.set_flags(other["id"], liked=True)["rating"], "up")
+        self.assertEqual(self.store.set_flags(other["id"], liked=False)["rating"], "none")
+        with self.assertRaises(BoardError):
+            self.store.set_flags(post["id"], rating="sideways")
+        self.store.set_flags(other["id"], rating="down", reason="Already knew")
+        listed = json.loads(handle_tool({"action": "list", "kind": "feed"}, self.store))["items"]
+        by_title = {item["title"]: item for item in listed}
+        self.assertEqual(by_title["Evening AI news"]["rating"], "up")
+        self.assertEqual((by_title["Stock tips"]["rating"], by_title["Stock tips"]["reason"]), ("down", "Already knew"))
+        self.assertEqual(by_title["Stock tips"]["read"], False)
+        self.assertIn("source", by_title["Evening AI news"])
+
+    def test_read_state_survives_and_marks_in_bulk(self):
+        first = self.store.publish("feed", title="One")
+        second = self.store.publish("idea", title="Two")
+        self.assertEqual(self.store.mark_read([first["id"], second["id"], "gone"], read=True), 2)
+        self.assertTrue(all(item["read"] for item in BoardStore(self.root / "board").items()))
+        self.assertFalse(self.store.set_flags(first["id"], read=False)["read"])
+        with self.assertRaises(BoardError):
+            self.store.mark_read(["x"] * 201)
+
+    def test_hide_can_be_undone_and_hidden_items_stay_out_of_the_agents_list(self):
+        item = self.store.publish("idea", title="Plan a trip")
+        self.store.set_flags(item["id"], dismissed=True)
+        self.assertEqual(json.loads(handle_tool({"action": "list", "kind": "idea"}, self.store))["items"], [])
+        self.store.set_flags(item["id"], dismissed=False)
+        self.assertEqual([row["title"] for row in self.store.items(("idea",))], ["Plan a trip"])
+
+    def test_an_idea_turns_into_a_goal(self):
+        idea = self.store.publish("idea", title="Sleep by 11", body="I can nudge you at 10:30.", icon="🌙")
+        goal = self.store.promote_idea(idea["id"])
+        self.assertEqual((goal["kind"], goal["title"], goal["icon"], goal["status"]), ("goal", "Sleep by 11", "🌙", "active"))
+        self.assertEqual(goal["section"], "goal")
+        self.assertEqual(self.store.items(("idea",)), [], "The idea moved to Goals")
+        with self.assertRaises(BoardError):
+            self.store.promote_idea(goal["id"])
+
+    def test_old_boards_keep_likes_and_start_read(self):
+        legacy = self.root / "legacy"
+        legacy.mkdir()
+        import sqlite3
+        db = sqlite3.connect(legacy / "board.sqlite3")
+        db.executescript("""CREATE TABLE items(
+            id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL,
+            body TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '',
+            section TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '', links TEXT NOT NULL DEFAULT '[]',
+            images TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT '',
+            liked INTEGER NOT NULL DEFAULT 0, dismissed INTEGER NOT NULL DEFAULT 0,
+            created REAL NOT NULL, updated REAL NOT NULL);
+            INSERT INTO items(id,kind,title,liked,created,updated) VALUES('a','feed','Liked',1,1,1);
+            INSERT INTO items(id,kind,title,liked,created,updated) VALUES('b','feed','Plain',0,2,2);""")
+        db.commit()
+        db.close()
+        items = {item["id"]: item for item in BoardStore(legacy).items()}
+        self.assertEqual((items["a"]["rating"], items["b"]["rating"]), ("up", "none"))
+        self.assertTrue(items["a"]["read"] and items["b"]["read"], "Nothing already there shows as new")
+        self.assertFalse(BoardStore(legacy).publish("feed", title="Fresh")["read"])
+
 class ActivityRecorderTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
