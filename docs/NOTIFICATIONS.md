@@ -43,6 +43,21 @@ copy, including the phone's content key.
 Each alert shows the agent's name, picture and the start of its message (up to 1,600 characters). Event IDs
 are stable (`<grantId>:<sha256>`), so a retry never produces a second alert.
 
+### Silent replies
+
+Agents can answer with a silence marker such as `[SILENT]` or `NO_REPLY` when there's nothing to say. A reply
+alert follows Hermes' own delivery rules (`gateway/response_filters.py` on the host), so the phone never shows a
+marker Hermes itself wouldn't send:
+
+- **Scheduled tasks and webhooks** use Hermes' loose rule. A reply that is a marker, starts with `[SILENT]`, or has
+  a marker on its own first or last line sends no alert.
+- **Other chats** use Hermes' exact rule: only a reply that is just a marker counts. It stays silent when no
+  person is waiting for an answer, for example an off-screen note like a reaction, a Hermes internal notification,
+  or a group message that wasn't addressed to the agent. When a person's message got only a marker, the alert
+  carries Hermes' notice instead ("The model returned only a silence marker…"). Hermes versions before that notice
+  keep every bare marker silent.
+- Failed runs always alert.
+
 ## End-to-end encryption
 
 With a registered content key, the host seals each alert's title, text and avatar for that phone

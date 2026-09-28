@@ -12,6 +12,7 @@ except ImportError:  # Unsupported private-store locking must not break legacy A
     fcntl = None
 import hashlib
 import base64
+import importlib
 import json
 import logging
 import os
@@ -43,19 +44,6 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _CRON_SESSION = re.compile(r"^cron_.+_\d{8}_\d{6}$")
-
-
-def _is_scheduled_silence(response: Any) -> bool:
-    """True when a scheduled run replied with Hermes's cron silence marker (e.g. ``[SILENT]``).
-
-    Uses the same predicate the cron scheduler uses to skip delivery, so a run that stays
-    silent on its delivery lane never reaches the phone as a push either.
-    """
-    try:
-        from gateway.response_filters import is_autonomous_silence_response
-    except ImportError:
-        return isinstance(response, str) and response.strip().upper().startswith("[SILENT]")
-    return is_autonomous_silence_response(response)
 _EVENT_TYPES = {
     "session.completed", "session.failed", "scheduled.completed", "scheduled.failed",
     "approval.required", "clarification.required", "subagent.completed", "subagent.failed",
@@ -88,6 +76,56 @@ def _identifier(value: Any, pattern: re.Pattern = _ID) -> str:
     if not isinstance(value, str) or pattern.fullmatch(value) is None:
         raise ManagedNotificationError("notification_coordinate_invalid", 400)
     return value
+
+
+# A reply alert carries only what Hermes itself would deliver (gateway/response_filters.py).
+# Scheduled and webhook runs use the loose rule the cron scheduler and webhook adapter use. Any
+# other turn stays silent only on an exact marker, and only when no person is waiting for the
+# answer; a person who got a bare marker sees the notice Hermes' gateway sends instead.
+_AUTONOMOUS_PLATFORMS = frozenset({"cron", "webhook"})
+# The one kind prompt.submit lets a client author: an off-screen send nobody sees (bighelp's
+# reaction notes). Hermes history drops these rows, so for silence they are machinery too.
+_OFF_SCREEN_DISPLAY_KIND = "hidden"
+# gateway/run_turn.py's _UNEXPECTED_SILENCE_REPLY, word for word.
+_UNEXPECTED_SILENCE_REPLY = ("⚠️ The model returned only a silence marker for a message that needed "
+                             "a reply. Try again or rephrase.")
+_LEGACY_SILENCE_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"})
+
+
+def _turn_prompt(history: Any) -> tuple[Any, Any]:
+    """The current turn's user-row display kind and ``reply_expected`` flag. Hermes appends the
+    turn's user row, typed at turn start, before the model runs."""
+    for message in reversed(history if isinstance(history, list) else ()):
+        if isinstance(message, dict) and message.get("role") == "user":
+            metadata = message.get("display_metadata")
+            return (message.get("display_kind"),
+                    metadata.get("reply_expected") if isinstance(metadata, dict) else None)
+    return None, None
+
+
+def _delivered_reply(response: Any, *, autonomous: bool, history: Any) -> Any:
+    """``response`` as Hermes would deliver it: ``""`` when the turn stays silent, Hermes' notice
+    when a person got a bare marker, else unchanged. Never raises; unsure means unchanged."""
+    try:
+        rules = importlib.import_module("gateway.response_filters")
+    except ImportError:  # Every supported Hermes has it; a bare marker still stays quiet.
+        text = response.strip().upper() if isinstance(response, str) else ""
+        return "" if text in _LEGACY_SILENCE_MARKERS or (autonomous and text.startswith("[SILENT]")) else response
+    try:
+        if autonomous:
+            return "" if rules.is_autonomous_silence_response(response) else response
+        if not rules.is_intentional_silence_response(response):
+            return response
+        silence_allowed = getattr(rules, "silence_allowed", None)
+        if silence_allowed is None:  # Before the human-turn notice, Hermes kept every bare marker quiet.
+            return ""
+        kind, reply_expected = _turn_prompt(history)
+        if kind == _OFF_SCREEN_DISPLAY_KIND or silence_allowed(kind, reply_expected):
+            return ""
+        return _UNEXPECTED_SILENCE_REPLY
+    except Exception:
+        logger.warning("Notification silence check unavailable; the reply alerts unchanged")
+        return response
 
 
 def session_reference(profile: str, session_id: str) -> str:
@@ -755,12 +793,13 @@ class ManagedNotifications:
             coordinate = (profile, session_id, turn)
             scheduled = payload.get("platform") == "cron" or _CRON_SESSION.fullmatch(session_id) is not None
             try:
-                # A silent scheduled run keeps no reply, so neither this alert nor the
-                # on_session_end fallback pushes the marker. Failures still alert.
-                if scheduled and _is_scheduled_silence(payload.get("assistant_response")):
-                    response_text = ""
-                else:
-                    response_text = self._rich_text(payload.get("assistant_response"))
+                # A turn Hermes keeps silent keeps no reply here either, so neither this alert
+                # nor the on_session_end fallback pushes a marker. Failures still alert. The
+                # check reads the raw reply: _rich_text collapses the lines the loose rule reads.
+                reply = _delivered_reply(
+                    payload.get("assistant_response"), history=payload.get("conversation_history"),
+                    autonomous=scheduled or payload.get("platform") in _AUTONOMOUS_PLATFORMS)
+                response_text = self._rich_text(reply) if reply else ""
             except ManagedNotificationError:
                 response_text = ""
             if response_text:
