@@ -7,6 +7,9 @@ import tempfile
 import unittest
 import uuid
 import hashlib
+import importlib
+import sys
+import types
 from unittest.mock import patch
 from cryptography.hazmat.primitives.asymmetric import ec
 from loopdy_plugin.managed_notifications import ManagedNotifications, ManagedNotificationError, host_request_transcript
@@ -233,6 +236,90 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.observe("on_session_end",profile="default",session_id=cron,turn_id="turn-c",completed=True,platform="cron")
         self.service.drain_pending()
         self.assertIn("scheduled.completed",[e["eventType"] for e in self.events_sent()])
+
+    def test_silent_scheduled_run_sends_no_alert(self):
+        # Regression: a cron run answering "[SILENT]" skipped Telegram delivery but
+        # still reached the phone as a push reading "[SILENT]".
+        self.grant["eventTypes"]=["scheduled.completed","scheduled.failed","session.completed","session.failed"]
+        grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
+        self.service.enroll(grant_id,str(uuid.uuid4())); self.calls.clear()
+        cron="cron_143638f07ae3_20260927_185802"
+        for turn,reply in (("turn-s","[SILENT]"),("turn-t","[SILENT] No qualifying restock.")):
+            self.service.observe("post_llm_call",profile="default",session_id=cron,turn_id=turn,assistant_response=reply,platform="cron")
+            self.service.observe("on_session_end",profile="default",session_id=cron,turn_id=turn,completed=True,platform="cron")
+        self.service.drain_pending()
+        self.assertEqual(self.events_sent(),[])
+        self.service.observe("post_llm_call",profile="default",session_id=cron,turn_id="turn-r",assistant_response="Restock: ETB in stock at MSRP.",platform="cron")
+        self.service.observe("on_session_end",profile="default",session_id=cron,turn_id="turn-r",completed=True,platform="cron")
+        self.service.observe("on_session_end",profile="default",session_id=cron,turn_id="turn-f",failed=True,error="provider unreachable",platform="cron")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()],["scheduled.completed","scheduled.failed"])
+
+    def hermes_rules(self, *, human_turn_notice=True, broken=False):
+        # Hermes' own predicates; silence_allowed arrived with the human-turn notice, so
+        # supply it (or leave it out) to cover every supported Hermes the same way.
+        real=importlib.import_module("gateway.response_filters")
+        rules=types.ModuleType("gateway.response_filters")
+        rules.is_intentional_silence_response=real.is_intentional_silence_response
+        rules.is_autonomous_silence_response=real.is_autonomous_silence_response
+        if human_turn_notice:
+            rules.silence_allowed=lambda kind,reply_expected=None: kind=="internal_notification" or reply_expected is False
+        if broken:
+            def fail(_response): raise RuntimeError("synthetic")
+            rules.is_intentional_silence_response=fail
+        return patch.dict(sys.modules,{"gateway.response_filters":rules})
+
+    def chat_turn(self, turn, reply, *, prompt=None, platform="desktop"):
+        history=[{"role":"user","content":"earlier","display_kind":"internal_notification"},{"role":"assistant","content":"ok"},
+                 dict({"role":"user","content":"now"},**(prompt or {})),{"role":"assistant","content":reply}]
+        self.service.observe("post_llm_call",profile="default",session_id="desktop-chat",turn_id=turn,assistant_response=reply,conversation_history=history,platform=platform)
+        self.service.observe("on_session_end",profile="default",session_id="desktop-chat",turn_id=turn,completed=True,platform=platform)
+
+    def alerts(self):
+        self.service.drain_pending()
+        sent=[(e["eventType"],e["content"]["text"]) for e in self.events_sent()]
+        self.calls.clear()
+        return sent
+
+    def test_bare_marker_answering_a_person_alerts_hermes_notice(self):
+        # Hermes' gateway never lets a person's message vanish: a bare marker becomes its notice.
+        # An earlier machinery row must not make this human turn silent.
+        with self.hermes_rules():
+            self.chat_turn("turn-a","[SILENT]")
+            self.chat_turn("turn-b","no_reply.",prompt={"display_metadata":{"reply_expected":True}})
+        notice="⚠️ The model returned only a silence marker for a message that needed a reply. Try again or rephrase."
+        self.assertEqual(self.alerts(),[("session.completed",notice)]*2)
+
+    def test_turns_nobody_typed_stay_silent(self):
+        # Off-screen notes (a widget tap), Hermes' internal notifications and
+        # messages not addressed to the agent may end on a bare marker, stray punctuation and all.
+        with self.hermes_rules():
+            self.chat_turn("turn-a","[SILENT]",prompt={"display_kind":"hidden"})
+            self.chat_turn("turn-b","NO_REPLY",prompt={"display_kind":"internal_notification"})
+            self.chat_turn("turn-c","*SILENT*",prompt={"display_metadata":{"reply_expected":False}})
+        self.assertEqual(self.alerts(),[])
+
+    def test_prose_mentioning_a_marker_alerts_unchanged(self):
+        with self.hermes_rules():
+            self.chat_turn("turn-a","Reply with [SILENT] when there's nothing new.",prompt={"display_kind":"hidden"})
+        self.assertEqual(self.alerts(),[("session.completed","Reply with [SILENT] when there's nothing new.")])
+
+    def test_webhook_run_uses_the_loose_rule(self):
+        with self.hermes_rules():
+            self.chat_turn("turn-a","[SILENT]\n\nNothing new this tick.",platform="webhook")
+            self.chat_turn("turn-b","Deploy finished.",platform="webhook")
+        self.assertEqual(self.alerts(),[("session.completed","Deploy finished.")])
+
+    def test_older_hermes_keeps_every_bare_marker_quiet(self):
+        # Before the human-turn notice, Hermes delivered nothing for any bare marker.
+        with self.hermes_rules(human_turn_notice=False):
+            self.chat_turn("turn-a","[SILENT]")
+        self.assertEqual(self.alerts(),[])
+
+    def test_a_failing_silence_check_alerts_the_reply_unchanged(self):
+        with self.hermes_rules(broken=True):
+            self.chat_turn("turn-a","[SILENT]")
+        self.assertEqual(self.alerts(),[("session.completed","[SILENT]")])
 
     def test_subagent_completion_alerts_for_an_unopened_parent_session(self):
         self.grant["eventTypes"]=["session.completed","session.failed","subagent.completed","subagent.failed"]
