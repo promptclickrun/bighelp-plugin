@@ -83,8 +83,9 @@ def _identifier(value: Any, pattern: re.Pattern = _ID) -> str:
 # other turn stays silent only on an exact marker, and only when no person is waiting for the
 # answer; a person who got a bare marker sees the notice Hermes' gateway sends instead.
 _AUTONOMOUS_PLATFORMS = frozenset({"cron", "webhook"})
-# The one kind prompt.submit lets a client author: an off-screen send nobody sees (bighelp's
-# reaction notes). Hermes history drops these rows, so for silence they are machinery too.
+# The one kind prompt.submit lets a client author: an off-screen send nobody sees (a widget tap,
+# or an older bighelp reaction note). Hermes history drops these rows, so for silence they are
+# machinery too.
 _OFF_SCREEN_DISPLAY_KIND = "hidden"
 # gateway/run_turn.py's _UNEXPECTED_SILENCE_REPLY, word for word.
 _UNEXPECTED_SILENCE_REPLY = ("⚠️ The model returned only a silence marker for a message that needed "

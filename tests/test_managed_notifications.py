@@ -291,7 +291,7 @@ class ManagedNotificationTests(unittest.TestCase):
         self.assertEqual(self.alerts(),[("session.completed",notice)]*2)
 
     def test_turns_nobody_typed_stay_silent(self):
-        # Off-screen notes (bighelp's reaction notes), Hermes' internal notifications and
+        # Off-screen notes (a widget tap), Hermes' internal notifications and
         # messages not addressed to the agent may end on a bare marker, stray punctuation and all.
         with self.hermes_rules():
             self.chat_turn("turn-a","[SILENT]",prompt={"display_kind":"hidden"})

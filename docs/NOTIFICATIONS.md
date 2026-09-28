@@ -52,7 +52,7 @@ marker Hermes itself wouldn't send:
 - **Scheduled tasks and webhooks** use Hermes' loose rule. A reply that is a marker, starts with `[SILENT]`, or has
   a marker on its own first or last line sends no alert.
 - **Other chats** use Hermes' exact rule: only a reply that is just a marker counts. It stays silent when no
-  person is waiting for an answer, for example an off-screen note like a reaction, a Hermes internal notification,
+  person is waiting for an answer, for example an off-screen note like a widget tap, a Hermes internal notification,
   or a group message that wasn't addressed to the agent. When a person's message got only a marker, the alert
   carries Hermes' notice instead ("The model returned only a silence marker…"). Hermes versions before that notice
   keep every bare marker silent.
