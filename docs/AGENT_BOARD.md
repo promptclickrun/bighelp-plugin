@@ -29,8 +29,21 @@ All take `agentId` and follow the native context/ETag/request-ID contract.
 | Route | Body | Returns |
 |---|---|---|
 | `board/list` | `kinds`, `limit`, `includeDismissed` | `items` |
-| `board/update` | `itemId`, `liked`, `dismissed`, `status` (goals) | `item` |
+| `board/update` | `itemId`, `liked`, `dismissed`, `status` (goals); with feedback: `rating` (`up`/`down`/`none`), `reason` (thumbs down, 120 chars), `read` | `item` |
 | `board/media` | `itemId`, `index` | `mimeType`, base64 `data` |
 | `board/activity` | `limit` | `activity` with Hermes' session `title` |
 | `board/approvals` | `limit` | `approvals` with `sessionTitle` |
 | `board/identity` | — | `soul`, `memory`, `user`: `text` (64 KiB max), `updatedAt`, `truncated` |
+
+With `native-agent-board-feedback-v1` (2.19.0):
+
+| Route | Body | Returns |
+|---|---|---|
+| `board/read` | `itemIds` (up to 200), `read` | `updated` count |
+| `board/promote` | `itemId` of an idea | the new goal `item`; the idea is hidden |
+
+Items carry `rating`, `reason` and `read`. `liked` stays for older apps and maps
+to thumbs up. Hiding (`dismissed`) is the app's delete and can be undone; hidden
+items never reach the agent's `list`, which returns rating, reason and read so
+the agent can post more of what the user rates up. Boards from before 2.19.0
+keep their likes as thumbs up and start fully read.

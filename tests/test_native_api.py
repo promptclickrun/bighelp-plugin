@@ -144,7 +144,7 @@ class NativeAPITests(unittest.TestCase):
             expected.extend(("native-workspace-files-v1", "native-workspace-recent-v1"))
         from loopdy_plugin.agent_board import available as board_available
         if board_available():
-            expected.append("native-agent-board-v1")
+            expected.extend(("native-agent-board-v1", "native-agent-board-feedback-v1"))
         from loopdy_plugin.native_attachments import available as attachments_available
         if attachments_available():
             expected.extend(("native-agent-attachments-v1", "native-agent-media-v1"))
@@ -266,6 +266,25 @@ class NativeAPITests(unittest.TestCase):
         self.assertGreater(identity["soul"]["updatedAt"], 0)
         self.assertEqual(board("list", {"agentId": "missing-profile"}).status_code, 404)
         self.assertEqual(board("list", {"agentId": "default", "kinds": ["secret"]}).status_code, 422)
+
+        # Thumbs with a reason, read state in bulk, undo, and idea → goal.
+        rated = board("update", {"agentId": "default", "itemId": post["id"], "rating": "down",
+                                 "reason": "Too frequent", "read": True}).json()["item"]
+        self.assertEqual((rated["rating"], rated["reason"], rated["read"], rated["liked"]),
+                         ("down", "Too frequent", True, False))
+        self.assertEqual(board("update", {"agentId": "default", "itemId": post["id"], "rating": "meh"}).status_code, 422)
+        self.assertEqual(board("update", {"agentId": "default", "itemId": post["id"],
+                                          "reason": "x" * 121}).status_code, 422)
+        read = board("read", {"agentId": "default", "itemIds": [post["id"], "pkg"], "read": False})
+        self.assertEqual(read.json()["updated"], 2)
+        self.assertEqual(board("read", {"agentId": "default", "itemIds": ["../x"]}).status_code, 422)
+        hidden = board("update", {"agentId": "default", "itemId": "pkg", "dismissed": True}).json()["item"]
+        self.assertTrue(hidden["dismissed"])
+        self.assertFalse(board("update", {"agentId": "default", "itemId": "pkg", "dismissed": False}).json()["item"]["dismissed"])
+        idea = store.publish("idea", title="Sleep by 11", icon="🌙")
+        goal = board("promote", {"agentId": "default", "itemId": idea["id"]}).json()["item"]
+        self.assertEqual((goal["kind"], goal["title"]), ("goal", "Sleep by 11"))
+        self.assertEqual(board("promote", {"agentId": "default", "itemId": "pkg"}).status_code, 404)
 
     def test_template_headers_are_required_exact_and_echoed(self):
         headers = self.headers()

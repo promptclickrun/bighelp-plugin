@@ -27,6 +27,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 CAPABILITY = "native-agent-board-v1"
+# Thumbs up/down with a reason, read state, bulk read and idea → goal.
+FEEDBACK_CAPABILITY = "native-agent-board-feedback-v1"
 TOOL_NAME = "bighelp_board"
 KINDS = ("feed", "idea", "goal")
 GOAL_SECTIONS = ("tracking", "goal")
@@ -41,6 +43,9 @@ MAX_LINKS = 8
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_ITEMS_PER_KIND = 500
 MAX_ACTIVITY = 1_000
+MAX_REASON = 120
+MAX_READ_BATCH = 200
+RATINGS = {"down": -1, "none": 0, "up": 1}
 MAX_APPROVALS = 1_000
 _ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _IMAGE_TYPES = (
@@ -108,6 +113,17 @@ class BoardStore:
                     description TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '',
                     choice TEXT NOT NULL DEFAULT '', created REAL NOT NULL);
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(items)")}
+            if "rating" not in columns:
+                # Likes become thumbs up. Everything already on the board counts
+                # as read, so an update doesn't turn it all into "new".
+                db.executescript("""
+                    ALTER TABLE items ADD COLUMN rating INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE items ADD COLUMN reason TEXT NOT NULL DEFAULT '';
+                    ALTER TABLE items ADD COLUMN read INTEGER NOT NULL DEFAULT 0;
+                    UPDATE items SET rating=1 WHERE liked=1;
+                    UPDATE items SET read=1;
+                """)
 
     @contextmanager
     def _db(self):
@@ -185,18 +201,58 @@ class BoardStore:
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
 
     def set_flags(self, item_id: str, *, liked: bool | None = None, dismissed: bool | None = None,
-                  status: str | None = None) -> dict:
+                  status: str | None = None, rating: str | None = None, reason: str | None = None,
+                  read: bool | None = None) -> dict:
+        """What the person did with an item in the app. ``liked`` is the older
+        app's heart; it maps onto the thumbs rating."""
+        if rating is not None and rating not in RATINGS:
+            raise BoardError("rating must be up, down or none.")
         with self._db() as db:
             row = db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
             if row is None:
                 raise BoardError("That item no longer exists.")
             if status is not None and (row["kind"] != "goal" or status not in GOAL_STATUSES):
                 raise BoardError("Only goals have a status.")
-            db.execute("UPDATE items SET liked=?, dismissed=?, status=?, updated=? WHERE id=?", (
-                int(row["liked"] if liked is None else liked),
+            score = row["rating"]
+            if rating is not None:
+                score = RATINGS[rating]
+            elif liked is not None:
+                score = 1 if liked else (0 if score == 1 else score)
+            next_reason = row["reason"] if reason is None else _clean(reason, MAX_REASON, field="reason")
+            if rating is not None and reason is None:
+                next_reason = ""
+            if score != -1:
+                next_reason = ""
+            db.execute("""UPDATE items SET liked=?, rating=?, reason=?, read=?, dismissed=?, status=?, updated=?
+                          WHERE id=?""", (
+                int(score == 1), score, next_reason,
+                int(row["read"] if read is None else read),
                 int(row["dismissed"] if dismissed is None else dismissed),
                 row["status"] if status is None else status, time.time(), item_id))
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
+
+    def mark_read(self, item_ids: list[str], *, read: bool = True) -> int:
+        """Marks items read (or unread) together, as the app shows them."""
+        if len(item_ids) > MAX_READ_BATCH:
+            raise BoardError(f"Mark at most {MAX_READ_BATCH} items at once.")
+        ids = [item_id for item_id in dict.fromkeys(item_ids) if _ITEM_ID.fullmatch(item_id)]
+        if not ids:
+            return 0
+        with self._db() as db:
+            return db.execute(f"UPDATE items SET read=? WHERE id IN ({','.join('?' for _ in ids)})",
+                              (int(read), *ids)).rowcount
+
+    def promote_idea(self, item_id: Any, *, now: float | None = None) -> dict:
+        """An idea the person wants to pursue becomes one of their goals."""
+        item_id = _clean(item_id, 64, field="id", required=True)
+        with self._db() as db:
+            row = db.execute("SELECT * FROM items WHERE id=? AND kind='idea'", (item_id,)).fetchone()
+        if row is None:
+            raise BoardError("No idea has that id.")
+        goal = self.publish("goal", title=row["title"], body=row["body"], icon=row["icon"], section="goal",
+                            source=row["source"] or "From an idea", now=now)
+        self.set_flags(item_id, dismissed=True)
+        return goal
 
     def remove(self, item_id: Any) -> bool:
         item_id = _clean(item_id, 64, field="id", required=True)
@@ -300,7 +356,9 @@ class BoardStore:
             "id": row["id"], "kind": row["kind"], "title": row["title"], "body": row["body"],
             "icon": row["icon"], "section": row["section"], "status": row["status"], "note": row["note"],
             "links": json.loads(row["links"]), "images": images, "source": row["source"],
-            "liked": bool(row["liked"]), "dismissed": bool(row["dismissed"]),
+            "liked": row["rating"] == 1, "dismissed": bool(row["dismissed"]),
+            "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
+            "read": bool(row["read"]),
             "createdAt": int(row["created"]), "updatedAt": int(row["updated"]),
         }
 
@@ -428,7 +486,8 @@ TOOL_DESCRIPTION = (
     "update with optional images and links); 'idea' proposes something you could do for the user; "
     "'goal' adds or updates a Goal (section 'tracking' for things you watch, 'goal' for the user's "
     "own goals) with a short status note; 'update_goal' changes a goal's note or marks it done; "
-    "'list' shows recent items so you can update rather than duplicate; 'remove' deletes one. "
+    "'list' shows recent items with the user's rating (up/down), reason and read state, so you can "
+    "update rather than duplicate and post more of what they rate up; 'remove' deletes one. "
     "Only publish what the user asked you to surface. Never create schedules or posts on your own "
     "initiative; see the bighelp-feed-and-ideas skill."
 )
@@ -480,8 +539,10 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
         elif action == "list":
             kind = args.get("kind")
             items = store.items((kind,) if kind in KINDS else KINDS, limit=30, include_dismissed=False)
+            # The person's thumbs, reasons and read state tell the agent what's worth posting.
             return json.dumps({"items": [{key: item[key] for key in
-                               ("id", "kind", "title", "section", "status", "note", "createdAt")}
+                               ("id", "kind", "title", "section", "status", "note", "source", "createdAt",
+                                "rating", "reason", "read")}
                                for item in items]})
         elif action == "remove":
             return json.dumps({"removed": store.remove(args.get("id"))})

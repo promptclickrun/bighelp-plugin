@@ -54,6 +54,20 @@ The bighelp app shows three boards next to the chat. You write to them with the
   `package-hollywood-feed`), then `update_goal` with a fresh `note` whenever it
   changes. Mark `status: done` when it is finished.
 
+## Learn from the user's thumbs
+
+The user can rate each item thumbs up or thumbs down in the app, sometimes with
+a reason ("Not relevant", "Too frequent", "Already knew", "Wrong timing").
+`action: list` returns each item's `rating` (`up`, `down` or `none`), `reason`
+and `read`. Check it before a scheduled run posts:
+
+- Post more of what they rate up: the same topics, sources and format.
+- Cut back on what they rate down, and act on the reason: drop an irrelevant
+  topic, post less often, skip what they already knew, or move the time.
+- Items the user deleted never appear in `list`; don't post them again.
+- Unread items mean the user hasn't looked yet. Don't pile more on top of a
+  long unread stretch; one good post beats several.
+
 ## When the user replies from the app
 
 A **Discuss** tap opens a chat that quotes the post or idea. Treat it as the user
