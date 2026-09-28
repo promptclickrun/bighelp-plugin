@@ -43,6 +43,10 @@ copy, including the phone's content key.
 Each alert shows the agent's name, picture and the start of its message (up to 1,600 characters). Event IDs
 are stable (`<grantId>:<sha256>`), so a retry never produces a second alert.
 
+A reply, task or helper alert goes out from the Hermes process that ran the turn as soon as the reply is saved.
+One Hermes process also owns a background sender that retries anything that didn't go out; both claim each alert
+before sending, so it's sent once. Approval alerts wait a short grace period and stay with that sender.
+
 ### Silent replies
 
 Agents can answer with a silence marker such as `[SILENT]` or `NO_REPLY` when there's nothing to say. A reply

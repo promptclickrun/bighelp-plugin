@@ -60,6 +60,14 @@ class ManagedApprovalNotificationTests(unittest.TestCase):
         self.assertEqual(detail["content"]["text"], "PRIVATE description")
         self.assertNotIn("requestId", detail, "The observer did not supply a native request ID")
 
+    def test_approval_waits_for_its_owner_instead_of_sending_on_queue(self):
+        self.enroll_approval()
+        sent = []
+        self.service._send_on_queue = lambda work: (sent.append(True), work())
+        self.approval()
+        self.assertEqual(sent, [])
+        self.assertEqual(len(self.pending()), 1)
+
     def test_old_completion_only_grant_does_not_authorize_approval(self):
         self.approval()
         self.assertEqual(self.pending(), [])

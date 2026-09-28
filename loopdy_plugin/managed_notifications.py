@@ -137,6 +137,10 @@ def host_request_transcript(method: str, path: str, grant_id: str, timestamp: in
     return "\n".join(("loopdy-notification-host-v1", method, path, grant_id, str(timestamp), nonce, hashlib.sha256(raw).hexdigest())).encode()
 
 
+def _send_in_background(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, name="loopdy-managed-notifications-now", daemon=True).start()
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ManagedNotificationError("notification_redirect_rejected", 502)
@@ -183,12 +187,18 @@ class ManagedNotifications:
     """One process-owned observer/worker; SQLite serializes other API processes."""
     def __init__(self, directory: Path, *, transport: Callable = _https_request,
                  clock: Callable = time.time, session_opener: Callable = open_profile_store,
-                 observations: dict[str, Any] | None = None):
+                 observations: dict[str, Any] | None = None,
+                 send_on_queue: Callable[[Callable[[], None]], None] | None = None):
         if fcntl is None:
             raise ManagedNotificationError("notification_platform_unavailable", 503)
         self._fcntl = fcntl
         _private_directory(directory)
         self.directory, self.transport, self.clock = directory, transport, clock
+        # A new alert goes out from the process that queued it, on its own thread,
+        # instead of waiting for whichever Hermes process owns the sender to poll.
+        # Tests with an injected transport send only when they drain (or opt in).
+        self._send_on_queue = send_on_queue if send_on_queue is not None else (
+            _send_in_background if transport is _https_request else None)
         self.session_opener = session_opener
         self.preference_policy: Callable | None = None
         # Live hook state. A fresh process starts empty; get_managed_notifications
@@ -718,6 +728,7 @@ class ManagedNotifications:
         content_text = self._rich_text(content_text)
         agent_name, avatar = self._agent_presentation(profile)
         now = int(self.clock())
+        queued: list[str] = []
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT g.* FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (now, profile)).fetchall()
@@ -765,7 +776,12 @@ class ManagedNotifications:
                 due = now + _APPROVAL_GRACE_SECONDS if approval else now
                 db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref) VALUES(?,?,?,?,?,'pending',?,?)",
                            (event_id, grant["grantId"], "/events", raw, expires, due, reference))
+                if not approval:
+                    queued.append(event_id)
         self._wake.set()
+        # Approvals wait their grace period and stay with the sender that owns them.
+        if queued and self._send_on_queue is not None:
+            self._send_on_queue(lambda: self._send_now(queued))
 
     def observe(self, hook: str, *, profile: str, **payload: Any):
         """Synchronous stock hook: persist only; never perform network I/O here."""
@@ -1056,33 +1072,49 @@ class ManagedNotifications:
             rows = db.execute("SELECT p.* FROM pending p JOIN grants g USING(grant_id) WHERE p.state='pending' AND p.next_attempt<=? AND p.expires>? AND g.state='active' AND g.expires>? ORDER BY p.next_attempt,p.intent_id LIMIT 32", (now, now, now)).fetchall()
         for row in rows:
             if self._stop.is_set(): return
-            now = int(self.clock())
-            with self._db() as db:
-                claimed = db.execute("UPDATE pending SET state='sending',next_attempt=? WHERE intent_id=? AND state='pending' AND expires>? AND EXISTS(SELECT 1 FROM grants WHERE grants.grant_id=pending.grant_id AND grants.state='active' AND grants.expires>?)", (now + 30, row["intent_id"], now, now)).rowcount
-            if claimed != 1: continue
-            try:
-                approval = row["path"] == "/events" and json.loads(bytes(row["raw"])).get("eventType") == _APPROVAL_EVENT
-                result = self._request("POST", row["grant_id"], row["path"], bytes(row["raw"]),
-                                       before_transport=(lambda: self._approval_transport_ready(row)) if approval else None)
-                if result.get("status") not in ("accepted", "duplicate") or not isinstance(result.get("deliveryId"), str):
-                    raise ManagedNotificationError("notification_delivery_unconfirmed", 503)
-            except ManagedNotificationError as error:
-                if error.status in (403, 404):
-                    self.remove(row["grant_id"])
-                else:
-                    with self._db() as db:
-                        state = "failed" if error.status in (400, 401, 410, 422) else "pending"
-                        # A post-hook/removal racing an in-flight failed request
-                        # must not resurrect the retired intent.
-                        db.execute("UPDATE pending SET state=?,attempts=attempts+1,next_attempt=? WHERE intent_id=? AND state='sending'", (state, now + min(60, 2 ** min(row["attempts"] + 1, 6)), row["intent_id"]))
-                        if state == "failed":
-                            db.execute("UPDATE approval_attention SET state='retired',reason='send_failed' WHERE event_id=? AND state='pending'", (row["intent_id"],))
-                continue
-            with self._db() as db:
-                db.execute("UPDATE pending SET state='accepted' WHERE intent_id=? AND state='sending'", (row["intent_id"],))
-                if row["activity_id"] and json.loads(bytes(row["raw"])).get("phase") in ("completed", "failed"):
-                    db.execute("UPDATE activities SET state='terminal_accepted' WHERE activity_id=? AND state='terminal_pending'", (row["activity_id"],))
+            self._send_row(row)
 
+    def _send_now(self, intent_ids: list[str]):
+        """Sends alerts this process just queued. The claim below lets exactly one
+        sender (this one or the owner's drain) deliver each; approvals never come here."""
+        now = int(self.clock())
+        try:
+            with self._db() as db:
+                marks = ",".join("?" * len(intent_ids))
+                rows = db.execute(f"SELECT p.* FROM pending p JOIN grants g USING(grant_id) WHERE p.intent_id IN ({marks}) AND p.state='pending' AND p.next_attempt<=? AND p.expires>? AND g.state='active' AND g.expires>? ORDER BY p.intent_id", (*intent_ids, now, now, now)).fetchall()
+            for row in rows:
+                if self._stop.is_set(): return
+                self._send_row(row)
+        except (ValueError, OSError, sqlite3.Error):
+            logger.warning("Managed notification immediate send unavailable; the sender retries")
+
+    def _send_row(self, row):
+        now = int(self.clock())
+        with self._db() as db:
+            claimed = db.execute("UPDATE pending SET state='sending',next_attempt=? WHERE intent_id=? AND state='pending' AND expires>? AND EXISTS(SELECT 1 FROM grants WHERE grants.grant_id=pending.grant_id AND grants.state='active' AND grants.expires>?)", (now + 30, row["intent_id"], now, now)).rowcount
+        if claimed != 1: return
+        try:
+            approval = row["path"] == "/events" and json.loads(bytes(row["raw"])).get("eventType") == _APPROVAL_EVENT
+            result = self._request("POST", row["grant_id"], row["path"], bytes(row["raw"]),
+                                   before_transport=(lambda: self._approval_transport_ready(row)) if approval else None)
+            if result.get("status") not in ("accepted", "duplicate") or not isinstance(result.get("deliveryId"), str):
+                raise ManagedNotificationError("notification_delivery_unconfirmed", 503)
+        except ManagedNotificationError as error:
+            if error.status in (403, 404):
+                self.remove(row["grant_id"])
+            else:
+                with self._db() as db:
+                    state = "failed" if error.status in (400, 401, 410, 422) else "pending"
+                    # A post-hook/removal racing an in-flight failed request
+                    # must not resurrect the retired intent.
+                    db.execute("UPDATE pending SET state=?,attempts=attempts+1,next_attempt=? WHERE intent_id=? AND state='sending'", (state, now + min(60, 2 ** min(row["attempts"] + 1, 6)), row["intent_id"]))
+                    if state == "failed":
+                        db.execute("UPDATE approval_attention SET state='retired',reason='send_failed' WHERE event_id=? AND state='pending'", (row["intent_id"],))
+            return
+        with self._db() as db:
+            db.execute("UPDATE pending SET state='accepted' WHERE intent_id=? AND state='sending'", (row["intent_id"],))
+            if row["activity_id"] and json.loads(bytes(row["raw"])).get("phase") in ("completed", "failed"):
+                db.execute("UPDATE activities SET state='terminal_accepted' WHERE activity_id=? AND state='terminal_pending'", (row["activity_id"],))
 
 _instances: dict[str, ManagedNotifications] = {}
 _instances_lock = threading.Lock()
