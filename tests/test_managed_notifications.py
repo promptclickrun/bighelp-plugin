@@ -216,6 +216,16 @@ class ManagedNotificationTests(unittest.TestCase):
     def events_sent(self):
         return [json.loads(raw) for _, path, raw, _ in self.calls if path.endswith("/events")]
 
+    def test_a_reply_alert_goes_out_as_soon_as_it_is_queued(self):
+        # The process that ran the turn sends at once; waiting for the sender-owning
+        # Hermes process to poll made alerts late (5 s in older plugins).
+        self.service._send_on_queue = lambda work: work()
+        self.service.observe("post_llm_call",profile="default",session_id="desktop-chat",turn_id="turn-a",assistant_response="Done.")
+        self.assertEqual([e["content"]["text"] for e in self.events_sent()],["Done."])
+        self.service.observe("on_session_end",profile="default",session_id="desktop-chat",turn_id="turn-a",completed=True,platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual(len(self.events_sent()),1,"The regular sender never sends it again")
+
     def test_profile_grant_alerts_for_a_chat_never_opened_on_the_phone(self):
         # Regression: alerts previously required a per-session row written only
         # when the phone opened that exact chat, so replies to chats started
