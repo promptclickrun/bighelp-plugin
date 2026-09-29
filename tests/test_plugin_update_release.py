@@ -57,7 +57,7 @@ class LatestReleaseTests(unittest.TestCase):
 
     def test_drafts_prereleases_and_odd_tags_are_refused(self):
         for release in (_release(draft=True), _release(prerelease=True), _release(tag_name="latest"),
-                        _release(tag_name="v3.0.0; rm -rf /"), _Response(b"not json")):
+                        _release(tag_name="v3.0.0/../main"), _Response(b"not json")):
             with self.subTest(release=release.getvalue()[:40]), \
                     patch.object(worker.urllib.request, "urlopen", return_value=release):
                 with self.assertRaises(worker.UpdateFailed):
