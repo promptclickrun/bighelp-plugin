@@ -1,8 +1,10 @@
-"""Publish the plugin version on main as a GitHub Release, once.
+"""Publish the plugin version in plugin.yaml as a GitHub Release, once.
 
-Runs from .github/workflows/release.yml after every push to main. The bighelp app
-and `hermes bighelp update` install the latest release, so a merge that bumps the
-version reaches hosts and one that doesn't (its release already exists) stops here.
+Runs only when the maintainer starts .github/workflows/release.yml. Pull requests
+collect on main unreleased; a release PR bumps the version and lists what's in it.
+The release is main as of that PR's merge, with its description as the notes, so a
+change merged after it waits for the next release. The bighelp app and
+`hermes bighelp update` install the latest release.
 """
 import json
 import os
@@ -17,11 +19,15 @@ VERSION = re.compile(r'(?m)^version:\s*"?([0-9]{1,6}(?:\.[0-9]{1,6}){1,3})"?\s*$
 MAX_NOTES = 100_000
 
 
-def plugin_version(root: Path = ROOT) -> str:
-    match = VERSION.search((root / "plugin.yaml").read_text(encoding="utf-8"))
+def manifest_version(text: str) -> str:
+    match = VERSION.search(text)
     if not match:
         raise SystemExit("plugin.yaml has no version")
     return match.group(1)
+
+
+def plugin_version(root: Path = ROOT) -> str:
+    return manifest_version((root / "plugin.yaml").read_text(encoding="utf-8"))
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -29,8 +35,20 @@ def version_key(version: str) -> tuple[int, ...]:
     return tuple(parts + [0] * (4 - len(parts)))
 
 
+def _git(*args: str, root: Path = ROOT) -> str:
+    return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout
+
+
+def version_commit(root: Path = ROOT) -> str:
+    """The last commit that changed plugin.yaml's version: the release PR's merge."""
+    commit = _git("log", "-1", "--format=%H", "-G", "^version:", "--", "plugin.yaml", root=root).strip()
+    if not commit:
+        raise SystemExit("No commit sets the plugin version")
+    return commit
+
+
 def release_notes(pull: dict | None, commit_message: str) -> str:
-    """The merged pull request's title and description, else the commit message."""
+    """The release pull request's title and description, else the commit message."""
     if pull and pull.get("title"):
         notes = f"## {pull['title']}\n\n{(pull.get('body') or '').strip()}".strip()
     else:
@@ -39,11 +57,14 @@ def release_notes(pull: dict | None, commit_message: str) -> str:
 
 
 def _gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["gh", *args], check=check, capture_output=True, text=True)
+    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise SystemExit(f"gh {args[0]} {args[1]} failed: {result.stderr.strip() or result.returncode}")
+    return result
 
 
 def main() -> int:
-    repository, commit = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_SHA"]
+    repository = os.environ["GITHUB_REPOSITORY"]
     version = plugin_version()
     tag = f"v{version}"
     if _gh("release", "view", tag, "--repo", repository, check=False).returncode == 0:
@@ -56,12 +77,13 @@ def main() -> int:
             print(f"plugin.yaml says {version}, which isn't newer than the latest release {current}.",
                   file=sys.stderr)
             return 1
+    commit = version_commit()
+    if manifest_version(_git("show", f"{commit}:plugin.yaml")) != version:
+        raise SystemExit(f"The commit that set the version doesn't say {version}")
     pulls = json.loads(_gh("api", f"repos/{repository}/commits/{commit}/pulls").stdout or "[]")
     pull = next((item for item in pulls if item.get("merged_at")), None)
-    message = subprocess.run(["git", "log", "-1", "--format=%B", commit],
-                             check=True, capture_output=True, text=True).stdout
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as notes:
-        notes.write(release_notes(pull, message))
+        notes.write(release_notes(pull, _git("log", "-1", "--format=%B", commit)))
     try:
         _gh("release", "create", tag, "--repo", repository, "--target", commit,
             "--title", f"bighelp plugin {version}", "--notes-file", notes.name, "--latest")

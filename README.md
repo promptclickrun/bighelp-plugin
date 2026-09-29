@@ -43,8 +43,8 @@ hermes bighelp update --restart  # …and restart the gateway once
 hermes bighelp update-status     # check the last update
 ```
 
-Every merge that bumps the version publishes a [GitHub Release](https://github.com/promptclickrun/bighelp-plugin/releases)
-(`.github/workflows/release.yml`); other merges don't reach hosts. The updater looks up the latest release, pins
+Hosts only get [GitHub Releases](https://github.com/promptclickrun/bighelp-plugin/releases). Merged changes are
+released together from time to time (`.github/workflows/release.yml`), so a merge alone doesn't reach hosts. The updater looks up the latest release, pins
 its exact commit, validates it, backs up the current copy and installs it with Hermes' own installer. It never
 moves a host to an older version. Your settings stay in place. It refuses to overwrite a modified install. Self-update needs macOS
 launchd or Linux user systemd.
