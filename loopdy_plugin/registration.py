@@ -726,7 +726,7 @@ def setup_cli(parser: Any) -> None:
 
     update = actions.add_parser(
         "update",
-        help="Install the latest immutable bighelp plugin revision",
+        help="Install the latest bighelp plugin release",
     )
     update.add_argument(
         "--restart",

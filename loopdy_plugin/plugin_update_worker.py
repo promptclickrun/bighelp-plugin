@@ -158,7 +158,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             manager._worker_transition(
                 operation_id,
                 "staging",
-                "Staging and scanning the immutable bighelp plugin revision.",
+                "Downloading and scanning the release.",
             )
             _checkout_revision(SOURCE_URL, target, staged_repo, manager.hermes_home)
             _validate_staged_plugin(staged_repo, manager.hermes_home)
