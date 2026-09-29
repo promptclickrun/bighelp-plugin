@@ -8,6 +8,7 @@ the resulting answer here. Provider credentials never leave this process.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 import json
 import logging
@@ -32,6 +33,17 @@ _FIXED_NAME = re.compile(r"[a-z_]{1,48}")
 
 def _reject(code="voice_unavailable", status=409):
     return NativeAPIError(status, code, "This native voice operation is unavailable. Reconnect explicitly when ready.")
+
+
+def _profile_scope(agent_id: str):
+    """The agent's own Hermes profile while voice reads its sign-in: its home and, on
+    Hermes 0.21.4+, its credentials. Hosts serving several profiles refuse credential
+    reads outside one, which read as "sign in again" (bighelp#14)."""
+    try:
+        from hermes_cli.web_server_profiles import _config_profile_scope
+    except ImportError:
+        return contextlib.nullcontext()
+    return _config_profile_scope(agent_id)
 
 
 def _provider_rejection(error: LiveProviderError) -> NativeAPIError:
@@ -103,7 +115,8 @@ class NativeVoiceHub:
             call.watch = asyncio.create_task(self._watch(call))
             try:
                 async with asyncio.timeout(self.setup_seconds):
-                    answer = await call.provider.create(fields["sdp"], voice=fields["voice"])
+                    with _profile_scope(fields["agentId"]):
+                        answer = await call.provider.create(fields["sdp"], voice=fields["voice"])
             except TimeoutError:
                 raise LiveProviderError("setup_timeout") from None
             if call.closed:

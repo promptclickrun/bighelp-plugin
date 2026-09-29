@@ -29,6 +29,10 @@ If a call can't be set up, the route returns `409` with `voice_provider_<reason>
 `voice_provider_authentication_failed`, `voice_provider_rate_limited` or `voice_provider_setup_timeout`). The host
 logs the same reason. Unknown provider errors become `voice_provider_failed`.
 
+The Codex sign-in is read inside the selected agent's Hermes profile (its home and, on Hermes 0.21.4+, its
+credentials). Hosts serving several profiles refuse credential reads outside one; if that still happens the call
+fails with `voice_provider_credentials_unavailable`, not as a sign-in failure.
+
 ## What the plugin keeps
 
 Nothing lasting. Call state lives in memory and is dropped when the call closes or the plugin unloads. The

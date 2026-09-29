@@ -26,6 +26,11 @@ class LiveAuthError(RuntimeError):
         super().__init__("Live voice authentication unavailable for the selected provider.")
 
 
+class LiveCredentialScopeError(LiveAuthError):
+    """Hermes refused to read credentials outside a profile scope. The sign-in may
+    be fine; it wasn't read in the agent's profile, so it isn't a sign-in failure."""
+
+
 @dataclass(frozen=True, repr=False)
 class LiveCredentials:
     """Scoped host memory only; never return this through the adapter protocol."""
@@ -161,7 +166,12 @@ class CodexLiveAuth:
             identity = tuple((key, headers[key]) for key in ("User-Agent", "originator"))
             return LiveCredentials(credentials.bearer, credentials.account_id,
                                    credentials.credential_id, identity)
-        except Exception:
+        except LiveAuthError:
+            raise
+        except Exception as error:
+            # Hermes' UnscopedSecretError, matched by name: older Hermes may not export it.
+            if type(error).__name__ == "UnscopedSecretError":
+                raise LiveCredentialScopeError() from None
             raise LiveAuthError() from None
 
 

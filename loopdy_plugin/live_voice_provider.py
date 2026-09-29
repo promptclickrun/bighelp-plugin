@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .live_voice_auth import (
-    CODEX_MODEL, CodexLiveAuth, LiveAuthError, LiveCredentials, PublicLiveAuth,
+    CODEX_MODEL, CodexLiveAuth, LiveAuthError, LiveCredentialScopeError, LiveCredentials, PublicLiveAuth,
 )
 
 CODEX_CALL_URL = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
@@ -364,6 +364,9 @@ class _LiveTransport:
         except asyncio.CancelledError:
             await self._shutdown()
             raise
+        except LiveCredentialScopeError:
+            await self._shutdown()
+            raise LiveProviderError("credentials_unavailable", stage="auth", allocation_state=self._allocation) from None
         except LiveAuthError:
             await self._shutdown()
             raise LiveProviderError("authentication_failed", stage="auth", allocation_state=self._allocation) from None
