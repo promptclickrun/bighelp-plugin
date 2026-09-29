@@ -568,11 +568,24 @@ def _clean_exec_command(command: list[str], *, hermes_home: Path) -> list[str]:
 
 
 def _launcher_env() -> dict[str, str]:
-    return {
+    env = {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "HOME": str(Path.home()),
         "LANG": "C.UTF-8",
     }
+    # systemd-run --user cannot find the user bus without one of these.
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        if os.path.isdir(runtime_dir):
+            env["XDG_RUNTIME_DIR"] = runtime_dir
+    elif hasattr(os, "getuid"):
+        runtime_dir = f"/run/user/{os.getuid()}"
+        if os.path.isdir(runtime_dir):
+            env["XDG_RUNTIME_DIR"] = runtime_dir
+    bus_address = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+    if bus_address:
+        env["DBUS_SESSION_BUS_ADDRESS"] = bus_address
+    return env
 
 
 def _wire_status(value: dict[str, Any]) -> dict[str, Any]:
