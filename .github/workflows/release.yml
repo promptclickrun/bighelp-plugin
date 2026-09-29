@@ -1,9 +1,10 @@
 name: Release
-# A merge to main that bumps the plugin version publishes it as a GitHub Release.
-# The bighelp app and `hermes bighelp update` install the latest release.
+# The maintainer starts this when a batch of merged changes is ready:
+#   gh workflow run release.yml
+# It publishes the version in plugin.yaml as a GitHub Release, from the commit that
+# set that version. The bighelp app and `hermes bighelp update` install the latest
+# release, so a release reaches every host.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
@@ -13,10 +14,14 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Finding the commit that set the version needs the history.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
