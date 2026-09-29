@@ -1,4 +1,4 @@
-"""Independent one-shot worker for Loopdy plugin self-update operations."""
+"""Independent one-shot worker for bighelp plugin self-update operations."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -21,7 +23,7 @@ from plugin_update import (
     APP_SOURCE_URL,
     PLUGIN_NAME,
     PLUGIN_REPOSITORIES,
-    SOURCE_BRANCH,
+    RELEASES_URL,
     SOURCE_URL,
     PluginUpdateError,
     PluginUpdateManager,
@@ -31,6 +33,8 @@ from plugin_update import (
 
 
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
+_RELEASE_TAG = re.compile(r"^v([0-9]{1,6}(?:\.[0-9]{1,6}){0,3})$")
+_MAX_RELEASE_BYTES = 256 * 1024
 _MAX_CAPTURE = 4096
 _ACTIVATION_WAIT_SECONDS = 300
 
@@ -67,21 +71,21 @@ def main(argv: list[str] | None = None) -> int:
             manager,
             args.operation_id,
             "blocked",
-            "Another process owns the Loopdy plugin installation lock.",
+            "Another process owns the bighelp plugin installation lock.",
         )
     except UpdateBlocked:
         _transition_if_possible(
             manager,
             args.operation_id,
             "blocked",
-            "The Loopdy plugin update was blocked before installation. Review the host with Plugin Doctor.",
+            "The bighelp plugin update was blocked before installation. Review the host with Plugin Doctor.",
         )
     except Exception:
         _transition_if_possible(
             manager,
             args.operation_id,
             "failed",
-            "The Loopdy plugin update failed. The previous installation remains available for recovery.",
+            "The bighelp plugin update failed. The previous installation remains available for recovery.",
         )
     finally:
         if args.service_label and sys.platform == "darwin":
@@ -112,13 +116,18 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "resolving",
-            "Resolving the fixed Loopdy plugin source to an immutable revision.",
+            "Finding the latest bighelp plugin release.",
         )
-        target = _resolve_target_revision(manager.hermes_home)
+        target, version = _resolve_latest_release(manager.hermes_home)
+        # Never move a host backwards: a checkout at or past the latest release stays.
+        installed_version = _installed_version(manager.plugin_root)
+        current = _metadata_revision(manager.plugin_root)
+        if installed_version and _version_key(installed_version) >= _version_key(version) and _REVISION.fullmatch(current):
+            target = current
         manager._worker_transition(
             operation_id,
             "resolved",
-            "Resolved the Loopdy plugin update revision.",
+            f"The latest bighelp plugin release is {version}.",
             target_revision=target,
         )
         operation = manager._worker_operation(operation_id)
@@ -131,7 +140,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "up_to_date",
-            "The installed and active Loopdy plugin already match the latest revision.",
+            "The installed and active bighelp plugin already match the latest revision.",
         )
         return
 
@@ -139,7 +148,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "validating_installation",
-            "Validating the current Loopdy plugin installation.",
+            "Validating the current bighelp plugin installation.",
         )
 
         staging_root = manager.data_root / "staging"
@@ -149,7 +158,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             manager._worker_transition(
                 operation_id,
                 "staging",
-                "Staging and scanning the immutable Loopdy plugin revision.",
+                "Downloading and scanning the release.",
             )
             _checkout_revision(SOURCE_URL, target, staged_repo, manager.hermes_home)
             _validate_staged_plugin(staged_repo, manager.hermes_home)
@@ -158,7 +167,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             manager._worker_transition(
                 operation_id,
                 "backing_up",
-                "Saving the previous Loopdy plugin installation for recovery.",
+                "Saving the previous bighelp plugin installation for recovery.",
                 prior_revision=prior_revision,
                 backup_path=str(backup_root),
             )
@@ -167,7 +176,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             manager._worker_transition(
                 operation_id,
                 "installing",
-                "Installing the validated Loopdy plugin revision.",
+                "Installing the validated bighelp plugin revision.",
             )
             _install_revision(manager, target)
 
@@ -176,7 +185,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "installed",
-            "The Loopdy plugin update is installed.",
+            "The bighelp plugin update is installed.",
         )
 
     operation = manager._worker_operation(operation_id)
@@ -217,21 +226,67 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
     _wait_for_activation(manager, operation_id)
 
 
-def _resolve_target_revision(hermes_home: Path) -> str:
+def _latest_release_tag() -> str:
+    """The tag of the latest published (not draft, not pre-release) GitHub Release."""
+    request = urllib.request.Request(RELEASES_URL, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "bighelp-plugin-updater",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.status != 200:
+                raise UpdateFailed("Could not read the latest bighelp plugin release")
+            body = response.read(_MAX_RELEASE_BYTES + 1)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise UpdateFailed("Could not read the latest bighelp plugin release") from exc
+    if len(body) > _MAX_RELEASE_BYTES:
+        raise UpdateFailed("The latest bighelp plugin release is too large to read")
+    try:
+        release = json.loads(body)
+    except ValueError as exc:
+        raise UpdateFailed("The latest bighelp plugin release is unreadable") from exc
+    tag = release.get("tag_name") if isinstance(release, dict) else None
+    if (not isinstance(tag, str) or not _RELEASE_TAG.fullmatch(tag)
+            or release.get("draft") is not False or release.get("prerelease") is not False):
+        raise UpdateFailed("The latest bighelp plugin release is invalid")
+    return tag
+
+
+def _resolve_latest_release(hermes_home: Path) -> tuple[str, str]:
+    """(commit, version) of the latest release; the commit comes from Git, not the API."""
+    tag = _latest_release_tag()
     result = _run_capture(
-        ["git", "ls-remote", SOURCE_URL, f"refs/heads/{SOURCE_BRANCH}"],
+        ["git", "ls-remote", SOURCE_URL, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
         timeout=30,
         env=_process_env(hermes_home, git=True),
     )
     if result.returncode != 0:
-        raise UpdateFailed("Could not resolve the fixed update source")
-    fields = result.stdout.strip().split()
-    if len(fields) != 2 or fields[1] != f"refs/heads/{SOURCE_BRANCH}":
-        raise UpdateFailed("The fixed update source returned an invalid branch result")
-    revision = fields[0].lower()
+        raise UpdateFailed("Could not resolve the latest bighelp plugin release")
+    refs: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2:
+            refs[fields[1]] = fields[0].lower()
+    # An annotated tag lists the commit it points at as the peeled ("^{}") entry.
+    revision = refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}", "")
     if not _REVISION.fullmatch(revision):
-        raise UpdateFailed("The fixed update source returned an invalid revision")
-    return revision
+        raise UpdateFailed("The latest bighelp plugin release has no valid commit")
+    return revision, _RELEASE_TAG.fullmatch(tag).group(1)
+
+
+def _installed_version(plugin_root: Path) -> str | None:
+    try:
+        manifest = (plugin_root / "plugin.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'(?m)^version:\s*["\']?([0-9]{1,6}(?:\.[0-9]{1,6}){0,3})["\']?\s*$', manifest)
+    return match.group(1) if match else None
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    parts = [int(part) for part in version.split(".")]
+    return tuple(parts + [0] * (4 - len(parts)))
 
 
 def _recognized_installation(manager: PluginUpdateManager) -> tuple[str, str, str]:
@@ -295,7 +350,7 @@ def _recognized_installation(manager: PluginUpdateManager) -> tuple[str, str, st
     # against the authoritative app repository at the recorded commit.
     if parsed.scheme == "file" and subdir == "plugins/loopdy":
         return revision, APP_SOURCE_URL, subdir
-    raise UpdateBlocked("Installed Loopdy source is unrecognized")
+    raise UpdateBlocked("Installed bighelp source is unrecognized")
 
 
 def _is_github_repository(value: str, repositories: tuple[str, ...]) -> bool:
@@ -321,7 +376,7 @@ def _verify_installed_tree(
         _checkout_revision(source_url, revision, repository, manager.hermes_home)
         reference = repository / subdir if subdir else repository
         if _tree_digest(reference) != _tree_digest(manager.plugin_root):
-            raise UpdateBlocked("Installed Loopdy files are locally modified")
+            raise UpdateBlocked("Installed bighelp files are locally modified")
 
 
 def _checkout_revision(
@@ -357,7 +412,7 @@ def _validate_staged_plugin(plugin_root: Path, hermes_home: Path) -> None:
     except OSError as exc:
         raise UpdateBlocked("Staged plugin manifest is unavailable") from exc
     if not re.search(r"(?m)^name:\s*loopdy\s*$", manifest_text):
-        raise UpdateBlocked("Staged plugin identity is not Loopdy")
+        raise UpdateBlocked("Staged plugin identity is not bighelp")
 
     # Added privileges require an attended host decision before replacing code.
     try:

@@ -303,7 +303,7 @@ def _payload(message: PushMessage) -> dict[str, Any]:
         aps["badge"] = 1
     if message.event_type in {"attention.required", "approval.required"}:
         # Direct delivery keeps the established category for installed-client compatibility.
-        # Current Loopdy builds register this alias with the authenticated Review action.
+        # Current bighelp builds register this alias with the authenticated Review action.
         aps["category"] = "LOOPDY_APPROVAL"
     return {"aps": aps, **dict(message.data)}
 

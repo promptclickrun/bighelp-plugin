@@ -12,7 +12,7 @@ from typing import Any, Callable
 from loopdy_plugin.link_contracts import parse_workspace_request, workspace_result
 from loopdy_plugin.loopdy_cards import canonical_json, validate_card_result
 from loopdy_plugin.registration import register as register_plugin
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.tools import register as register_tools
 from loopdy_plugin.workspace_control import HermesWorkspaceBackend, WorkspaceController
 
@@ -76,7 +76,7 @@ class _PluginContext:
 
 
 class _Service:
-    def __init__(self, store: LoopdyStore) -> None:
+    def __init__(self, store: BighelpStore) -> None:
         self.store = store
 
     def enqueue(self, *_args, **_kwargs) -> None:
@@ -86,7 +86,7 @@ class _Service:
 class LoopdyCardTemplateStoreTests(unittest.TestCase):
     def test_install_lists_only_the_owning_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
 
             result = store.install_card_template(profile="personal", template=_template())
 
@@ -96,7 +96,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
 
     def test_install_rejects_schema_card_and_hash_mismatches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             missing = _template()
             del missing["license"]
             with self.assertRaisesRegex(ValueError, "schema"):
@@ -107,7 +107,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
             invalid_card["sha256"] = hashlib.sha256(
                 canonical_json(invalid_card["document"]).encode("utf-8")
             ).hexdigest()
-            with self.assertRaisesRegex(ValueError, "Loopdy Card schema"):
+            with self.assertRaisesRegex(ValueError, "bighelp Card schema"):
                 store.install_card_template(profile="personal", template=invalid_card)
 
             bad_hash = _template()
@@ -117,7 +117,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
 
     def test_install_is_idempotent_and_rejects_version_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             template = _template()
             store.install_card_template(profile="personal", template=template)
 
@@ -135,7 +135,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
 
     def test_remove_requires_current_coordinates_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             template = _template()
             store.install_card_template(profile="personal", template=template)
 
@@ -162,9 +162,9 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
     def test_reconnect_reads_the_same_profile_scoped_sqlite_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.sqlite3"
-            LoopdyStore(path).install_card_template(profile="personal", template=_template())
+            BighelpStore(path).install_card_template(profile="personal", template=_template())
 
-            reconnected = LoopdyStore(path)
+            reconnected = BighelpStore(path)
 
             self.assertEqual(reconnected.get_card_template(
                 profile="personal", template_id="build-health"
@@ -177,7 +177,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
 class LoopdyCardTemplateWorkspaceTests(unittest.TestCase):
     def test_exact_operations_use_request_bound_encrypted_workspace_results(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             service = _Service(store)
             register_plugin(_PluginContext(), service=service)
             controller = WorkspaceController(backend=HermesWorkspaceBackend(service=service))
@@ -262,25 +262,25 @@ class LoopdyCardTemplateWorkspaceTests(unittest.TestCase):
 class LoopdyCardTemplateToolTests(unittest.TestCase):
     def test_profile_scoped_search_get_and_render_register_as_generic_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.install_card_template(profile="personal", template=_template())
             context = _PluginContext()
 
             register_tools(context, store=store, profile="personal", now=lambda: NOW)
 
             names = {
-                "loopdy_search_card_templates",
-                "loopdy_get_card_template",
-                "loopdy_render_card_template",
+                "bighelp_search_card_templates",
+                "bighelp_get_card_template",
+                "bighelp_render_card_template",
             }
             self.assertTrue(names.issubset(context.tools))
-            search = json.loads(context.tools["loopdy_search_card_templates"]({"query": "health"}))
+            search = json.loads(context.tools["bighelp_search_card_templates"]({"query": "health"}))
             self.assertEqual([item["id"] for item in search["templates"]], ["build-health"])
-            fetched = json.loads(context.tools["loopdy_get_card_template"]({
+            fetched = json.loads(context.tools["bighelp_get_card_template"]({
                 "template_id": "build-health"
             }))
             self.assertEqual(fetched["template"], _template())
-            rendered = json.loads(context.tools["loopdy_render_card_template"]({
+            rendered = json.loads(context.tools["bighelp_render_card_template"]({
                 "template_id": "build-health",
                 "parameters": {},
             }))
@@ -293,15 +293,15 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             isolated.profile_name = "research"
             register_plugin(isolated, service=_Service(store))
             self.assertEqual(
-                json.loads(isolated.tools["loopdy_search_card_templates"]({"query": ""})),
+                json.loads(isolated.tools["bighelp_search_card_templates"]({"query": ""})),
                 {"templates": []},
             )
             with self.assertRaisesRegex(ValueError, "not found"):
-                isolated.tools["loopdy_get_card_template"]({"template_id": "build-health"})
+                isolated.tools["bighelp_get_card_template"]({"template_id": "build-health"})
 
     def test_render_template_validates_and_substitutes_declared_parameters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             template = _template(template_id="status-card")
             template["parameters_schema"] = {
                 "type": "object",
@@ -319,7 +319,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             context = _PluginContext()
             register_tools(context, store=store, profile="personal", now=lambda: NOW)
 
-            rendered = json.loads(context.tools["loopdy_render_card_template"]({
+            rendered = json.loads(context.tools["bighelp_render_card_template"]({
                 "template_id": "status-card",
                 "parameters": {"Status-Label": "Ready"},
             }))
@@ -335,7 +335,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             )
             self.assertEqual(validate_card_result(rendered, now=NOW), rendered)
             with self.assertRaisesRegex(ValueError, "invalid"):
-                context.tools["loopdy_render_card_template"]({
+                context.tools["bighelp_render_card_template"]({
                     "template_id": "status-card",
                     "parameters": {"Status-Label": "Unknown"},
                 })
@@ -365,7 +365,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             unsafe["sha256"] = hashlib.sha256(
                 canonical_json(unsafe["document"]).encode("utf-8")
             ).hexdigest()
-            with self.assertRaisesRegex(ValueError, "Live Loopdy Card data sources"):
+            with self.assertRaisesRegex(ValueError, "Live bighelp Card data sources"):
                 store.install_card_template(profile="personal", template=unsafe)
 
 

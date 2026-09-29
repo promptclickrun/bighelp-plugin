@@ -1,4 +1,4 @@
-"""Authenticated Hermes dashboard API consumed by the Loopdy app."""
+"""Authenticated Hermes dashboard API consumed by the bighelp app."""
 
 from __future__ import annotations
 
@@ -847,16 +847,16 @@ def _api_error(error: Exception) -> HTTPException:
         return HTTPException(status_code=response_status, detail=f"Push provider error: {code}")
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Loopdy request failed",
+        detail="bighelp request failed",
     )
 
 
 def _public_error(value: str) -> str:
-    text = " ".join(str(value or "Loopdy request failed").split())[:300]
+    text = " ".join(str(value or "bighelp request failed").split())[:300]
     text = re.sub(r"(?:Exponent|Expo)PushToken\[[^\]]+\]", "[redacted token]", text)
     text = re.sub(r"\b[0-9a-fA-F]{64,}\b", "[redacted token]", text)
     text = re.sub(r"(?:^|\s)/(?:[^\s/]+/)+[^\s]+", " [redacted path]", text)
-    return text or "Loopdy request failed"
+    return text or "bighelp request failed"
 
 
 _ACTION_MESSAGES = {

@@ -1,4 +1,4 @@
-"""Provider-neutral contracts for Loopdy push delivery."""
+"""Provider-neutral contracts for bighelp push delivery."""
 
 from __future__ import annotations
 

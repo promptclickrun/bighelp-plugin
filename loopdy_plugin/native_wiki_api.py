@@ -88,7 +88,7 @@ def _wiki_error(error: WikiServiceError, request_id: str) -> JSONResponse:
         "CAPABILITY_UNSUPPORTED": 501, "QUOTA_EXCEEDED": 413, "DIRECTORY_OVERSIZED": 413,
         "STATE_BUSY": 503, "STATE_UNAVAILABLE": 503,
     }
-    logger.warning("Loopdy native Wiki rejected: %s", error.code)
+    logger.warning("bighelp native Wiki rejected: %s", error.code)
     return JSONResponse(error.envelope(), status_code=codes.get(error.code, 503),
                         headers={"Cache-Control": "no-store", "X-Loopdy-Request-ID": request_id})
 

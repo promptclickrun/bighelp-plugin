@@ -17,7 +17,7 @@ from gateway.platform_registry import PlatformEntry, platform_registry
 from gateway.run import GatewayRunner
 from gateway.session import SessionContext, SessionSource
 from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
-from loopdy_plugin.adapter import LoopdyAdapter, standalone_send
+from loopdy_plugin.adapter import BighelpAdapter, standalone_send
 from loopdy_plugin.attachments import AttachmentStore
 from loopdy_plugin.workspace_control import HermesWorkspaceBackend, WorkspaceController
 
@@ -247,7 +247,7 @@ class AdapterTests(unittest.TestCase):
         service = _Service()
         service.health = lambda: {"configured": False, "ready": False}
         with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None) as cloud_config:
-            adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=service)
+            adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
             with patch.object(adapter, "_start_direct") as paired_direct:
                 self.assertTrue(asyncio.run(adapter.connect()))
                 self.assertTrue(adapter.is_connected)
@@ -269,7 +269,7 @@ class AdapterTests(unittest.TestCase):
         store = Store()
         adapter = SimpleNamespace(_session_store=store)
         async def read(agent="default", stored="stored-one"):
-            return await LoopdyAdapter.runtime_snapshot_for_session(adapter, agent, stored)
+            return await BighelpAdapter.runtime_snapshot_for_session(adapter, agent, stored)
         self.assertEqual(asyncio.run(read()), {"model": "chosen-model", "provider": "anthropic"})
         self.assertIsNone(asyncio.run(read(agent="other")))
         self.assertIsNone(asyncio.run(read(stored="retired")))
@@ -294,7 +294,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_outbound_channel_ledgers_content_and_pushes_only_a_wakeup(self) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
         )
@@ -321,7 +321,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_clarify_prompt_queues_request_bound_home_attention_after_send(self) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "device:home"}),
             service=service,
         )
@@ -378,7 +378,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_failed_clarify_prompt_does_not_create_actionable_attention(self) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=service)
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
         adapter.send = AsyncMock(return_value=SendResult(success=False, error="offline"))
 
         result = asyncio.run(
@@ -396,7 +396,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_failed_connected_link_clarify_prompt_does_not_persist_attention(self) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=_AssistantFailingLink(),
@@ -423,7 +423,7 @@ class AdapterTests(unittest.TestCase):
     def test_connected_link_clarify_persists_and_emits_one_typed_notification(self) -> None:
         service = _Service()
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -491,7 +491,7 @@ class AdapterTests(unittest.TestCase):
     ) -> None:
         service = _Service()
         link = _NotificationFailingOnceLink()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -525,7 +525,7 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(failed.success)
         self.assertEqual(
             failed.error,
-            "Loopdy Link notification failed (RuntimeError)",
+            "bighelp Link notification failed (RuntimeError)",
         )
         self.assertTrue(replayed.success)
         self.assertTrue(duplicate.success)
@@ -554,7 +554,7 @@ class AdapterTests(unittest.TestCase):
     ) -> None:
         service = _Service()
         link = _NotificationAcknowledgementTimeoutLink()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -605,7 +605,7 @@ class AdapterTests(unittest.TestCase):
     ) -> None:
         service = _Service()
         link = _BlockingNotificationLink()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -650,12 +650,12 @@ class AdapterTests(unittest.TestCase):
         def broken_journal():
             raise RuntimeError("corrupt fixture")
         manager = SimpleNamespace(record_runtime_loaded=broken_journal)
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=_LinkClient(), plugin_update_manager=manager)
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=_LinkClient(), plugin_update_manager=manager)
         self.assertTrue(asyncio.run(adapter.connect()))
 
     def test_connect_does_not_report_loopdy_ready_before_link_socket_ready(self) -> None:
         link = _UnreadyLinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
 
@@ -667,7 +667,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_superseded_link_owner_is_not_reported_as_retryable(self) -> None:
         link = _SupersededLinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
 
@@ -680,7 +680,7 @@ class AdapterTests(unittest.TestCase):
     def test_proactive_link_channel_queues_encrypted_notification_and_host_inbox_event(self) -> None:
         service = _Service()
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -728,7 +728,7 @@ class AdapterTests(unittest.TestCase):
     def test_proactive_link_channel_persists_and_delivers_a_validated_generative_ui_card(self) -> None:
         service = _Service()
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -761,7 +761,7 @@ class AdapterTests(unittest.TestCase):
     def test_cron_wrapped_renderer_envelope_persists_and_delivers_the_card(self) -> None:
         service = _Service()
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
             link_client=link,
@@ -806,7 +806,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_invalid_cron_card_safely_falls_back_to_text(self) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True, extra={"home_target": "all"}),
             service=service,
         )
@@ -869,7 +869,7 @@ class AdapterTests(unittest.TestCase):
     def test_loopdy_platform_suppresses_gateway_lifecycle_notifications(self) -> None:
         config = PlatformConfig(enabled=True, gateway_restart_notification=True)
 
-        adapter = LoopdyAdapter(config, service=_Service())
+        adapter = BighelpAdapter(config, service=_Service())
 
         self.assertFalse(config.gateway_restart_notification)
         self.assertFalse(adapter.config.gateway_restart_notification)
@@ -879,17 +879,17 @@ class AdapterTests(unittest.TestCase):
         service.health = lambda: {
             "configured": True,
             "ready": False,
-            "detail": "No managed Loopdy devices are registered",
+            "detail": "No managed bighelp devices are registered",
             "compatible_devices": 0,
         }
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=service)
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
 
         self.assertTrue(asyncio.run(adapter.connect()))
 
     def test_link_activity_sender_is_attached_and_only_the_final_message_completes_it(self) -> None:
         link = _LinkClient()
         broker = _ActivityBroker()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=link,
@@ -921,9 +921,9 @@ class AdapterTests(unittest.TestCase):
         service = _Service()
         with patch(
             "loopdy_plugin.adapter.load_runtime_config",
-            side_effect=ValueError("Loopdy Link configuration is incomplete"),
+            side_effect=ValueError("bighelp Link configuration is incomplete"),
         ):
-            adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=service)
+            adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
 
         self.assertIsNone(adapter.link_client)
         self.assertTrue(asyncio.run(adapter.connect()))
@@ -936,13 +936,13 @@ class AdapterTests(unittest.TestCase):
             "detail": "Provider configuration is invalid",
             "compatible_devices": 0,
         }
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=service)
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
 
         self.assertTrue(asyncio.run(adapter.connect()))
 
     def test_channel_message_resolves_the_active_profile_display_name(self) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=service
         )  # type: ignore[arg-type]
         with tempfile.TemporaryDirectory() as directory:
@@ -963,7 +963,7 @@ class AdapterTests(unittest.TestCase):
         self,
     ) -> None:
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=service
         )  # type: ignore[arg-type]
         with tempfile.TemporaryDirectory() as directory:
@@ -994,7 +994,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import UserMessage
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         adapter.handle_message = AsyncMock()
@@ -1041,7 +1041,7 @@ class AdapterTests(unittest.TestCase):
         link = _LinkClient()
         from test_live_voice_runtime import signing_fixture
         link.config = signing_fixture("hermes-host-private-coordinate")
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         adapter.handle_message = AsyncMock()
@@ -1083,7 +1083,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import UserMessage
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         adapter.handle_message = AsyncMock()
@@ -1125,7 +1125,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import UserMessage
 
         async def scenario(behavior: str):
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True),
                 service=_Service(),
                 link_client=_LinkClient(),
@@ -1167,7 +1167,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_client import InboundLinkTurn
         from loopdy_plugin.link_contracts import UserMessage
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -1202,7 +1202,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_client import InboundLinkTurn
         from loopdy_plugin.link_contracts import UserMessage
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -1238,7 +1238,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_client import InboundLinkTurn
         from loopdy_plugin.link_contracts import UserMessage
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -1270,7 +1270,7 @@ class AdapterTests(unittest.TestCase):
         )
         source = adapter.build_source(
             chat_id=turn.message.session_id,
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
             user_id=turn.sender_id,
             user_name=turn.message.actor_name,
@@ -1310,7 +1310,7 @@ class AdapterTests(unittest.TestCase):
             )
         ):
             with self.subTest(text=text, behavior=behavior):
-                adapter = LoopdyAdapter(
+                adapter = BighelpAdapter(
                     PlatformConfig(enabled=True),
                     service=_Service(),
                     link_client=_LinkClient(),
@@ -1340,7 +1340,7 @@ class AdapterTests(unittest.TestCase):
                 )
                 source = adapter.build_source(
                     chat_id=turn.message.session_id,
-                    chat_name="Loopdy chat",
+                    chat_name="bighelp chat",
                     chat_type="dm",
                     user_id=turn.sender_id,
                     user_name=turn.message.actor_name,
@@ -1368,7 +1368,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import UserMessage
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         adapter.handle_message = AsyncMock()
@@ -1415,7 +1415,7 @@ class AdapterTests(unittest.TestCase):
         self,
     ) -> None:
         broker = _ActivityBroker()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -1436,7 +1436,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import RelayReady
 
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=service, link_client=_LinkClient()
         )
         adapter.handle_message = AsyncMock()
@@ -1471,7 +1471,7 @@ class AdapterTests(unittest.TestCase):
     def test_link_chat_reply_and_native_draft_use_encrypted_realtime_transport(self) -> None:
         link = _LinkClient()
         service = _Service()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=service, link_client=link
         )
 
@@ -1501,7 +1501,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_interim_assistant_send_stays_draft_until_the_turn_final(self) -> None:
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
 
@@ -1542,7 +1542,7 @@ class AdapterTests(unittest.TestCase):
         client can stop its working state.
         """
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         config = StreamConsumerConfig(
@@ -1576,7 +1576,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_rapid_drafts_are_coalesced_but_final_is_complete_and_identity_stable(self) -> None:
         link = _LinkClient()
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=link)
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=link)
         metadata = {"reply_to_message_id": "throttle_turn", "agent_name": "Avery"}
         async def scenario():
             with patch("loopdy_plugin.adapter.time.monotonic", return_value=100):
@@ -1594,7 +1594,7 @@ class AdapterTests(unittest.TestCase):
     @patch("loopdy_plugin.adapter._LINK_DRAFT_MINIMUM_INTERVAL_SECONDS", 0)
     def test_native_draft_revisions_and_final_reuse_one_link_message_identity(self) -> None:
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         metadata = {
@@ -1635,7 +1635,7 @@ class AdapterTests(unittest.TestCase):
     @patch("loopdy_plugin.adapter._LINK_DRAFT_MINIMUM_INTERVAL_SECONDS", 0)
     def test_native_draft_revision_ids_still_reuse_one_turn_message_identity(self) -> None:
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         metadata = {
@@ -1678,7 +1678,7 @@ class AdapterTests(unittest.TestCase):
     ) -> None:
         service = _Service()
         first_link = _NotificationFailingOnceLink()
-        first_adapter = LoopdyAdapter(
+        first_adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=service, link_client=first_link
         )
         metadata = {
@@ -1710,7 +1710,7 @@ class AdapterTests(unittest.TestCase):
             # host process would after crashing between prompt and notification
             # delivery.
             replay_link = _LinkClient()
-            replay_adapter = LoopdyAdapter(
+            replay_adapter = BighelpAdapter(
                 PlatformConfig(enabled=True), service=service, link_client=replay_link
             )
             replayed = await replay_adapter.send_clarify(
@@ -1752,7 +1752,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_link_reply_resolves_name_from_the_target_profile(self) -> None:
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
 
@@ -1792,7 +1792,7 @@ class AdapterTests(unittest.TestCase):
                 provider="ElevenLabs",
             )
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=link,
@@ -1832,7 +1832,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import PickerOpen, PickerSelection
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         callback = AsyncMock(return_value="Model changed for this session.")
@@ -1906,7 +1906,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import PickerOpen
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         handler = AsyncMock(return_value="**OpenAI** `--provider openai`: gpt-5.6")
@@ -1940,7 +1940,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import PickerOpen
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         adapter._message_handler = None
@@ -1983,7 +1983,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import PickerOpen
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
 
@@ -2018,7 +2018,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import PickerOpen
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         callbacks = []
@@ -2089,7 +2089,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import PickerOpen, PickerSelection
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         callback = AsyncMock(return_value="Reasoning effort set to high.")
@@ -2159,7 +2159,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import SessionForkRequest, session_fork_result
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         request = SessionForkRequest(
@@ -2206,7 +2206,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import CommandCatalogRequest
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         request = CommandCatalogRequest(
@@ -2248,7 +2248,7 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import CommandCatalogRequest
 
         link = _ReconnectableControlLink()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link
         )
         request = CommandCatalogRequest(
@@ -2309,7 +2309,7 @@ class AdapterTests(unittest.TestCase):
 
         link = _LinkClient()
         personalities = _Personalities()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=link,
@@ -2343,7 +2343,7 @@ class AdapterTests(unittest.TestCase):
 
         controller = SimpleNamespace(execute=AsyncMock(return_value={"agents": []}))
         link = _LinkClient()
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(),
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(),
                                 link_client=link, workspace_controller=controller)
         request = WorkspaceRequest("workspace-legacy-metadata-0001", "agents.list", {}, 1_788_000_000)
         asyncio.run(adapter.receive_link_payload(InboundLinkWorkspaceRequest(
@@ -2368,7 +2368,7 @@ class AdapterTests(unittest.TestCase):
 
         link = _LinkClient()
         controller = Controller()
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(),
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(),
                                 link_client=link, workspace_controller=controller)
         provider = lambda _: {
             "model": "fixture-model", "contextUsed": 17, "contextMax": 100,
@@ -2420,7 +2420,7 @@ class AdapterTests(unittest.TestCase):
 
         link = _LinkClient()
         controller = _WorkspaceController()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=link,
@@ -2461,7 +2461,7 @@ class AdapterTests(unittest.TestCase):
 
         link = _LinkClient()
         controller = _WorkspaceController()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=link,
@@ -2505,7 +2505,7 @@ class AdapterTests(unittest.TestCase):
                 )
 
         link = _LinkClient()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=link,
@@ -2558,7 +2558,7 @@ class AdapterTests(unittest.TestCase):
                     ),
                 )
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -2587,7 +2587,7 @@ class AdapterTests(unittest.TestCase):
             def lookup_by_session_key(_session_key):
                 return None
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -2602,7 +2602,7 @@ class AdapterTests(unittest.TestCase):
                 "projects": [{
                     "id": "project-loopdy",
                     "name": "Loopdy",
-                    "description": "Loopdy workspace",
+                    "description": "bighelp workspace",
                     "archived": False,
                     "primary_path": "/fixture/loopdy",
                     "folders": [{
@@ -2625,7 +2625,7 @@ class AdapterTests(unittest.TestCase):
             "workspaces": [{
                 "id": "project-loopdy",
                 "name": "Loopdy",
-                "description": "Loopdy workspace",
+                "description": "bighelp workspace",
                 "folderCount": 1,
                 "isActive": True,
             }],
@@ -2634,7 +2634,7 @@ class AdapterTests(unittest.TestCase):
     def test_production_adapter_installs_the_hermes_workspace_controller(self) -> None:
         from loopdy_plugin.link_contracts import WORKSPACE_OPERATIONS
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -2681,7 +2681,7 @@ class AdapterTests(unittest.TestCase):
             _profile_name_for_source=lambda _source: None,
             _evict_cached_agent=evicted.append,
         )
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -2734,7 +2734,7 @@ class AdapterTests(unittest.TestCase):
             def lookup_by_session_key(_session_key):
                 return None
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -2802,7 +2802,7 @@ class AdapterTests(unittest.TestCase):
                     session_id="canonical-session-0001",
                 )
 
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=_LinkClient(),
@@ -2811,7 +2811,7 @@ class AdapterTests(unittest.TestCase):
         adapter.set_session_store(store)
         source = adapter.build_source(
             chat_id="loopdy-chat-0001",
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
         )
         source.profile = "default"
@@ -2889,7 +2889,7 @@ class AdapterTests(unittest.TestCase):
                     return {"id": session_id, "cwd": str(selected)}
 
             store = SimpleNamespace(_db=_SessionDB())
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True),
                 service=_Service(),
                 link_client=_LinkClient(),
@@ -3003,7 +3003,7 @@ class AdapterTests(unittest.TestCase):
                     return self.entry
 
             store = _SessionStore()
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True),
                 service=_Service(),
                 link_client=_LinkClient(),
@@ -3026,7 +3026,7 @@ class AdapterTests(unittest.TestCase):
             adapter.set_session_store(store)
             source = adapter.build_source(
                 chat_id="loopdy-chat-pending",
-                chat_name="Loopdy chat",
+                chat_name="bighelp chat",
                 chat_type="dm",
             )
             source.profile = "default"
@@ -3100,7 +3100,7 @@ class AdapterTests(unittest.TestCase):
                 "agent:main:loopdy:dm:loopdy-chat-b",
             ]
 
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True),
                 service=_Service(),
                 link_client=_LinkClient(),
@@ -3183,7 +3183,7 @@ class AdapterTests(unittest.TestCase):
                     attachment_store=attachment_store,
                 )
             )
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True),
                 service=_Service(),
                 link_client=link,
@@ -3230,7 +3230,7 @@ class AdapterTests(unittest.TestCase):
                     attachment_store=attachment_store,
                 )
             )
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True),
                 service=_Service(),
                 link_client=link,
@@ -3269,17 +3269,17 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.generative_ui import render_v2_envelope
         from loopdy_plugin.link_client import InboundLinkGenerativeUIFormSubmission
         from loopdy_plugin.link_contracts import GenerativeUIFormSubmission
-        from loopdy_plugin.store import LoopdyStore
+        from loopdy_plugin.store import BighelpStore
 
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "forms.sqlite3")
+            store = BighelpStore(Path(directory) / "forms.sqlite3")
             payload = json.loads(
                 (Path(__file__).resolve().parents[1] / "fixtures" / "generative_ui_v2" / "valid-form.json")
                 .read_text(encoding="utf-8")
             )
             now = datetime.now(timezone.utc)
             card = render_v2_envelope(
-                "loopdy_render_form",
+                "bighelp_render_form",
                 payload,
                 now=now,
                 profile="personal",
@@ -3298,7 +3298,7 @@ class AdapterTests(unittest.TestCase):
             service = _Service()
             service.store = store
             link = _LinkClient()
-            adapter = LoopdyAdapter(
+            adapter = BighelpAdapter(
                 PlatformConfig(enabled=True), service=service, link_client=link
             )
             request = GenerativeUIFormSubmission(

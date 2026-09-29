@@ -8,6 +8,7 @@ the resulting answer here. Provider credentials never leave this process.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 import json
 import logging
@@ -34,6 +35,17 @@ def _reject(code="voice_unavailable", status=409):
     return NativeAPIError(status, code, "This native voice operation is unavailable. Reconnect explicitly when ready.")
 
 
+def _profile_scope(agent_id: str):
+    """The agent's own Hermes profile while voice reads its sign-in: its home and, on
+    Hermes 0.21.4+, its credentials. Hosts serving several profiles refuse credential
+    reads outside one, which read as "sign in again" (bighelp#14)."""
+    try:
+        from hermes_cli.web_server_profiles import _config_profile_scope
+    except ImportError:
+        return contextlib.nullcontext()
+    return _config_profile_scope(agent_id)
+
+
 def _provider_rejection(error: LiveProviderError) -> NativeAPIError:
     """Report the provider's fixed, payload-free reason (for example
     ``voice_provider_rate_limited``) instead of a generic outage, so the app and
@@ -41,7 +53,7 @@ def _provider_rejection(error: LiveProviderError) -> NativeAPIError:
     code = error.code if isinstance(error.code, str) and _FIXED_NAME.fullmatch(error.code) else "failed"
     stage = error.stage if isinstance(error.stage, str) and _FIXED_NAME.fullmatch(error.stage) else "unknown"
     status = error.http_status if type(error.http_status) is int else None
-    logger.warning("Loopdy native voice provider failed: code=%s stage=%s http_status=%s", code, stage, status)
+    logger.warning("bighelp native voice provider failed: code=%s stage=%s http_status=%s", code, stage, status)
     return NativeAPIError(409, "voice_provider_" + code, "The live voice provider could not complete this call.")
 
 
@@ -103,7 +115,8 @@ class NativeVoiceHub:
             call.watch = asyncio.create_task(self._watch(call))
             try:
                 async with asyncio.timeout(self.setup_seconds):
-                    answer = await call.provider.create(fields["sdp"], voice=fields["voice"])
+                    with _profile_scope(fields["agentId"]):
+                        answer = await call.provider.create(fields["sdp"], voice=fields["voice"])
             except TimeoutError:
                 raise LiveProviderError("setup_timeout") from None
             if call.closed:

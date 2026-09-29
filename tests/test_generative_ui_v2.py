@@ -36,7 +36,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
     def render(self, name: str, *, session_id: str = "stored-session") -> dict:
         payload = fixture(name)
         return render_v2_envelope(
-            f"loopdy_render_{payload['component']}",
+            f"bighelp_render_{payload['component']}",
             payload,
             now=NOW,
             profile="personal",
@@ -54,7 +54,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
                     self,
                     item["code"],
                     lambda payload=payload: render_v2_envelope(
-                        f"loopdy_render_{payload['component']}",
+                        f"bighelp_render_{payload['component']}",
                         payload,
                         now=NOW,
                         profile="personal",
@@ -99,7 +99,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
             self,
             "unknown_field",
             lambda: render_v2_envelope(
-                "loopdy_render_form", payload, now=NOW, profile="personal", session_id="stored-session"
+                "bighelp_render_form", payload, now=NOW, profile="personal", session_id="stored-session"
             ),
         )
 
@@ -128,7 +128,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
                 self,
                 expected,
                 lambda value=value: render_v2_envelope(
-                    "loopdy_render_stock_quote", value, now=NOW, profile="personal", session_id="s"
+                    "bighelp_render_stock_quote", value, now=NOW, profile="personal", session_id="s"
                 ),
             )
         assert_code(
@@ -141,15 +141,15 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
         payload = fixture("valid-stock.json")
         payload["title"] = "Cafe\u0301"
         value = render_v2_envelope(
-            "loopdy_render_stock_quote", payload, now=NOW, profile="personal", session_id="s"
+            "bighelp_render_stock_quote", payload, now=NOW, profile="personal", session_id="s"
         )
         self.assertEqual(value["title"], "Café")
         integer_price = fixture("valid-stock.json")
         integer_price["data"]["price"] = 125
         decimal_price = fixture("valid-stock.json")
         decimal_price["data"]["price"] = 125.0
-        first = render_v2_envelope("loopdy_render_stock_quote", integer_price, now=NOW, profile="p", session_id="s")
-        second = render_v2_envelope("loopdy_render_stock_quote", decimal_price, now=NOW, profile="p", session_id="s")
+        first = render_v2_envelope("bighelp_render_stock_quote", integer_price, now=NOW, profile="p", session_id="s")
+        second = render_v2_envelope("bighelp_render_stock_quote", decimal_price, now=NOW, profile="p", session_id="s")
         self.assertEqual(first["content_hash"], second["content_hash"])
 
         for number in (math.nan, math.inf, 1_000_000_000_001, 1.1234567):
@@ -159,7 +159,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
                 self,
                 "invalid_number",
                 lambda invalid=invalid: render_v2_envelope(
-                    "loopdy_render_stock_quote", invalid, now=NOW, profile="personal", session_id="s"
+                    "bighelp_render_stock_quote", invalid, now=NOW, profile="personal", session_id="s"
                 ),
             )
         control = fixture("valid-stock.json")
@@ -168,7 +168,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
             self,
             "invalid_string",
             lambda: render_v2_envelope(
-                "loopdy_render_stock_quote", control, now=NOW, profile="personal", session_id="s"
+                "bighelp_render_stock_quote", control, now=NOW, profile="personal", session_id="s"
             ),
         )
         huge = fixture("valid-stock.json")
@@ -177,33 +177,33 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
             self,
             "payload_too_large",
             lambda: render_v2_envelope(
-                "loopdy_render_stock_quote", huge, now=NOW, profile="personal", session_id="s"
+                "bighelp_render_stock_quote", huge, now=NOW, profile="personal", session_id="s"
             ),
         )
 
     def test_weather_sports_stock_and_provenance_invariants(self) -> None:
         weather = fixture("valid-weather.json")
         weather["data"]["periods"] *= 15
-        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("loopdy_render_weather_forecast", weather, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("bighelp_render_weather_forecast", weather, now=NOW, profile="p", session_id="s"))
         weather = fixture("valid-weather.json")
         weather["data"]["periods"][0]["high"] = 60
         weather["data"]["periods"][0]["low"] = 66
-        assert_code(self, "invalid_value", lambda: render_v2_envelope("loopdy_render_weather_forecast", weather, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "invalid_value", lambda: render_v2_envelope("bighelp_render_weather_forecast", weather, now=NOW, profile="p", session_id="s"))
 
         sports = fixture("valid-sports-live.json")
         sports["data"]["teams"][0]["home"] = True
-        assert_code(self, "invalid_value", lambda: render_v2_envelope("loopdy_render_sports_game", sports, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "invalid_value", lambda: render_v2_envelope("bighelp_render_sports_game", sports, now=NOW, profile="p", session_id="s"))
         sports = fixture("valid-sports-live.json")
         sports["data"]["teams"][0]["score"] = None
-        assert_code(self, "invalid_value", lambda: render_v2_envelope("loopdy_render_sports_game", sports, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "invalid_value", lambda: render_v2_envelope("bighelp_render_sports_game", sports, now=NOW, profile="p", session_id="s"))
 
         stock = fixture("valid-stock.json")
         stock["data"]["symbol"] = "lower"
-        assert_code(self, "invalid_value", lambda: render_v2_envelope("loopdy_render_stock_quote", stock, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "invalid_value", lambda: render_v2_envelope("bighelp_render_stock_quote", stock, now=NOW, profile="p", session_id="s"))
         provenance = fixture("valid-stock.json")
         provenance["provenance"]["age_seconds"] = 260
         normalized = render_v2_envelope(
-            "loopdy_render_stock_quote",
+            "bighelp_render_stock_quote",
             provenance,
             now=NOW,
             profile="p",
@@ -218,7 +218,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
         # is presentation metadata and must be recalculated when the payload
         # reaches the renderer, regardless of time spent in model/tool work.
         delayed = render_v2_envelope(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             weather,
             now=NOW + timedelta(minutes=3),
             profile="p",
@@ -234,7 +234,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
             self,
             "invalid_freshness",
             lambda: render_v2_envelope(
-                "loopdy_render_weather_forecast",
+                "bighelp_render_weather_forecast",
                 unsupported_age,
                 now=NOW,
                 profile="p",
@@ -246,14 +246,14 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
         weather = fixture("valid-weather-valid-until.json")
 
         rendered = render_v2_envelope(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             weather,
             now=NOW,
             profile="p",
             session_id="s",
         )
         without_valid_until = render_v2_envelope(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             fixture("valid-weather.json"),
             now=NOW,
             profile="p",
@@ -278,7 +278,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
                 self,
                 "invalid_freshness",
                 lambda payload=payload: render_v2_envelope(
-                    "loopdy_render_weather_forecast",
+                    "bighelp_render_weather_forecast",
                     payload,
                     now=NOW,
                     profile="p",
@@ -292,7 +292,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
             self,
             "invalid_value",
             lambda: render_v2_envelope(
-                "loopdy_render_weather_forecast",
+                "bighelp_render_weather_forecast",
                 malformed,
                 now=NOW,
                 profile="p",
@@ -304,7 +304,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
         payload = fixture("valid-weather.json")
         payload["provenance"]["age_seconds"] = 0
         handler = _v2_handler(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             store=None,
             profile="p",
             now=lambda: NOW + timedelta(minutes=3),
@@ -328,7 +328,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
 
     def test_rendered_envelope_recanonicalizes_a_delayed_model_age(self) -> None:
         rendered = render_v2_envelope(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             fixture("valid-weather.json"),
             now=NOW + timedelta(minutes=3),
             profile="p",
@@ -346,30 +346,30 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
     def test_chart_and_dashboard_aggregate_limits_and_accessibility_fields(self) -> None:
         chart = fixture("valid-chart.json")
         chart["data"]["series"] *= 7
-        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("loopdy_render_chart", chart, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("bighelp_render_chart", chart, now=NOW, profile="p", session_id="s"))
         chart = fixture("valid-chart.json")
         chart["data"]["series"][0]["points"] = [
             {"x": f"2026-08-21T00:{index:02d}:00Z", "y": index} for index in range(61)
         ]
-        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("loopdy_render_chart", chart, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("bighelp_render_chart", chart, now=NOW, profile="p", session_id="s"))
         chart = fixture("valid-chart.json")
         chart["data"]["series"][0]["points"].reverse()
-        assert_code(self, "invalid_order", lambda: render_v2_envelope("loopdy_render_chart", chart, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "invalid_order", lambda: render_v2_envelope("bighelp_render_chart", chart, now=NOW, profile="p", session_id="s"))
 
         dashboard = fixture("valid-dashboard.json")
         dashboard["data"]["metrics"] *= 13
-        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("loopdy_render_dashboard", dashboard, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("bighelp_render_dashboard", dashboard, now=NOW, profile="p", session_id="s"))
         dashboard = fixture("valid-dashboard.json")
         dashboard["data"]["charts"] *= 3
-        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("loopdy_render_dashboard", dashboard, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("bighelp_render_dashboard", dashboard, now=NOW, profile="p", session_id="s"))
 
     def test_form_schema_and_submission_values_are_strict_and_bounded(self) -> None:
         form = fixture("valid-form.json")
         form["data"]["fields"][0]["kind"] = "password"
-        assert_code(self, "invalid_value", lambda: render_v2_envelope("loopdy_render_form", form, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "invalid_value", lambda: render_v2_envelope("bighelp_render_form", form, now=NOW, profile="p", session_id="s"))
         form = fixture("valid-form.json")
         form["data"]["fields"] *= 13
-        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("loopdy_render_form", form, now=NOW, profile="p", session_id="s"))
+        assert_code(self, "limit_exceeded", lambda: render_v2_envelope("bighelp_render_form", form, now=NOW, profile="p", session_id="s"))
 
         schema = fixture("valid-form.json")["data"]
         self.assertEqual(validate_submission_values(schema, {"departure_day": "friday", "bags": 2}), {"bags": 2, "departure_day": "friday"})
@@ -400,7 +400,7 @@ class GenerativeUiV2ContractTests(unittest.TestCase):
             {"id": "day", "kind": "date", "label": "Day", "required": True, "min": "2026-08-01", "max": "2026-08-31"},
         ]
         card = render_v2_envelope(
-            "loopdy_render_form",
+            "bighelp_render_form",
             form,
             now=NOW,
             profile="personal",

@@ -568,7 +568,7 @@ class _ProfileBackend(HermesWorkspaceBackend):
                 "name": "Loopdy",
                 "kind": "platform",
                 "version": "0.8.0",
-                "description": "Secure Loopdy Link channel.",
+                "description": "Secure bighelp Link channel.",
                 "source": "/private/plugins/loopdy",
                 "enabled": True,
                 "tools": 2,
@@ -1476,7 +1476,7 @@ class HermesWorkspaceBackendTests(unittest.TestCase):
                 "name": "Loopdy",
                 "kind": "platform",
                 "version": "0.8.0",
-                "description": "Secure Loopdy Link channel.",
+                "description": "Secure bighelp Link channel.",
                 "enabled": True,
                 "capabilityCount": 6,
                 "controlReason": "",
@@ -1576,7 +1576,7 @@ class HermesWorkspaceBackendTests(unittest.TestCase):
             folder = Path(directory).resolve()
             created = asyncio.run(backend.projects_create({
                 "agentId": "default",
-                "name": "Loopdy Native",
+                "name": "bighelp Native",
                 "folderPath": str(folder),
             }))
             archived = asyncio.run(backend.projects_archive({
@@ -1586,7 +1586,7 @@ class HermesWorkspaceBackendTests(unittest.TestCase):
 
         self.assertEqual(backend.created_project, (
             "default",
-            "Loopdy Native",
+            "bighelp Native",
             str(folder),
         ))
         self.assertEqual(backend.archived_project, ("default", "project-home"))
@@ -3629,7 +3629,7 @@ class HermesWorkspaceBackendTests(unittest.TestCase):
         )
         payload["provenance"]["valid_until"] = "2026-08-22T01:00:00Z"
         card = render_v2_envelope(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             payload,
             now=datetime(2026, 8, 22, tzinfo=timezone.utc),
             profile="default",

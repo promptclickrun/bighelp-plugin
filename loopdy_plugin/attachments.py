@@ -1,4 +1,4 @@
-"""Policy-backed, durable outgoing attachments for Loopdy chat history."""
+"""Policy-backed, durable outgoing attachments for bighelp chat history."""
 
 from __future__ import annotations
 

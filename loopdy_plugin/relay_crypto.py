@@ -1,4 +1,4 @@
-"""Strict, versioned cryptography for ordinary Loopdy relay alerts."""
+"""Strict, versioned cryptography for ordinary bighelp relay alerts."""
 
 from __future__ import annotations
 

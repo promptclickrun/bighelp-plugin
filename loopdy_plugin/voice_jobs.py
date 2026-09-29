@@ -1,6 +1,6 @@
 """Independent durable voice jobs; no Hermes core or provider dependencies.
 
-A session_id here is a *visible Loopdy chat*, never an invented stored Hermes ID.
+A session_id here is a *visible bighelp chat*, never an invented stored Hermes ID.
 The authenticated adapter owns authorization freshness and supplies callbacks. Every
 mutation is CAS-fenced by the complete owner, job, run and revision. Reopening a
 ledger makes unfinished work uncertain, never eligible for automatic dispatch.

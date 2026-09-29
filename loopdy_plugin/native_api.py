@@ -1,4 +1,4 @@
-"""Finite stock-serve HTTP adapters for existing Loopdy domain services."""
+"""Finite stock-serve HTTP adapters for existing bighelp domain services."""
 from __future__ import annotations
 
 from contextlib import ExitStack, asynccontextmanager
@@ -28,7 +28,7 @@ _BodyT = TypeVar("_BodyT", bound=BaseModel)
 
 
 def _error_response(error: NativeAPIError) -> JSONResponse:
-    logger.warning("Loopdy native request rejected: %s", error.code)
+    logger.warning("bighelp native request rejected: %s", error.code)
     return JSONResponse(status_code=error.status, content={"error": {
         "code": error.code, "message": error.message,
         "retryable": error.status == 503, "details": {},
@@ -54,7 +54,7 @@ class _NativeRoute(APIRoute):
             except Exception as error:
                 # Auth providers and storage may include secrets/paths in exception
                 # text; the class name is fixed and safe to log.
-                logger.error("Loopdy native request failed: native_service_unavailable (%s)",
+                logger.error("bighelp native request failed: native_service_unavailable (%s)",
                              type(error).__name__)
                 return _error_response(NativeAPIError(503, "native_service_unavailable",
                                                      "The native plugin service is unavailable."))

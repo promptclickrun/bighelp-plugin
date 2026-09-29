@@ -10,8 +10,8 @@ from unittest.mock import Mock
 
 from loopdy_plugin.events import build_event
 from loopdy_plugin.registration import setup_cli
-from loopdy_plugin.service import LoopdyService
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.service import BighelpService
+from loopdy_plugin.store import BighelpStore
 
 
 class RelayRetirementTests(unittest.TestCase):
@@ -19,11 +19,11 @@ class RelayRetirementTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / 'loopdy.sqlite3'
-        self.store = LoopdyStore(self.path)
+        self.store = BighelpStore(self.path)
 
     def service(self):
         relay = Mock()
-        service = LoopdyService(self.store, providers={'relay': relay})
+        service = BighelpService(self.store, providers={'relay': relay})
         self.addCleanup(service.close)
         return service, relay
 

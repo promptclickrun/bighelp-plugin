@@ -1,4 +1,4 @@
-"""Configured-workspace file projection for Loopdy native clients.
+"""Configured-workspace file projection for bighelp native clients.
 
 This module deliberately does not use Hermes' process cwd or its permissive
 managed-files fallback. Every operation starts from the serving profile's raw,

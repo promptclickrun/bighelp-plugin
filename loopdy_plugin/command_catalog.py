@@ -1,4 +1,4 @@
-"""Hermes-owned slash command metadata for Loopdy chat composers."""
+"""Hermes-owned slash command metadata for bighelp chat composers."""
 
 from __future__ import annotations
 

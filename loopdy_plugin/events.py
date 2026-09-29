@@ -1,4 +1,4 @@
-"""Normalized Loopdy event records and privacy-minimal push payloads."""
+"""Normalized bighelp event records and privacy-minimal push payloads."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ EVENT_TYPES = frozenset(
 
 
 @dataclass(frozen=True)
-class LoopdyEvent:
+class BighelpEvent:
     event_id: str
     type: str
     profile: str
@@ -64,10 +64,10 @@ def build_event(
     approval_id: str = "",
     delegation_id: str = "",
     detail: Mapping[str, Any] | None = None,
-) -> LoopdyEvent:
+) -> BighelpEvent:
     if kind not in EVENT_TYPES:
-        raise ValueError(f"Unsupported Loopdy event type: {kind}")
-    return LoopdyEvent(
+        raise ValueError(f"Unsupported bighelp event type: {kind}")
+    return BighelpEvent(
         event_id=_event_id(kind, correlation),
         type=kind,
         profile=_text(profile, 80) or "default",

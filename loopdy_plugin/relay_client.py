@@ -1,4 +1,4 @@
-"""Authenticated HTTPS client for the managed Loopdy relay."""
+"""Authenticated HTTPS client for the managed bighelp relay."""
 
 from __future__ import annotations
 

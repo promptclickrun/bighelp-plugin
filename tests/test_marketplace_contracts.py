@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from loopdy_plugin.link_contracts import parse_workspace_request, workspace_result
 from loopdy_plugin.loopdy_cards import canonical_json
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.workspace_control import HermesWorkspaceBackend, WorkspaceController
 
 
@@ -46,7 +46,7 @@ class MarketplaceCardWorkspaceContractTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             controller = WorkspaceController(
                 backend=HermesWorkspaceBackend(service=SimpleNamespace(store=store))
             )
@@ -102,7 +102,7 @@ class _MarketplaceSkillInstaller:
 class MarketplaceSkillWorkspaceContractTests(unittest.TestCase):
     def test_parser_and_dispatcher_use_the_dedicated_skill_install_service(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             installer = _MarketplaceSkillInstaller()
             backend = HermesWorkspaceBackend(service=SimpleNamespace(store=store))
             backend.marketplace_skill_installer = installer

@@ -966,7 +966,7 @@ class LinkClientTests(unittest.TestCase):
             "actorId": "family-member-1",
             "actorName": "Alex",
             "deviceName": "Kitchen iPad",
-            "text": "Hello from Loopdy",
+            "text": "Hello from bighelp",
             "behavior": "steer",
             "sentAt": int(time.time()),
         }
@@ -985,7 +985,7 @@ class LinkClientTests(unittest.TestCase):
 
         asyncio.run(client.handle_wire_message(wire, received.append))
 
-        self.assertEqual(received[0].message.text, "Hello from Loopdy")
+        self.assertEqual(received[0].message.text, "Hello from bighelp")
         self.assertEqual(received[0].message.agent_id, "finance")
         self.assertEqual(received[0].message.behavior, "steer")
         self.assertTrue(received[0].sender_id.startswith("link_"))
@@ -1688,7 +1688,7 @@ class LinkClientTests(unittest.TestCase):
 
         async def scenario() -> None:
             def callback(_payload):
-                raise ValueError("Loopdy Link relay sender-key acknowledgement is invalid")
+                raise ValueError("bighelp Link relay sender-key acknowledgement is invalid")
 
             await client.handle_wire_message(wire, callback, defer_callbacks=True)
             await client._inbound_callback_queue.join()

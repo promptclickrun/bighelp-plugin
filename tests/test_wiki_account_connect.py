@@ -81,7 +81,7 @@ class AccountConnectTests(unittest.TestCase):
             client._socket = Socket()
             client._connected.set()
             def adapter_for(current):
-                return fixtures.LoopdyAdapter(fixtures.PlatformConfig(enabled=True),
+                return fixtures.BighelpAdapter(fixtures.PlatformConfig(enabled=True),
                     service=fixtures._Service(), link_client=client, wiki_transport=current,
                     workspace_controller=fixtures.WorkspaceController(
                         backend=fixtures.SimpleNamespace(), wiki_transport=current))

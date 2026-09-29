@@ -1,4 +1,4 @@
-"""Shared implementation for the Loopdy Hermes plugin."""
+"""Shared implementation for the bighelp Hermes plugin."""
 
 from .tools import register
 

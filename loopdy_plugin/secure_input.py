@@ -13,6 +13,8 @@ import os
 import re
 from typing import Any, Callable
 
+from .naming import TOOLSET
+
 SCHEMA = "bighelp.secure-input"
 TOOL_NAME = "bighelp_request_secure_input"
 _NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
@@ -169,7 +171,7 @@ def register(ctx: Any) -> bool:
         return False
     ctx.register_tool(
         name=TOOL_NAME,
-        toolset="loopdy",
+        toolset=TOOLSET,
         schema={"name": TOOL_NAME, "description": DESCRIPTION, "parameters": PARAMETERS},
         handler=lambda args, **_: request(args or {}),
         emoji="🔐",

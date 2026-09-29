@@ -8,7 +8,7 @@ Please report security problems privately through GitHub:
 
 ## Supported versions
 
-Only the latest release on `main` gets fixes. Update with `hermes loopdy update`.
+Only the [latest release](https://github.com/promptclickrun/bighelp-plugin/releases/latest) gets fixes. Update with `hermes bighelp update`.
 
 ## How the plugin is protected
 
@@ -21,7 +21,7 @@ Only the latest release on `main` gets fixes. Update with `hermes loopdy update`
   Paths are re-checked on every read, and symlinks, credential folders and Hermes' own control folders are
   refused. Agent attachments are served by opaque ID and only if the chat really sent them.
 - **Secrets stay on the host.** Provider credentials, the notification signing key and private keys are never
-  returned to the app or printed by `hermes loopdy status`.
+  returned to the app or printed by `hermes bighelp status`.
 - **Notifications are sealed.** With current app builds, only the recipient phone can read an alert's text and
   picture. See [Notifications](docs/NOTIFICATIONS.md).
 - **Phone tools are opt-in.** iPhone Health, Calendar and Reminders tools work only after the user enables them,

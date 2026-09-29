@@ -13,17 +13,17 @@ from pathlib import Path
 from unittest import mock
 
 from loopdy_plugin.events import build_event
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 
 
 class StoreTests(unittest.TestCase):
     def test_fresh_store_defaults_to_managed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(LoopdyStore(Path(directory) / "loopdy.sqlite3").provider_mode(), "managed")
+            self.assertEqual(BighelpStore(Path(directory) / "loopdy.sqlite3").provider_mode(), "managed")
 
     def test_device_reconciliation_preserves_preferences_when_omitted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             store.upsert_device(
                 device_id="device-1",
                 endpoint_id="token-1",
@@ -35,7 +35,7 @@ class StoreTests(unittest.TestCase):
 
     def test_concurrent_partial_preference_updates_preserve_both_writers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             store.upsert_device(
                 device_id="device-1",
                 endpoint_id="token-1",
@@ -110,14 +110,14 @@ class StoreTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.db"
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             store.upsert_device(
                 device_id="device-1",
                 endpoint_id="token-1",
                 preferences={"enabled_types": ["delegation.updated"]},
             )
 
-            reopened = LoopdyStore(path)
+            reopened = BighelpStore(path)
             reopened.upsert_device(device_id="device-1", endpoint_id="token-2")
             reopened.update_preferences("device-1", {"priority_sound": False})
 
@@ -133,7 +133,7 @@ class StoreTests(unittest.TestCase):
     def test_devices_preferences_and_event_ledger_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.sqlite3"
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             store.upsert_device(
                 device_id="phone_123",
                 endpoint_id="endpoint_456",
@@ -157,7 +157,7 @@ class StoreTests(unittest.TestCase):
             store.record_event(event, target="device:phone_123")
             store.record_event(event, target="device:phone_123")
 
-            reopened = LoopdyStore(path)
+            reopened = BighelpStore(path)
             self.assertEqual(
                 reopened.list_devices(),
                 [
@@ -185,7 +185,7 @@ class StoreTests(unittest.TestCase):
 
     def test_list_events_pages_in_stable_newest_first_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             events = [
                 build_event(
                     "channel.message",
@@ -208,7 +208,7 @@ class StoreTests(unittest.TestCase):
     def test_clarify_link_prompt_and_pending_frame_states_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.db"
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             event = build_event(
                 "attention.required",
                 correlation=("clarify", "request-pending-1"),
@@ -223,7 +223,7 @@ class StoreTests(unittest.TestCase):
                 store.mark_event_pending(event.event_id, "frame-pending-coordinate-0001")
             )
 
-            reopened = LoopdyStore(path)
+            reopened = BighelpStore(path)
             row = reopened.get_event(event.event_id)
             self.assertEqual(row["status"], "pending")
             self.assertEqual(row["delivery_id"], "frame-pending-coordinate-0001")
@@ -231,7 +231,7 @@ class StoreTests(unittest.TestCase):
     def test_event_read_and_pin_state_is_durable_and_pins_sort_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.db"
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             older = build_event(
                 "channel.message",
                 correlation=("channel", "older"),
@@ -263,7 +263,7 @@ class StoreTests(unittest.TestCase):
                 )
             )
 
-            reopened = LoopdyStore(path)
+            reopened = BighelpStore(path)
             rows = reopened.list_events()
             self.assertEqual([row["event_id"] for row in rows], [older.event_id, newer.event_id])
             self.assertTrue(rows[0]["is_read"])
@@ -293,7 +293,7 @@ class StoreTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             events = [
                 build_event(
                     "channel.message",
@@ -322,7 +322,7 @@ class StoreTests(unittest.TestCase):
 
     def test_attention_events_can_be_resolved_by_request_session_or_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             events = [
                 build_event(
                     "attention.required",
@@ -361,7 +361,7 @@ class StoreTests(unittest.TestCase):
 
     def test_absolute_deadline_clarify_remains_projectable_after_expiry_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             clarify = build_event(
                 "attention.required",
                 correlation=("clarify", "clarify-1"),
@@ -403,7 +403,7 @@ class StoreTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.db")
+            store = BighelpStore(Path(directory) / "loopdy.db")
             restart = build_event(
                 "channel.message",
                 correlation=("channel", "restart"),
@@ -429,7 +429,7 @@ class StoreTests(unittest.TestCase):
             event = build_event("session.completed", correlation=("turn", "turn-1"))
             _create_legacy_database(path, event)
 
-            migrated = LoopdyStore(path)
+            migrated = BighelpStore(path)
 
             self.assertEqual(migrated.provider_mode(), "managed")
             self.assertEqual(migrated.provider_mode(), "managed")
@@ -440,7 +440,7 @@ class StoreTests(unittest.TestCase):
     def test_provider_state_target_resolution_and_receipts_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.sqlite3"
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             store.set_provider_mode("direct")
             store.save_apns_config(
                 {
@@ -475,7 +475,7 @@ class StoreTests(unittest.TestCase):
                 provider="direct",
             )
 
-            reopened = LoopdyStore(path)
+            reopened = BighelpStore(path)
 
             self.assertEqual(reopened.provider_mode(), "direct")
             self.assertEqual(reopened.load_apns_config()["topic"], "app.loopdy.personal")
@@ -498,7 +498,7 @@ class StoreTests(unittest.TestCase):
 
     def test_provider_mode_accepts_supported_modes_and_rejects_relay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             for mode in ("managed", "direct"):
                 store.set_provider_mode(mode)
                 self.assertEqual(store.provider_mode(), mode)
@@ -510,7 +510,7 @@ class StoreTests(unittest.TestCase):
 
     def test_relay_recipient_key_change_clears_sender_ack_but_same_key_renewal_preserves_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             first_body = {"device_id": "relay_phone_01", "revision": 1}
             store.register_relay_device(
                 device_id="relay_phone_01",
@@ -581,7 +581,7 @@ class StoreTests(unittest.TestCase):
 
     def test_relay_tenant_delete_purges_only_relay_local_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.register_relay_device(
                 device_id="relay_phone_01", recipient_public_key="B" + "A" * 86,
                 recipient_key_id="key_fixture_01", revision=1, lease_expires=2_692_000,
@@ -624,7 +624,7 @@ class StoreTests(unittest.TestCase):
 
     def test_relay_live_activity_reregistration_clears_frozen_pending_update(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             now = 100_000
             store.register_relay_device(
                 device_id="relay_phone_01",
@@ -694,7 +694,7 @@ class StoreTests(unittest.TestCase):
 
     def test_relay_operation_journal_persists_response_for_restart_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             body = {
                 "version": 1,
                 "device_id": "relay_phone_01",
@@ -723,7 +723,7 @@ class StoreTests(unittest.TestCase):
 
     def test_terminal_relay_operation_can_be_reset_without_active_claim(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             body = {
                 "version": 1,
                 "device_id": "relay_phone_01",
@@ -767,7 +767,7 @@ class StoreTests(unittest.TestCase):
 
     def test_active_terminal_recovery_claim_blocks_reset_until_expiry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             body = {
                 "version": 1,
                 "device_id": "relay_phone_01",
@@ -826,7 +826,7 @@ class StoreTests(unittest.TestCase):
 
     def test_pending_delivery_retains_original_relay_revision_and_recipient_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.register_relay_device(
                 device_id="relay_phone_01",
                 recipient_public_key="B" + "A" * 86,
@@ -871,7 +871,7 @@ class StoreTests(unittest.TestCase):
 
     def test_relay_live_activity_rejects_nonincreasing_watermarks_and_reactivates_higher_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             first = store.register_relay_live_activity(
                 activity_id="activity_fixture_01",
                 device_id="relay_phone_01",
@@ -914,7 +914,7 @@ class StoreTests(unittest.TestCase):
 
     def test_live_activity_tokens_match_stored_or_live_session_and_can_end(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored-session",
                 live_session_id="live-session",
@@ -962,7 +962,7 @@ class StoreTests(unittest.TestCase):
                     """
                 )
 
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
 
             self.assertEqual(store.allocate_live_activity_timestamp("activity-1", 100), 100)
             self.assertEqual(store.allocate_live_activity_timestamp("activity-1", 100), 101)
@@ -977,13 +977,13 @@ class StoreTests(unittest.TestCase):
             path = Path(directory) / "loopdy.sqlite3"
             ready = Path(directory) / "ready"
             acquired = Path(directory) / "acquired"
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             child_code = """
 from pathlib import Path
 import sys
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 
-store = LoopdyStore(Path(sys.argv[1]))
+store = BighelpStore(Path(sys.argv[1]))
 Path(sys.argv[2]).write_text("ready")
 with store.live_activity_send_lock("activity-1"):
     Path(sys.argv[3]).write_text("acquired")
@@ -1006,7 +1006,7 @@ with store.live_activity_send_lock("activity-1"):
 
     def test_approval_responses_preserve_every_hermes_scope_and_are_first_writer_wins(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.create_approval(
                 approval_id="approval_123",
                 request_digest="digest_456",

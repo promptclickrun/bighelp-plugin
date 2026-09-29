@@ -141,7 +141,7 @@ class NotificationPresentationTests(unittest.TestCase):
             {"detail_mode": "detailed", "lock_screen_previews": False},
         )
 
-        self.assertEqual(minimal.body, "Open Loopdy to view the scheduled task result.")
+        self.assertEqual(minimal.body, "Open bighelp to view the scheduled task result.")
         self.assertEqual(hidden.body, minimal.body)
         self.assertEqual(minimal.title, "Completion alert")
         self.assertEqual(hidden.title, minimal.title)
@@ -254,7 +254,7 @@ class NotificationPresentationTests(unittest.TestCase):
         message = shape_notification(event, {"detail_mode": "detailed"})
 
         self.assertEqual(message.title, "Builder needs approval")
-        self.assertEqual(message.body, "Review the requested command in Loopdy.")
+        self.assertEqual(message.body, "Review the requested command in bighelp.")
         rendered = f"{message.title} {message.body} {message.data}".lower()
         for private_value in ("/private", "customer", "fixture-secret", "private prompt", "pattern"):
             self.assertNotIn(private_value, rendered)
@@ -277,7 +277,7 @@ class NotificationPresentationTests(unittest.TestCase):
 
                 message = shape_notification(event, {"detail_mode": "detailed"})
 
-                self.assertEqual(message.body, "Review the requested command in Loopdy.")
+                self.assertEqual(message.body, "Review the requested command in bighelp.")
 
     def test_attention_detail_fields_redact_private_paths_and_secrets(self) -> None:
         unsafe_details = {
@@ -295,7 +295,7 @@ class NotificationPresentationTests(unittest.TestCase):
 
                 message = shape_notification(event, {"detail_mode": "detailed"})
 
-                self.assertEqual(message.body, "Open Loopdy to continue.")
+                self.assertEqual(message.body, "Open bighelp to continue.")
                 rendered = f"{message.title} {message.body} {message.data}".lower()
                 self.assertNotIn("private", rendered)
                 self.assertNotIn("token", rendered)
@@ -333,7 +333,7 @@ class NotificationPresentationTests(unittest.TestCase):
 
                 message = shape_notification(event, {"detail_mode": "detailed"})
 
-                self.assertEqual(message.body, "Review the requested command in Loopdy.")
+                self.assertEqual(message.body, "Review the requested command in bighelp.")
 
         safe = build_event(
             "approval.required",

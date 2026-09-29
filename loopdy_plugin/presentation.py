@@ -1,4 +1,4 @@
-"""Adaptive, bounded notification copy for Loopdy events."""
+"""Adaptive, bounded notification copy for bighelp events."""
 
 from __future__ import annotations
 
@@ -6,40 +6,40 @@ import re
 import unicodedata
 from typing import Any, Mapping
 
-from .events import LoopdyEvent
+from .events import BighelpEvent
 from .provider import PushMessage
 from .sensitive import contains_sensitive_credential
 
 
 _COPY = {
-    "approval.required": ("Needs your approval", "Open Loopdy to review the request."),
-    "attention.required": ("Session update", "Open Loopdy to continue."),
+    "approval.required": ("Needs your approval", "Open bighelp to review the request."),
+    "attention.required": ("Session update", "Open bighelp to continue."),
     "session.completed": (
         "Completion alert",
-        "Open Loopdy to view the finished response.",
+        "Open bighelp to view the finished response.",
     ),
-    "session.failed": ("Session update", "Open Loopdy to review what happened."),
+    "session.failed": ("Session update", "Open bighelp to review what happened."),
     "delegation.started": (
         "Delegation started",
-        "Open Loopdy to view the new delegation.",
+        "Open bighelp to view the new delegation.",
     ),
     "delegation.updated": (
         "Session update",
-        "Open Loopdy to view the latest activity.",
+        "Open bighelp to view the latest activity.",
     ),
     "delegation.completed": (
         "Delegation complete",
-        "Open Loopdy to view the completed delegation.",
+        "Open bighelp to view the completed delegation.",
     ),
-    "task.updated": ("Session update", "Open Loopdy to view the task."),
+    "task.updated": ("Session update", "Open bighelp to view the task."),
     "job.completed": (
         "Completion alert",
-        "Open Loopdy to view the scheduled task result.",
+        "Open bighelp to view the scheduled task result.",
     ),
-    "job.failed": ("Session update", "Open Loopdy to review the scheduled task."),
+    "job.failed": ("Session update", "Open bighelp to review the scheduled task."),
     "channel.message": (
         "Hermes just messaged you!",
-        "Open Loopdy to view the message.",
+        "Open bighelp to view the message.",
     ),
 }
 
@@ -70,7 +70,7 @@ _DETAIL_KEYS = {
 
 
 def shape_notification(
-    event: LoopdyEvent,
+    event: BighelpEvent,
     preferences: Mapping[str, Any] | None = None,
 ) -> PushMessage:
     values = dict(preferences or {})
@@ -84,7 +84,7 @@ def shape_notification(
         mode = "minimal"
     title, generic_body = _COPY.get(
         event.type,
-        ("Session update", "Open Loopdy to view it."),
+        ("Session update", "Open bighelp to view it."),
     )
     detail = event.detail if isinstance(event.detail, Mapping) else {}
     agent_name = _text(detail.get("agent_name") or detail.get("sender_name"), 80)
@@ -146,7 +146,7 @@ def shape_notification(
     )
 
 
-def _event_body(event: LoopdyEvent, fallback: str) -> str:
+def _event_body(event: BighelpEvent, fallback: str) -> str:
     detail = event.detail if isinstance(event.detail, Mapping) else {}
     if event.type == "approval.required":
         raw_description = detail.get("description")
@@ -160,7 +160,7 @@ def _event_body(event: LoopdyEvent, fallback: str) -> str:
             if command:
                 return command
         if _text(detail.get("command"), 800):
-            return "Review the requested command in Loopdy."
+            return "Review the requested command in bighelp."
         return fallback
     for key in _DETAIL_KEYS.get(event.type, ()):
         value = (

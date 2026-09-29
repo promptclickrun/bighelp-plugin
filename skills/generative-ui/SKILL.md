@@ -9,9 +9,9 @@ Use a bighelp renderer when the user asks for a card, dashboard-like result, met
 
 ## bighelp Cards
 
-Use the generic `loopdy_render_card` tool, documented in `references/loopdy-cards.md`, for new static compositions that do not match a typed renderer. These are called **bighelp Cards**. Use typed v2 for existing polished use cases until generic rendering reaches visual parity. In this release, `data_sources` must be empty and all displayed values must be embedded in the card payload; live device refresh is not available. Cards allow no downloaded code, HTML, WebViews, authenticated requests, or secrets.
+Use the generic `bighelp_render_card` tool, documented in `references/bighelp-cards.md`, for new static compositions that do not match a typed renderer. These are called **bighelp Cards**. Use typed v2 for existing polished use cases until generic rendering reaches visual parity. In this release, `data_sources` must be empty and all displayed values must be embedded in the card payload; live device refresh is not available. Cards allow no downloaded code, HTML, WebViews, authenticated requests, or secrets.
 
-The renderers are first-class model tools in the `loopdy` toolset. If the exact
+The renderers are first-class model tools in the `bighelp` toolset. If the exact
 renderer is visible in the current tool list, call it directly. If Hermes has
 progressively disclosed plugin tools and that renderer is absent, use the
 official `tool_search`, `tool_describe`, and `tool_call` bridge to find and
@@ -23,77 +23,74 @@ wrap it in another tool, or invent a replacement.
 ### A. Inline card in the active chat
 
 Use this path when the card answers the message in the conversation currently
-open in bighelp. Call the renderer on the active conversation response path. Its
-validated result is published back to that chat and remains part of that turn.
-Do not use the notification channel just to answer the current chat. Do not
-address `loopdy:all`, a device, or a group unless the user separately asked for
-a proactive notification.
+open in bighelp. Call the renderer, then put its returned `display_markdown` in
+your reply exactly once.
+Do not use the notification channel just to answer the current chat, and don't
+schedule a job to show a card now.
 
 Example instruction for an active weather chat:
 
-> Fetch the forecast and call `loopdy_render_weather_forecast` for this response.
-> Keep the card in this active conversation; do not send a bighelp notification.
+> Fetch the forecast and call `bighelp_render_weather_forecast` for this response.
+> Put its `display_markdown` in the answer once.
 
-### B. Proactive or scheduled card in Agent Inbox/Home
+### B. Proactive or scheduled card
 
-No script or separate notification API is required. For an ordinary channel
-message or a scheduled task delivered to `loopdy`, call exactly one registered
-`loopdy_render_*` tool and use its validated returned envelope as the complete final channel-delivery payload. Return the envelope verbatim: no Markdown fence,
-introductory sentence, trailing explanation, or second prose response. Hermes'
-official platform boundary gives the bighelp adapter only that final text plus
-ordinary delivery metadata such as a cron `job_id`; it does not separately pass
-the earlier tool result. An inline renderer result does not auto-forward to
-Agent Inbox/Home. bighelp validates the delivered envelope again before storing
-or pushing a native card. Invalid or mixed content safely remains a text update.
+A scheduled job's run is its own chat. When it finishes, bighelp notifies the
+user with the start of the run's reply, and tapping the alert opens the run
+(see `skill_view("loopdy:bighelp")`). So a scheduled card works like an inline
+one: the run calls the renderer and puts the returned `display_markdown` in its
+final reply once, after one plain sentence that reads well as a notification.
+Create the job with `deliver: "local"`; bighelp's alert comes from the run
+itself.
+
+Example task instruction:
+
+> Fetch tomorrow's forecast for Lisbon. Reply with one sentence on what to
+> expect, then call `bighelp_render_weather_forecast` and add its
+> `display_markdown` once.
+
+A renderer result does not auto-forward anywhere: only the run's final reply is
+kept and notified. For something the user should find later rather than be
+alerted about, post it to the Feed with `bighelp_board` instead. Don't deliver
+cards to `loopdy`: that's the retired Link inbox, which the app no longer shows.
 
 Never script or reconstruct a renderer envelope. Call the official renderer
-and forward its exact validated return value. Do not manually rebuild JSON from
-the visual result or assume a prior inline tool call will be attached later.
-
-For a scheduled task, choose the `loopdy` delivery channel and include this in
-the task instructions:
-
-> Call `loopdy_render_summary` with the result, then make the exact returned
-> envelope your complete final response. Do not wrap it in Markdown or add prose.
-
-For an ordinary channel send, pass the exact complete envelope already returned
-by the renderer as the message. The transport shape is:
-
-```bash
-hermes send --to loopdy:all '<exact validated envelope returned by loopdy_render_*>'
-```
-
-The placeholder is not an instruction to hand-author JSON. If there is no exact
-renderer return value to send, deliver a normal text notification instead.
+and use its exact returned `display_markdown`. Do not rebuild JSON from the
+visual result or assume an earlier tool call will be attached later.
 
 For current weather or forecast requests, fetch the current data and then call
-`loopdy_render_weather_forecast` directly with the strict v2 payload below when
+`bighelp_render_weather_forecast` directly with the strict v2 payload below when
 a card would make the result easier to use. Do not stop at a prose-only forecast
 when the native weather card is relevant.
 
 Choose one renderer. The original v1 tools remain compatible:
 
-- `loopdy_render_summary` for a title and short body.
-- `loopdy_render_metrics` for up to 20 labeled scalar values.
-- `loopdy_render_list` for up to 20 short items.
-- `loopdy_render_timeline` for up to 20 ordered steps.
+- `bighelp_render_summary` for a title and short body.
+- `bighelp_render_metrics` for up to 20 labeled scalar values.
+- `bighelp_render_list` for up to 20 short items.
+- `bighelp_render_timeline` for up to 20 ordered steps.
 
 Use v2 for typed current-data and interactive cards:
 
-- `loopdy_render_weather_forecast`
-- `loopdy_render_sports_game`
-- `loopdy_render_stock_quote`
-- `loopdy_render_chart`
-- `loopdy_render_dashboard`
-- `loopdy_render_form`
+- `bighelp_render_weather_forecast`
+- `bighelp_render_sports_game`
+- `bighelp_render_stock_quote`
+- `bighelp_render_chart`
+- `bighelp_render_dashboard`
+- `bighelp_render_form`
+- `bighelp_render_checklist`
+- `bighelp_render_selection`: each chosen option's `stage_text` is put in the
+  user's message box; nothing is sent until they send it.
+- `bighelp_render_automation`: one real scheduled job with Pause, Resume or Run
+  buttons that act on it directly. Use the job's actual ID, profile and state.
 
-V2 calls use `schema: "loopdy.generative_ui"`, `version: 2`, the matching
+V2 calls use `schema: "bighelp.generative_ui"`, `version: 2`, the matching
 component, and the exact strict tool schema. Current-data cards require source
 timestamps and freshness provenance. The renderer derives `age_seconds` from
 those timestamp facts, so it may be omitted (or supplied as stale model
 metadata). Forms are bound by the host to the exact
 profile and session. After rendering a form, call
-`loopdy_await_form_response` with only its server-generated `request_id`; do
+`bighelp_await_form_response` with only its server-generated `request_id`; do
 not invent an endpoint, route, command, URL, or action target.
 
 Every v1 call uses `version: 1`, the matching `component`, and an optional short `title`. Do not add URLs, HTML, styles, routes, actions, or executable content.

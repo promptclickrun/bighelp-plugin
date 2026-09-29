@@ -13,13 +13,13 @@ import loopdy_plugin.service as service_module
 from loopdy_plugin.events import build_event
 from loopdy_plugin.provider import DeliveryError, DeliveryReceipt
 from loopdy_plugin.relay_client import RelayPushProvider
-from loopdy_plugin.service import LoopdyService, _session_reference
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.service import BighelpService, _session_reference
+from loopdy_plugin.store import BighelpStore
 
 from test_task5_round3 import CONFIG, _seed_relay
 
 
-class _TraceBarrierStore(LoopdyStore):
+class _TraceBarrierStore(BighelpStore):
     def __init__(self, path: Path, select_seen: threading.Event, release_select: threading.Event):
         self._select_seen = select_seen
         self._release_select = release_select
@@ -99,7 +99,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_recovery_wake_uses_one_earliest_timer_and_cancels_on_close(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            service = LoopdyService(LoopdyStore(Path(directory) / "loopdy.sqlite3"))
+            service = BighelpService(BighelpStore(Path(directory) / "loopdy.sqlite3"))
             created = []
 
             class FakeTimer:
@@ -129,7 +129,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_direct_live_activity_retry_attempts_become_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored", live_session_id="live", profile="default",
                 activity_id="direct-attempts", push_token="a" * 64,
@@ -148,7 +148,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_direct_end_cannot_end_activity_after_new_same_owner_request_is_inserted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored", live_session_id="live", profile="default",
                 activity_id="direct-end-request-race", push_token="a" * 64,
@@ -202,13 +202,13 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_old_direct_live_activity_send_cannot_clear_new_owner_pending_row(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored-old", live_session_id="live-old", profile="default",
                 activity_id="direct-owner-race", push_token="a" * 64,
                 token_environment="production",
             )
-            service = LoopdyService(store)
+            service = BighelpService(store)
             store.defer_live_activity_update(
                 activity_id="direct-owner-race", status="running", detail="", tool_name="",
                 active_session_count=1, delay_seconds=0, failure="temporary",
@@ -247,7 +247,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_old_direct_terminal_send_cannot_end_exact_same_owner_generation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored", live_session_id="live", profile="default",
                 activity_id="direct-same-owner", push_token="a" * 64,
@@ -265,7 +265,7 @@ class Task5Round4Tests(unittest.TestCase):
                 release.wait(timeout=3)
                 return DeliveryReceipt(delivery_id="old")
 
-            service = LoopdyService(store)
+            service = BighelpService(store)
             service._send_live_activity_update = send
             thread = threading.Thread(target=service._reconcile_live_activity_updates)
             thread.start()
@@ -292,7 +292,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_old_direct_retryable_send_cannot_defer_changed_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored-old", live_session_id="live-old", profile="default",
                 activity_id="direct-retry-owner", push_token="a" * 64,
@@ -310,7 +310,7 @@ class Task5Round4Tests(unittest.TestCase):
                 release.wait(timeout=3)
                 raise DeliveryError("temporary", retryable=True)
 
-            service = LoopdyService(store)
+            service = BighelpService(store)
             service._send_live_activity_update = send
             thread = threading.Thread(target=service._reconcile_live_activity_updates)
             thread.start()
@@ -329,7 +329,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_old_direct_retryable_send_cannot_defer_exact_same_owner_generation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.upsert_live_activity(
                 session_id="stored", live_session_id="live", profile="default",
                 activity_id="direct-retry-same-owner", push_token="a" * 64,
@@ -347,7 +347,7 @@ class Task5Round4Tests(unittest.TestCase):
                 release.wait(timeout=3)
                 raise DeliveryError("temporary", retryable=True)
 
-            service = LoopdyService(store)
+            service = BighelpService(store)
             service._send_live_activity_update = send
             thread = threading.Thread(target=service._reconcile_live_activity_updates)
             thread.start()
@@ -372,7 +372,7 @@ class Task5Round4Tests(unittest.TestCase):
 
     def test_worker_contains_one_delivery_exception_and_processes_the_next(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            service = LoopdyService(LoopdyStore(Path(directory) / "loopdy.sqlite3"))
+            service = BighelpService(BighelpStore(Path(directory) / "loopdy.sqlite3"))
             first = build_event("channel.message", correlation=("worker", "first"))
             second = build_event("channel.message", correlation=("worker", "second"))
             calls: list[str] = []

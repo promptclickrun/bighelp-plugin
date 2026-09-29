@@ -19,7 +19,7 @@ from unittest.mock import patch
 import uuid
 
 from gateway.config import PlatformConfig
-from loopdy_plugin.adapter import LoopdyAdapter
+from loopdy_plugin.adapter import BighelpAdapter
 from loopdy_plugin.link_client import LoopdyLinkClient
 from loopdy_plugin.link_contracts import parse_workspace_request, workspace_result
 from loopdy_plugin.wiki_service import WikiServiceError
@@ -37,7 +37,7 @@ class WikiIntegrationTests(unittest.TestCase):
     def setUp(self):
         from gateway.platform_registry import PlatformEntry, platform_registry
         platform_registry.register(PlatformEntry(name='loopdy', label='Loopdy',
-            adapter_factory=lambda config: LoopdyAdapter(config), check_fn=lambda: True))
+            adapter_factory=lambda config: BighelpAdapter(config), check_fn=lambda: True))
         self.temp = tempfile.TemporaryDirectory(prefix='wiki-acceptance-', dir='/tmp')
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
@@ -345,7 +345,7 @@ class WikiIntegrationTests(unittest.TestCase):
                         }), lambda _: None)
             client._socket = Socket()
             client._connected.set()
-            adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=client,
+            adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=client,
                 wiki_transport=transport,
                 workspace_controller=WorkspaceController(backend=SimpleNamespace(), wiki_transport=transport))
             request = {'version': 1, 'type': 'workspace.request', 'requestId': 'wiki-encrypted-connect-0001',

@@ -14,8 +14,8 @@ from fastapi import Request
 from loopdy_plugin import native_api, native_context, registration
 
 
-LOG = "hermes.plugins.loopdy"
-SUMMARY = "Loopdy native features advertised at startup: "
+LOG = "hermes.plugins.bighelp"
+SUMMARY = "bighelp native features advertised at startup: "
 PROCESS_FEATURES = (
     "native-context-v1", "serving-profile-v1", "native-card-templates-v1",
     "native-voice-v1", "native-device-tools-v1", "native-room-activity-v1",
@@ -269,7 +269,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
             "loopdy_plugin.direct_runtime": module("loopdy_plugin.direct_runtime", DirectSettings=Mock()),
         }))
         for name in ("production_manager", "DeviceToolBridge", "register_tools", "register_device_tools",
-                     "register_marketplace_publish_skill", "LoopdyApprovalTransport", "profile_display_name",
+                     "register_marketplace_publish_skill", "BighelpApprovalTransport", "profile_display_name",
                      "_home_target"):
             self.stack.enter_context(patch.object(registration, name))
         self.stack.enter_context(patch.object(registration, "_device_tools_supported", return_value=False))

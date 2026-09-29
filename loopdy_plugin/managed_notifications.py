@@ -63,7 +63,7 @@ _ACTIONS = {
     "responding": "Your agent is responding", "completed": "Your agent finished",
     "failed": "Your agent could not finish",
 }
-logger = logging.getLogger("hermes.plugins.loopdy.notifications")
+logger = logging.getLogger("hermes.plugins.bighelp.notifications")
 
 
 class ManagedNotificationError(ValueError):

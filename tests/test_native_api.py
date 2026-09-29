@@ -21,7 +21,7 @@ from hermes_cli.dashboard_auth.middleware import gated_auth_middleware
 from hermes_cli.dashboard_auth.registry import register_provider, unregister_global_provider
 from loopdy_plugin import native_api, native_context
 from loopdy_plugin import room_activity
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from test_loopdy_card_templates import _template
 
 
@@ -96,7 +96,7 @@ class NativeAPITests(unittest.TestCase):
         self.environment = patch.dict(os.environ, {"HERMES_HOME": str(self.home), "HOME": str(self.home)})
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        self.store = LoopdyStore(self.home / "fixture.sqlite3")
+        self.store = BighelpStore(self.home / "fixture.sqlite3")
         self.service_patch = patch("loopdy_plugin.adapter.get_service", return_value=SimpleNamespace(store=self.store))
         self.service_patch.start()
         self.addCleanup(self.service_patch.stop)

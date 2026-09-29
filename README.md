@@ -7,8 +7,10 @@ optional end-to-end encrypted notifications.
 Hermes stays in charge of agents, chats, tools, approvals and scheduled tasks. The plugin runs inside Hermes'
 own dashboard and uses its sign-in. It opens no extra ports and needs no bighelp account or public URL.
 
-> The plugin's internal name is still `loopdy`, so commands are `hermes loopdy …` and routes live under
-> `/api/plugins/loopdy/…`. Existing installs keep working.
+> Hermes still knows the plugin by its first name, `loopdy`: that's its folder, its routes under
+> `/api/plugins/loopdy/…` and the `loopdy:` prefix on its skills. Renaming those would cut off app builds already
+> on phones. Everything agents and people read says bighelp, and older names (`hermes loopdy …`, the `loopdy`
+> toolset, `LOOPDY_*` settings) keep working.
 
 ## Requirements
 
@@ -25,7 +27,7 @@ hermes plugins install promptclickrun/bighelp-plugin --enable
 ```
 
 Then restart the Hermes gateway and dashboard the way you normally do. The app can also install or update the
-plugin from its host setup screen; it installs the exact version that app build was tested with.
+plugin from its host setup screen; it installs the latest release.
 
 To install a local checkout, commit your changes first (Hermes installs from Git), then run:
 
@@ -36,13 +38,15 @@ hermes plugins install "file://$PWD" --enable
 ## Update
 
 ```bash
-hermes loopdy update            # install the latest release from main
-hermes loopdy update --restart  # …and restart the gateway once
-hermes loopdy update-status     # check the last update
+hermes bighelp update            # install the latest release
+hermes bighelp update --restart  # …and restart the gateway once
+hermes bighelp update-status     # check the last update
 ```
 
-The updater pins `main` to an exact commit, validates it, backs up the current copy and installs it with Hermes'
-own installer. Your settings stay in place. It refuses to overwrite a modified install. Self-update needs macOS
+Every merge that bumps the version publishes a [GitHub Release](https://github.com/promptclickrun/bighelp-plugin/releases)
+(`.github/workflows/release.yml`); other merges don't reach hosts. The updater looks up the latest release, pins
+its exact commit, validates it, backs up the current copy and installs it with Hermes' own installer. It never
+moves a host to an older version. Your settings stay in place. It refuses to overwrite a modified install. Self-update needs macOS
 launchd or Linux user systemd.
 
 The bighelp app shows when a host's plugin is out of date (Settings › Hosts) and can update it, restart the
@@ -56,8 +60,8 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
 | --- | --- | --- |
 | Agent board | Each agent's Feed, Ideas, Goals, Activity and approval history, next to its chat. Agents post with the `bighelp_board` tool. | [Agent board](docs/AGENT_BOARD.md) |
 | Apps tab | Files the agent recently made or changed, and the pictures and videos it delivered. | [Artifacts and media](docs/APPS_ARTIFACTS_AND_MEDIA.md) |
-| Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, via the `loopdy_render_*` tools. Card templates can be saved and reused. | [Cards guide](docs/CARDS.md) |
-| Reactions | Agents can react to your messages with an emoji (`loopdy_react_to_message`). | |
+| Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, via the `bighelp_render_*` tools. Card templates can be saved and reused. | [Cards guide](docs/CARDS.md) |
+| Reactions | Agents can react to your messages with an emoji (`bighelp_react_to_message`). | |
 | Secure input | An agent can ask for a password, API key or other secret with `bighelp_request_secure_input`. bighelp shows a masked pop-up; Hermes saves what you type to the agent's `.env` and the agent can use it only as `$NAME` in commands. The AI never sees the value. Hermes' own AI provider keys are excluded. | |
 | Agent templates | Save an agent's setup as a template and start new agents from it. | |
 | iPhone tools | `iphone_health` (read-only), `iphone_calendar` and `iphone_reminders`. Each is off until you allow it for a host on your phone. They only work while bighelp is open and in the foreground. | [iPhone tools](docs/IPHONE_DEVICE_TOOLS.md) |
@@ -77,16 +81,32 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
   Never substitute a different tool.
 - **Inline card in the active chat:** return the card as part of the current reply.
   Do not use the notification channel just to answer the current chat.
-- **Proactive or scheduled card** (shown later in the app): target the `loopdy` platform and make the exact
-  result the card tool returned the complete final message, with no extra text. Hermes does not auto-forward an
-  earlier card to a later channel send. Never script or reconstruct a card.
+- **Proactive or scheduled card** (shown later in the app): a scheduled job (with `deliver: "local"`) calls the
+  card tool and puts its `display_markdown` in the run's final reply, after one plain sentence. bighelp notifies
+  the user with that reply. A card tool result does not auto-forward to a later message.
+  Never script or reconstruct a card.
 - Cards are display-only. Everything shown is embedded in the card, and opening one makes no network request.
 
-The `skills/` folder ships read-only guidance for agents, for example `skill_view("loopdy:generative-ui")`:
+### What agents are told
 
+Chats started in bighelp reach Hermes with session source `bighelp` (app builds from 2.3.0 build 33). For those
+chats the plugin adds a short brief to the agent's instructions: it's in the bighelp app, what the chat shows,
+which bighelp tools to use, and how scheduled jobs reach the phone. Other chats get one line pointing to the
+`bighelp` skill; scheduled runs and helpers get nothing.
+
+The `skills/` folder ships read-only guidance for agents, opened with `skill_view("loopdy:<name>")`:
+
+- `bighelp`: start here. Cards, forms, Feed, Ideas and Goals, reminders and notifications, secure input, iPhone
+  tools.
 - `generative-ui`: when and how to use each card tool.
 - `bighelp-feed-and-ideas`: posting to the agent board only when the user asks.
 - `custom-theme-authoring`: making themes the app can import.
+- `bighelp-marketplace-publish`: preparing a theme, card template or skill for review.
+
+Since 3.0.0 the agent tools are named `bighelp_*` and live in the `bighelp` toolset (they were `loopdy_*` in
+`loopdy`). Saved tool settings and scheduled jobs that name the `loopdy` toolset still get these tools. Card
+tools take `schema: "bighelp.generative_ui"` or `"bighelp.card"`; the cards the app receives keep their original
+format, so older app builds still show them.
 
 ## Notifications (optional)
 
@@ -115,18 +135,20 @@ deny) and never invents one. No configuration is needed.
 ## Commands
 
 ```text
-hermes loopdy status                     Plugin and notification status (never prints keys or tokens)
-hermes loopdy update [--restart]         Update from main
-hermes loopdy update-status              Last update result
-hermes loopdy files grant|revoke|roots   Manage read-only workspace folders
-hermes loopdy files list|read|status|diff
-hermes loopdy wiki …                     Host-side wiki grants
+hermes bighelp status                     Plugin and notification status (never prints keys or tokens)
+hermes bighelp update [--restart]         Install the latest release
+hermes bighelp update-status              Last update result
+hermes bighelp files grant|revoke|roots   Manage read-only workspace folders
+hermes bighelp files list|read|status|diff
+hermes bighelp wiki …                     Host-side wiki grants
 ```
+
+`hermes loopdy …` still works for scripts written before 3.0.0.
 
 ## Legacy code
 
 Earlier versions paired hosts through a bighelp Link account and sent notifications through a relay or direct
-APNs. The app no longer uses any of that. The related code, settings and commands (`hermes loopdy link …`,
+APNs. The app no longer uses any of that. The related code, settings and commands (`hermes bighelp link …`,
 `provider`, `configure-apns`, `direct …`) remain only so existing data and compatibility tests keep working.
 Don't set them up on new hosts.
 

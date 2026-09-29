@@ -13,11 +13,11 @@ from unittest.mock import patch
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.delivery import DeliveryRouter, DeliveryTarget
 from gateway.platform_registry import PlatformEntry, platform_registry
-from loopdy_plugin.adapter import LoopdyAdapter
+from loopdy_plugin.adapter import BighelpAdapter
 from loopdy_plugin.link_contracts import WorkspaceRequest, workspace_result
 from loopdy_plugin.link_crypto import AccountCipher
 from loopdy_plugin.loopdy_cards import render_card
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.workspace_control import HermesWorkspaceBackend
 
 
@@ -28,7 +28,7 @@ class CronCardTransportTests(unittest.TestCase):
                                                 check_fn=lambda: True))
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
-        self.store = LoopdyStore(Path(self.folder.name) / "events.sqlite3")
+        self.store = BighelpStore(Path(self.folder.name) / "events.sqlite3")
         self.events = []
 
         def deliver(event, *, target):
@@ -38,7 +38,7 @@ class CronCardTransportTests(unittest.TestCase):
 
         self.service = SimpleNamespace(store=self.store, deliver=deliver)
         with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None):
-            self.adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=self.service,
+            self.adapter = BighelpAdapter(PlatformConfig(enabled=True), service=self.service,
                                          workspace_controller=SimpleNamespace())
         self.router = DeliveryRouter(GatewayConfig(), {Platform("loopdy"): self.adapter})
         self.router.output_dir = Path(self.folder.name)

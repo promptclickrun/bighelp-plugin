@@ -1,11 +1,11 @@
 {
   "name": "loopdy",
-  "label": "Loopdy",
-  "description": "Authenticated local push providers, device settings, event inbox, and approvals for Loopdy.",
+  "label": "bighelp",
+  "description": "The bighelp app's routes on this Hermes host: native features, notifications and approvals.",
   "icon": "MessageSquare",
   "version": "2.8.0",
   "tab": {
-    "path": "/loopdy",
+    "path": "/bighelp",
     "position": "end",
     "hidden": true
   },

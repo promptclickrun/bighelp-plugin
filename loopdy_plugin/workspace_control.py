@@ -1,4 +1,4 @@
-"""Explicit Loopdy Link workspace controls backed by Hermes-owned services.
+"""Explicit bighelp Link workspace controls backed by Hermes-owned services.
 
 This module deliberately exposes a finite operation table.  It is not a
 generic RPC, URL fetcher, command runner, or gateway credential bridge.
@@ -24,6 +24,7 @@ import zipfile
 from collections import OrderedDict
 from typing import Any
 
+from . import naming
 from .attachments import AttachmentStore
 from .generative_ui import GenerativeUIError, validate_rendered_envelope
 from .generated_media import resolve_generated_media
@@ -77,7 +78,7 @@ class _ProfileCatalogUnavailable(WorkspaceControlError):
 
 _PROFILE_CAPABILITY_MESSAGE = (
     "This Hermes gateway cannot list agent profiles. "
-    "Update Hermes, restart the gateway, then reconnect Loopdy."
+    "Update Hermes, restart the gateway, then reconnect bighelp."
 )
 
 
@@ -725,7 +726,7 @@ class HermesWorkspaceBackend:
                 )
             except (ImportError, AttributeError) as exc:
                 raise WorkspaceControlError(
-                    "Update Hermes and the Loopdy host plugin to manage this capability.",
+                    "Update Hermes and the bighelp host plugin to manage this capability.",
                     code="capability_unsupported",
                 ) from exc
             except Exception as exc:
@@ -1364,7 +1365,7 @@ class HermesWorkspaceBackend:
                 chat_id if session_source == "loopdy" and chat_id else stored_id
             )
             # A model/reset boundary can create a second durable Hermes row
-            # for the same Loopdy chat id. They are distinct transcripts and
+            # for the same bighelp chat id. They are distinct transcripts and
             # must both remain resumable. The catalog is ordered newest-first,
             # so the current row keeps the stable chat alias and older rows use
             # their exact durable id. Never let an alias occupy another row's
@@ -1501,7 +1502,7 @@ class HermesWorkspaceBackend:
             if callable(delete_durations):
                 delete_durations(target_id)
         except Exception as exc:
-            logger.warning("Loopdy turn duration cleanup failed (%s)", type(exc).__name__)
+            logger.warning("bighelp turn duration cleanup failed (%s)", type(exc).__name__)
         return {
             "storedId": stored_id,
             "agentId": agent_id,
@@ -1671,7 +1672,7 @@ class HermesWorkspaceBackend:
                 "Hermes session history",
             )
         except Exception as exc:
-            # Loopdy shows chat_id as its stable visible coordinate, while
+            # bighelp shows chat_id as its stable visible coordinate, while
             # Hermes' history endpoint resolves the stored session id. Use
             # the official, profile-scoped catalog to bridge that alias on
             # reopen; never infer an id from transcript text or a prefix.
@@ -2142,8 +2143,8 @@ class HermesWorkspaceBackend:
             raise WorkspaceControlError("Clarification response is invalid")
 
         event = await asyncio.to_thread(self.service.store.get_event, event_id)
-        source = _object(event, "Loopdy clarification event")
-        detail = _object(source.get("detail"), "Loopdy clarification detail")
+        source = _object(event, "bighelp clarification event")
+        detail = _object(source.get("detail"), "bighelp clarification detail")
         if (
             source.get("dismissed_at") is not None
             or source.get("type") != "attention.required"
@@ -2224,7 +2225,7 @@ class HermesWorkspaceBackend:
             page_limit = min(200, maximum - offset)
             page = self.service.store.list_events(limit=page_limit, offset=offset)
             if not isinstance(page, list) or len(page) > 200:
-                raise WorkspaceControlError("Loopdy event catalog is invalid")
+                raise WorkspaceControlError("bighelp event catalog is invalid")
             events.extend(page)
             if len(page) < page_limit:
                 break
@@ -2234,7 +2235,7 @@ class HermesWorkspaceBackend:
     def _dashboard_events(self) -> list[dict[str, Any]]:
         """Return a recent, transport-sized event projection source.
 
-        A dashboard response is sent in one encrypted Loopdy Link frame. A
+        A dashboard response is sent in one encrypted bighelp Link frame. A
         full event catalog can exceed that frame even though each individual
         event is valid, so keep this summary bounded and let session history
         provide the complete detail path.
@@ -2298,7 +2299,7 @@ class HermesWorkspaceBackend:
     ) -> list[dict[str, Any]]:
         """Resolve completion metadata without dropping durable REST events."""
         if not isinstance(rows, list) or len(rows) > _DASHBOARD_EVENT_LIMIT:
-            raise WorkspaceControlError("Loopdy event catalog is invalid")
+            raise WorkspaceControlError("bighelp event catalog is invalid")
         catalogs: dict[str, dict[str, str] | None] = {}
         for row in rows:
             if not isinstance(row, dict) or row.get("type") not in _COMPLETION_EVENT_TYPES:
@@ -2762,7 +2763,7 @@ class HermesWorkspaceBackend:
             return await get_skill_content(name=skill_id, profile=agent_id)
         except Exception as exc:
             raise WorkspaceControlError(
-                "Skill could not be loaded. Refresh the catalog; if the problem persists, update Hermes and the Loopdy host plugin."
+                "Skill could not be loaded. Refresh the catalog; if the problem persists, update Hermes and the bighelp host plugin."
             ) from exc
 
     async def _skill_create(
@@ -3327,7 +3328,7 @@ def _project_git_policy(workspace_id: str, project_root: str) -> dict[str, Any]:
         "branches": [],
         "mutations_enabled": False,
     }
-    raw = os.getenv("LOOPDY_WORKSPACE_GIT_CONFIG", "").strip()
+    raw = (naming.env("WORKSPACE_GIT_CONFIG") or "").strip()
     if not raw:
         return default
     try:
@@ -4144,7 +4145,7 @@ _EVENT_DETAIL_KEYS = frozenset(
 
 
 _DASHBOARD_EVENT_LIMIT = 200
-# Keep enough headroom for account encryption and the Loopdy Link frame
+# Keep enough headroom for account encryption and the bighelp Link frame
 # envelope. The dashboard is a summary surface; session history remains the
 # source for complete content.
 _DASHBOARD_RESPONSE_MAX_BYTES = 160_000
@@ -4159,7 +4160,7 @@ def _event_projection(
     detail_maximum: int = 4_096,
     truncate_detail: bool = False,
 ) -> dict[str, Any]:
-    source = _object(value, "Loopdy event")
+    source = _object(value, "bighelp event")
     detail_source = _optional_object(source.get("detail"))
     detail: dict[str, Any] = {}
     for key in sorted(_EVENT_DETAIL_KEYS):
@@ -4217,7 +4218,7 @@ def _event_projection(
 
 
 def _clarify_interaction_projection(value: Any) -> dict[str, Any]:
-    source = _object(value, "Loopdy interaction")
+    source = _object(value, "bighelp interaction")
     if set(source) != {
         "schemaVersion",
         "type",
@@ -4226,21 +4227,21 @@ def _clarify_interaction_projection(value: Any) -> dict[str, Any]:
         "allowsCustomResponse",
         "questions",
     }:
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     if source.get("schemaVersion") != 1 or source.get("type") != "clarify":
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     request_id = _coordinate(source.get("requestId"), 180)
     expires_at = source.get("expiresAt")
     if expires_at is not None:
         expires_at = _timestamp(expires_at)
     if source.get("allowsCustomResponse") is not True:
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     raw_questions = source.get("questions")
     if not isinstance(raw_questions, list) or not 1 <= len(raw_questions) <= 5:
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     questions = []
     for index, raw_question in enumerate(raw_questions):
-        question = _object(raw_question, "Loopdy clarification question")
+        question = _object(raw_question, "bighelp clarification question")
         if set(question) != {
             "id",
             "question",
@@ -4248,13 +4249,13 @@ def _clarify_interaction_projection(value: Any) -> dict[str, Any]:
             "multiSelect",
             "allowsCustomResponse",
         }:
-            raise WorkspaceControlError("Loopdy interaction is invalid")
+            raise WorkspaceControlError("bighelp interaction is invalid")
         choices = question.get("choices")
         if not isinstance(choices, list) or len(choices) > 4:
-            raise WorkspaceControlError("Loopdy interaction is invalid")
+            raise WorkspaceControlError("bighelp interaction is invalid")
         projected_choices = [_text(choice, 500) for choice in choices]
         if any(not choice for choice in projected_choices):
-            raise WorkspaceControlError("Loopdy interaction is invalid")
+            raise WorkspaceControlError("bighelp interaction is invalid")
         projected = {
             "id": _coordinate(question.get("id") or f"q{index}", 80),
             "question": _text(question.get("question"), 2_000),
@@ -4263,7 +4264,7 @@ def _clarify_interaction_projection(value: Any) -> dict[str, Any]:
             "allowsCustomResponse": question.get("allowsCustomResponse") is True,
         }
         if not projected["question"] or not projected["allowsCustomResponse"]:
-            raise WorkspaceControlError("Loopdy interaction is invalid")
+            raise WorkspaceControlError("bighelp interaction is invalid")
         questions.append(projected)
     return {
         "schemaVersion": 1,
@@ -4276,7 +4277,7 @@ def _clarify_interaction_projection(value: Any) -> dict[str, Any]:
 
 
 def _approval_interaction_projection(value: Any) -> dict[str, Any]:
-    source = _object(value, "Loopdy interaction")
+    source = _object(value, "bighelp interaction")
     if set(source) != {
         "schemaVersion",
         "type",
@@ -4284,14 +4285,14 @@ def _approval_interaction_projection(value: Any) -> dict[str, Any]:
         "expiresAt",
         "allowedChoices",
     }:
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     if source.get("schemaVersion") != 1 or source.get("type") != "approval":
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     choices = _coordinate_list(
         source.get("allowedChoices"), maximum=4, item_maximum=16
     )
     if not set(choices).issubset({"once", "session", "always", "deny"}):
-        raise WorkspaceControlError("Loopdy interaction is invalid")
+        raise WorkspaceControlError("bighelp interaction is invalid")
     return {
         "schemaVersion": 1,
         "type": "approval",
@@ -4302,12 +4303,12 @@ def _approval_interaction_projection(value: Any) -> dict[str, Any]:
 
 
 def _interaction_projection(value: Any) -> dict[str, Any]:
-    source = _object(value, "Loopdy interaction")
+    source = _object(value, "bighelp interaction")
     if source.get("type") == "clarify":
         return _clarify_interaction_projection(source)
     if source.get("type") == "approval":
         return _approval_interaction_projection(source)
-    raise WorkspaceControlError("Loopdy interaction is invalid")
+    raise WorkspaceControlError("bighelp interaction is invalid")
 
 
 def _event_projection_v2(
@@ -4321,15 +4322,15 @@ def _event_projection_v2(
         detail_maximum=detail_maximum,
         truncate_detail=truncate_detail,
     )
-    source = _object(value, "Loopdy event")
+    source = _object(value, "bighelp event")
     if source.get("type") in _COMPLETION_EVENT_TYPES:
         projected["taskId"] = _optional_coordinate(
             source.get("task_id"), 180
         ) or _coordinate(source.get("job_id"), 180)
-        detail = _object(projected["detail"], "Loopdy event detail")
+        detail = _object(projected["detail"], "bighelp event detail")
         status = _optional_object(source.get("detail")).get("status")
         if status not in {"completed", "failed"}:
-            raise WorkspaceControlError("Loopdy completion status is invalid")
+            raise WorkspaceControlError("bighelp completion status is invalid")
         detail["status"] = status
     return projected
 
@@ -4384,7 +4385,7 @@ def _final_assistant_result(value: dict[str, Any]) -> str:
 
 
 def _approval_projection(value: Any, *, now: int) -> dict[str, Any]:
-    source = _object(value, "Loopdy approval")
+    source = _object(value, "bighelp approval")
     status = _coordinate(source.get("status"), 32)
     expires_at = _timestamp(source.get("expires_at"))
     choices = _coordinate_list(
@@ -4491,20 +4492,20 @@ class WorkspaceController:
                 raise WorkspaceControlError("Wiki request could not be completed", code="WIKI_UNAVAILABLE") from None
         handler_name = self._HANDLERS.get(request.operation)
         if handler_name is None or request.operation not in WORKSPACE_OPERATIONS:
-            raise WorkspaceControlError("Unsupported Loopdy workspace operation")
+            raise WorkspaceControlError("Unsupported bighelp workspace operation")
         handler = getattr(self.backend, handler_name, None)
         if not callable(handler):
-            raise WorkspaceControlError("Loopdy workspace operation is unavailable")
+            raise WorkspaceControlError("bighelp workspace operation is unavailable")
         result = handler(dict(request.payload))
         if inspect.isawaitable(result):
             result = await result
         if not isinstance(result, dict):
-            raise WorkspaceControlError("Loopdy workspace result is invalid")
+            raise WorkspaceControlError("bighelp workspace result is invalid")
         return result
 
 
 if frozenset(WorkspaceController._HANDLERS) != WORKSPACE_OPERATIONS:
-    raise RuntimeError("Loopdy workspace operations and controller handlers diverged")
+    raise RuntimeError("bighelp workspace operations and controller handlers diverged")
 
 
 __all__ = [

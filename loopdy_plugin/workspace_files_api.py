@@ -1,4 +1,4 @@
-"""Authenticated read-only workspace Files routes for the Loopdy plugin."""
+"""Authenticated read-only workspace Files routes for the bighelp plugin."""
 
 from __future__ import annotations
 

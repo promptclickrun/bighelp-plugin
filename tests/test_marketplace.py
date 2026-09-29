@@ -21,7 +21,7 @@ from loopdy_plugin.marketplace import (
     MARKETPLACE_SKILL_CAPABILITY,
     parse_skill_package,
 )
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.loopdy_cards import canonical_json as canonical_card_json
 
 
@@ -188,7 +188,7 @@ class MarketplacePublisherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             publisher = MarketplacePublisher(
                 agent_id="research",
-                store=LoopdyStore(Path(directory) / "loopdy.sqlite3"),
+                store=BighelpStore(Path(directory) / "loopdy.sqlite3"),
                 attachment_store=attachment_store,
                 gateway_client=None,
             )
@@ -231,7 +231,7 @@ class MarketplacePublisherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             publisher = MarketplacePublisher(
                 agent_id="research",
-                store=LoopdyStore(Path(directory) / "loopdy.sqlite3"),
+                store=BighelpStore(Path(directory) / "loopdy.sqlite3"),
                 attachment_store=attachment_store,
                 gateway_client=None,
             )
@@ -248,7 +248,7 @@ class MarketplacePublisherTests(unittest.TestCase):
             root = Path(directory)
             sentinel = root / "private-skill"
             sentinel.write_text("must not be read", encoding="utf-8")
-            store = LoopdyStore(root / "loopdy.sqlite3")
+            store = BighelpStore(root / "loopdy.sqlite3")
             store.install_card_template(
                 profile="research", template=_card_template(secret=True)
             )
@@ -279,7 +279,7 @@ class MarketplacePublisherTests(unittest.TestCase):
 
     def test_invalid_publication_metadata_returns_findings_without_upload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.install_card_template(profile="research", template=_card_template())
             client = _DraftClient()
             publisher = MarketplacePublisher(
@@ -313,7 +313,7 @@ class MarketplacePublisherTests(unittest.TestCase):
             client = _DraftClient()
             publisher = MarketplacePublisher(
                 agent_id="research_publish",
-                store=LoopdyStore(Path(directory) / "loopdy.sqlite3"),
+                store=BighelpStore(Path(directory) / "loopdy.sqlite3"),
                 attachment_store=None,
                 gateway_client=client,
             )
@@ -336,7 +336,7 @@ class MarketplacePublisherTests(unittest.TestCase):
 
     def test_validate_only_packages_selected_card_without_any_gateway_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.install_card_template(profile="research", template=_card_template())
             client = _DraftClient()
             publisher = MarketplacePublisher(
@@ -372,7 +372,7 @@ class MarketplacePublisherTests(unittest.TestCase):
     def test_validate_only_accepts_the_full_card_identifier_bound(self) -> None:
         identifier = "c" * 128
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.install_card_template(
                 profile="research",
                 template=_card_template(identifier=identifier),
@@ -395,7 +395,7 @@ class MarketplacePublisherTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.install_card_template(profile="research", template=_card_template())
             client = _DraftClient()
             publisher = MarketplacePublisher(
@@ -414,7 +414,7 @@ class MarketplacePublisherTests(unittest.TestCase):
             self.assertEqual(result["validationState"], "valid")
             self.assertEqual(result["findings"], [])
             self.assertEqual(
-                result["reviewDestination"], "Loopdy Marketplace > My Uploads"
+                result["reviewDestination"], "bighelp Marketplace > My Uploads"
             )
             self.assertNotIn("published", result)
             self.assertEqual([call[0] for call in client.calls], ["create", "upload", "get"])
@@ -871,7 +871,7 @@ class MarketplaceSkillInstallTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             client = _ReleaseClient(package)
             hub = _HubClient()
             installer = MarketplaceSkillInstaller(
@@ -931,7 +931,7 @@ class MarketplaceSkillInstallTests(unittest.TestCase):
     def test_status_without_receipt_omits_release_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             installer = MarketplaceSkillInstaller(
-                store=LoopdyStore(Path(directory) / "loopdy.sqlite3"),
+                store=BighelpStore(Path(directory) / "loopdy.sqlite3"),
                 release_client=_ReleaseClient(_skill_package()),
                 hub_client=_HubClient(),
                 marketplace_base_url="https://link.example.test",
@@ -974,7 +974,7 @@ class MarketplaceSkillInstallTests(unittest.TestCase):
             "A skill with this name already exists; it was not replaced",
         ):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
-                store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+                store = BighelpStore(Path(directory) / "loopdy.sqlite3")
                 installer = MarketplaceSkillInstaller(
                     store=store,
                     release_client=_ReleaseClient(package),

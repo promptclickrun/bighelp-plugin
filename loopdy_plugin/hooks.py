@@ -1,4 +1,4 @@
-"""Hermes lifecycle hook normalization for Loopdy notifications."""
+"""Hermes lifecycle hook normalization for bighelp notifications."""
 
 from __future__ import annotations
 
@@ -6,19 +6,19 @@ import re
 import unicodedata
 from typing import Any
 
-from .events import LoopdyEvent, build_event
+from .events import BighelpEvent, build_event
 from .sensitive import contains_sensitive_credential
 
 
 _CRON_SESSION = re.compile(r"^cron_(.+)_\d{8}_\d{6}$")
 
 
-def normalize_hook(hook: str, *, profile: str, **payload: Any) -> LoopdyEvent | None:
+def normalize_hook(hook: str, *, profile: str, **payload: Any) -> BighelpEvent | None:
     profile = _text(payload.get("profile_name"), 80) or profile
 
     if hook == "pre_tool_call":
         # Hermes creates the actionable clarify_id later, inside the gateway
-        # callback. LoopdyAdapter.send_clarify owns the durable attention event
+        # callback. BighelpAdapter.send_clarify owns the durable attention event
         # so Home never receives a duplicate card bound to the tool_call_id.
         return None
 

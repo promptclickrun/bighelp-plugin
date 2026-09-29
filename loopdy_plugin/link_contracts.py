@@ -1,4 +1,4 @@
-"""Strict, surface-neutral Loopdy Link wire contracts."""
+"""Strict, surface-neutral bighelp Link wire contracts."""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ HEALTH_TYPES = (
     "body_fat_percentage",
     "workout",
 )
-PLUGIN_VERSION = "2.19.0"
+PLUGIN_VERSION = "3.0.0"
 AVAILABLE_WIKI_OPERATIONS = available_wiki_operations()
 GROUPS_OPERATIONS = frozenset(
     {
@@ -492,11 +492,11 @@ class RelayReady:
 
 def parse_encrypted_frame(encoded: str) -> EncryptedFrame:
     if not isinstance(encoded, str) or len(encoded) > MAX_ENCRYPTED_FRAME_CHARACTERS:
-        raise ValueError("Loopdy Link frame is invalid")
+        raise ValueError("bighelp Link frame is invalid")
     try:
         value = json.loads(encoded)
     except (TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("Loopdy Link frame is invalid") from exc
+        raise ValueError("bighelp Link frame is invalid") from exc
     if (
         not isinstance(value, dict)
         or set(value) - {"targetDeviceId", "deliveryClass"} != {
@@ -504,10 +504,10 @@ def parse_encrypted_frame(encoded: str) -> EncryptedFrame:
         or value.get("version") != 1
         or value.get("type") != "frame"
     ):
-        raise ValueError("Loopdy Link frame is invalid")
+        raise ValueError("bighelp Link frame is invalid")
     delivery_class = value.get("deliveryClass")
     if "deliveryClass" in value and delivery_class != "presentation":
-        raise ValueError("Loopdy Link delivery class is invalid")
+        raise ValueError("bighelp Link delivery class is invalid")
     target_device_id = value.get("targetDeviceId")
     if target_device_id is not None:
         target_device_id = _opaque(target_device_id, "targetDeviceId", 1, 96)
@@ -575,7 +575,7 @@ def parse_device_tool_request(value: Any) -> dict[str, Any]:
         or value.get("version") != 1
         or value.get("type") != "device.tool.request"
     ):
-        raise ValueError("Loopdy Link device tool request is invalid")
+        raise ValueError("bighelp Link device tool request is invalid")
     request_id = _opaque(value.get("requestId"), "requestId", 16, 128)
     device_id = _opaque(value.get("deviceId"), "deviceId", 1, 96)
     host_id = _opaque(value.get("hostId"), "hostId", 1, 96)
@@ -585,14 +585,14 @@ def parse_device_tool_request(value: Any) -> dict[str, Any]:
     turn_id = _device_tool_turn_id(value.get("turnId"))
     operation = value.get("operation")
     if not isinstance(operation, str) or operation not in DEVICE_TOOL_OPERATIONS:
-        raise ValueError("Loopdy Link device tool operation is invalid")
+        raise ValueError("bighelp Link device tool operation is invalid")
     arguments = _device_tool_arguments(operation, value.get("arguments"))
     if _json_size(arguments) > MAX_DEVICE_TOOL_ARGUMENT_BYTES:
-        raise ValueError("Loopdy Link device tool arguments are too large")
+        raise ValueError("bighelp Link device tool arguments are too large")
     sent_at = _positive(value.get("sentAt"), "sentAt")
     expires_at = _positive(value.get("expiresAt"), "expiresAt")
     if not 20 <= expires_at - sent_at <= 60:
-        raise ValueError("Loopdy Link device tool expiry is invalid")
+        raise ValueError("bighelp Link device tool expiry is invalid")
     result = dict(value)
     result.update(
         requestId=request_id,
@@ -608,7 +608,7 @@ def parse_device_tool_request(value: Any) -> dict[str, Any]:
         expiresAt=expires_at,
     )
     if _json_size(result) > MAX_DEVICE_TOOL_PAYLOAD_BYTES:
-        raise ValueError("Loopdy Link device tool request is too large")
+        raise ValueError("bighelp Link device tool request is too large")
     return result
 
 
@@ -619,7 +619,7 @@ def device_tool_result(
     request = parse_device_tool_request(request)
     result_sent_at = _positive(sent_at, "sentAt")
     if result_sent_at < request["sentAt"]:
-        raise ValueError("Loopdy Link device tool result timestamp is invalid")
+        raise ValueError("bighelp Link device tool result timestamp is invalid")
     result = {
         "version": 1,
         "type": "device.tool.result",
@@ -651,18 +651,18 @@ def parse_device_tool_result(
         "sessionId", "agentId", "turnId", "operation", "status", "payload", "sentAt",
     }
     if not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(required | {"code"}):
-        raise ValueError("Loopdy Link device tool result is invalid")
+        raise ValueError("bighelp Link device tool result is invalid")
     if type(value.get("version")) is not int or value.get("version") != 1 or value.get("type") != "device.tool.result":
-        raise ValueError("Loopdy Link device tool result is invalid")
+        raise ValueError("bighelp Link device tool result is invalid")
     device_id = _opaque(value.get("deviceId"), "deviceId", 1, 96)
     if sender_device_id is not None and device_id != sender_device_id:
-        raise ValueError("Loopdy Link device tool result sender is invalid")
+        raise ValueError("bighelp Link device tool result sender is invalid")
     if sender_epoch is not None and value.get("authorizationEpoch") != sender_epoch:
-        raise ValueError("Loopdy Link device tool result epoch is invalid")
+        raise ValueError("bighelp Link device tool result epoch is invalid")
     if value.get("status") not in {"completed", "failed"}:
-        raise ValueError("Loopdy Link device tool result status is invalid")
+        raise ValueError("bighelp Link device tool result status is invalid")
     if not isinstance(value.get("payload"), dict):
-        raise ValueError("Loopdy Link device tool result payload is invalid")
+        raise ValueError("bighelp Link device tool result payload is invalid")
     payload = _device_tool_json(value["payload"])
     code = value.get("code")
     if code is not None:
@@ -685,7 +685,7 @@ def parse_device_tool_result(
     else:
         result["code"] = code
     if _json_size(result) > MAX_DEVICE_TOOL_PAYLOAD_BYTES:
-        raise ValueError("Loopdy Link device tool result is too large")
+        raise ValueError("bighelp Link device tool result is too large")
     return result
 
 
@@ -722,12 +722,12 @@ def parse_device_tool_status(
         or value.get("version") != 1
         or value.get("type") != "device.tools.status"
     ):
-        raise ValueError("Loopdy Link device tool status is invalid")
+        raise ValueError("bighelp Link device tool status is invalid")
     device_id = _opaque(value.get("deviceId"), "deviceId", 1, 96)
     if sender_device_id is not None and device_id != sender_device_id:
-        raise ValueError("Loopdy Link device tool status sender is invalid")
+        raise ValueError("bighelp Link device tool status sender is invalid")
     if sender_epoch is not None and value.get("authorizationEpoch") != sender_epoch:
-        raise ValueError("Loopdy Link device tool status epoch is invalid")
+        raise ValueError("bighelp Link device tool status epoch is invalid")
     enabled = value.get("enabled")
     if (
         not isinstance(enabled, list) or len(enabled) > 3
@@ -735,7 +735,7 @@ def parse_device_tool_status(
         or len(set(enabled)) != len(enabled)
         or not isinstance(value.get("available"), bool)
     ):
-        raise ValueError("Loopdy Link device tool status is invalid")
+        raise ValueError("bighelp Link device tool status is invalid")
     return {
         **value,
         "deviceId": device_id,
@@ -753,10 +753,10 @@ def parse_workspace_request(value: dict[str, Any]) -> WorkspaceRequest:
         or value.get("version") != 1
         or value.get("type") != "workspace.request"
     ):
-        raise ValueError("Loopdy Link workspace request is invalid")
+        raise ValueError("bighelp Link workspace request is invalid")
     operation = value.get("operation")
     if not isinstance(operation, str) or operation not in WORKSPACE_OPERATIONS | LIVE_VOICE_OPERATIONS:
-        raise ValueError("Loopdy Link workspace operation is invalid")
+        raise ValueError("bighelp Link workspace operation is invalid")
     groups_result_version = (
         validate_result_version(value["groupsResultVersion"], operation)
         if "groupsResultVersion" in value else None
@@ -774,7 +774,7 @@ def parse_workspace_request(value: dict[str, Any]) -> WorkspaceRequest:
     else:
         payload = _workspace_json(value.get("payload"), depth=0)
     if not isinstance(payload, dict):
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     return WorkspaceRequest(
         request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
         operation=operation,
@@ -786,20 +786,20 @@ def parse_workspace_request(value: dict[str, Any]) -> WorkspaceRequest:
 
 def parse_user_message(value: dict[str, Any]) -> UserMessage:
     if not isinstance(value, dict) or value.get("version") != 1 or value.get("type") != "user.message":
-        raise ValueError("Loopdy Link user message is invalid")
+        raise ValueError("bighelp Link user message is invalid")
     raw_attachments = value.get("attachments", [])
     if not isinstance(raw_attachments, list) or len(raw_attachments) > 10:
-        raise ValueError("Loopdy Link user message attachments are invalid")
+        raise ValueError("bighelp Link user message attachments are invalid")
     attachments = tuple(_attachment_reference(item) for item in raw_attachments)
     if sum(item.total_bytes for item in attachments) > MAX_MESSAGE_ATTACHMENT_BYTES:
-        raise ValueError("Loopdy Link user message attachments are invalid")
+        raise ValueError("bighelp Link user message attachments are invalid")
     behavior = value.get("behavior")
     if behavior is not None and (
         not isinstance(behavior, str)
         or isinstance(behavior, bool)
         or behavior not in {"steer", "queue", "interrupt"}
     ):
-        raise ValueError("Loopdy Link user message behavior is invalid")
+        raise ValueError("bighelp Link user message behavior is invalid")
     return UserMessage(
         message_id=_opaque(value.get("messageId"), "messageId", 16, 128),
         session_id=_session_coordinate(value.get("sessionId")),
@@ -837,17 +837,17 @@ def parse_attachment_chunk(value: dict[str, Any]) -> AttachmentChunk:
         or value.get("version") != 1
         or value.get("type") != "attachment.chunk"
     ):
-        raise ValueError("Loopdy Link attachment chunk is invalid")
+        raise ValueError("bighelp Link attachment chunk is invalid")
     reference = _attachment_reference(value)
     index = _nonnegative(value.get("index"), "index")
     count = _positive(value.get("count"), "count")
     if count > MAX_ATTACHMENT_CHUNKS or index >= count:
-        raise ValueError("Loopdy Link attachment chunk coordinate is invalid")
+        raise ValueError("bighelp Link attachment chunk coordinate is invalid")
     data = _decode_b64url(_opaque(value.get("data"), "data", 1, 180_000))
     if not data or len(data) > MAX_ATTACHMENT_CHUNK_BYTES:
-        raise ValueError("Loopdy Link attachment chunk data is invalid")
+        raise ValueError("bighelp Link attachment chunk data is invalid")
     if index < count - 1 and len(data) != MAX_ATTACHMENT_CHUNK_BYTES:
-        raise ValueError("Loopdy Link attachment chunk size is invalid")
+        raise ValueError("bighelp Link attachment chunk size is invalid")
     return AttachmentChunk(
         upload_id=_opaque(value.get("uploadId"), "uploadId", 16, 128),
         session_id=_session_coordinate(value.get("sessionId")),
@@ -862,7 +862,7 @@ def parse_attachment_chunk(value: dict[str, Any]) -> AttachmentChunk:
 
 def _attachment_reference(value: Any) -> AttachmentReference:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link attachment reference is invalid")
+        raise ValueError("bighelp Link attachment reference is invalid")
     file_name = value.get("fileName")
     if (
         not isinstance(file_name, str)
@@ -874,13 +874,13 @@ def _attachment_reference(value: Any) -> AttachmentReference:
         or "\\" in file_name
         or not file_name.isprintable()
     ):
-        raise ValueError("Loopdy Link attachment file name is invalid")
+        raise ValueError("bighelp Link attachment file name is invalid")
     mime_type = value.get("mimeType")
     if not isinstance(mime_type, str) or not _MIME_TYPE.fullmatch(mime_type):
-        raise ValueError("Loopdy Link attachment MIME type is invalid")
+        raise ValueError("bighelp Link attachment MIME type is invalid")
     total_bytes = _positive(value.get("totalBytes"), "totalBytes")
     if total_bytes > MAX_ATTACHMENT_BYTES:
-        raise ValueError("Loopdy Link attachment size is invalid")
+        raise ValueError("bighelp Link attachment size is invalid")
     return AttachmentReference(
         attachment_id=_opaque(value.get("attachmentId"), "attachmentId", 16, 128),
         file_name=file_name,
@@ -907,7 +907,7 @@ def parse_voice_speak_request(value: dict[str, Any]) -> VoiceSpeakRequest:
         or value.get("version") != 1
         or value.get("type") != "voice.speak.request"
     ):
-        raise ValueError("Loopdy Link voice request is invalid")
+        raise ValueError("bighelp Link voice request is invalid")
     speed = value.get("speed")
     if (
         not isinstance(speed, (int, float))
@@ -915,7 +915,7 @@ def parse_voice_speak_request(value: dict[str, Any]) -> VoiceSpeakRequest:
         or not math.isfinite(float(speed))
         or not 0.25 <= float(speed) <= 4.0
     ):
-        raise ValueError("Loopdy Link voice speed is invalid")
+        raise ValueError("bighelp Link voice speed is invalid")
     return VoiceSpeakRequest(
         request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
         session_id=_session_coordinate(value.get("sessionId")),
@@ -928,11 +928,11 @@ def parse_voice_speak_request(value: dict[str, Any]) -> VoiceSpeakRequest:
 
 def parse_personality_request(value: dict[str, Any]) -> PersonalityRequest:
     if not isinstance(value, dict) or value.get("version") != 1:
-        raise ValueError("Loopdy Link personality request is invalid")
+        raise ValueError("bighelp Link personality request is invalid")
     request_type = value.get("type")
     if request_type == "personalities.catalog.request":
         if set(value) != {"version", "type", "requestId", "sentAt"}:
-            raise ValueError("Loopdy Link personality request is invalid")
+            raise ValueError("bighelp Link personality request is invalid")
         return PersonalityRequest(
             request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
             action="catalog",
@@ -942,14 +942,14 @@ def parse_personality_request(value: dict[str, Any]) -> PersonalityRequest:
             sent_at=_positive(value.get("sentAt"), "sentAt"),
         )
     if request_type != "personalities.mutate":
-        raise ValueError("Loopdy Link personality request is invalid")
+        raise ValueError("bighelp Link personality request is invalid")
     action = value.get("action")
     if action not in {"save", "delete", "activate"}:
-        raise ValueError("Loopdy Link personality action is invalid")
+        raise ValueError("bighelp Link personality action is invalid")
     required = {"version", "type", "requestId", "action", "expectedRevision", "sentAt"}
     optional = {"name", "definition"}
     if not required.issubset(value) or not set(value).issubset(required | optional):
-        raise ValueError("Loopdy Link personality request is invalid")
+        raise ValueError("bighelp Link personality request is invalid")
     expected_revision = _nonnegative(value.get("expectedRevision"), "expectedRevision")
     name: str | None = None
     definition: dict[str, str] | None = None
@@ -957,15 +957,15 @@ def parse_personality_request(value: dict[str, Any]) -> PersonalityRequest:
         name = _personality_name(value.get("name"), allows_neutral=action == "activate")
     if action == "save":
         if name is None or "definition" not in value:
-            raise ValueError("Loopdy Link personality save is invalid")
+            raise ValueError("bighelp Link personality save is invalid")
         definition = _personality_definition(value.get("definition"))
         if definition["name"] != name:
-            raise ValueError("Loopdy Link personality save coordinates do not match")
+            raise ValueError("bighelp Link personality save coordinates do not match")
     elif action == "delete":
         if name is None or "definition" in value:
-            raise ValueError("Loopdy Link personality delete is invalid")
+            raise ValueError("bighelp Link personality delete is invalid")
     elif "definition" in value:
-        raise ValueError("Loopdy Link personality activation is invalid")
+        raise ValueError("bighelp Link personality activation is invalid")
     return PersonalityRequest(
         request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
         action=action,
@@ -989,17 +989,17 @@ def parse_generative_ui_form_submission(
         or value.get("version") != 1
         or value.get("type") != "generative.ui.form.submit"
     ):
-        raise ValueError("Loopdy Link form submission is invalid")
+        raise ValueError("bighelp Link form submission is invalid")
     request_id = str(value.get("requestId") or "")
     if not re.fullmatch(r"[0-9a-f]{32}", request_id):
-        raise ValueError("Loopdy Link form requestId is invalid")
+        raise ValueError("bighelp Link form requestId is invalid")
     idempotency_key = str(value.get("idempotencyKey") or "")
     try:
         parsed_key = uuid.UUID(idempotency_key)
     except (ValueError, AttributeError) as exc:
-        raise ValueError("Loopdy Link form idempotencyKey is invalid") from exc
+        raise ValueError("bighelp Link form idempotencyKey is invalid") from exc
     if str(parsed_key) != idempotency_key:
-        raise ValueError("Loopdy Link form idempotencyKey is invalid")
+        raise ValueError("bighelp Link form idempotencyKey is invalid")
     values = _form_submission_values(value.get("values"))
     return GenerativeUIFormSubmission(
         request_id=request_id,
@@ -1019,18 +1019,18 @@ def personality_catalog_payload(
 ) -> dict[str, Any]:
     personalities = catalog.get("personalities") if isinstance(catalog, dict) else None
     if not isinstance(personalities, list) or len(personalities) > 100:
-        raise ValueError("Loopdy Link personality catalog is invalid")
+        raise ValueError("bighelp Link personality catalog is invalid")
     validated = []
     names = set()
     for raw in personalities:
         definition = _personality_definition(raw, response=True)
         if definition["name"] in names:
-            raise ValueError("Loopdy Link personality catalog contains duplicates")
+            raise ValueError("bighelp Link personality catalog contains duplicates")
         names.add(definition["name"])
         validated.append(definition)
     active_name = _personality_name(catalog.get("activeName", ""), allows_neutral=True)
     if active_name and active_name not in names:
-        raise ValueError("Loopdy Link active personality is unavailable")
+        raise ValueError("bighelp Link active personality is unavailable")
     return {
         "version": 1,
         "type": "personalities.catalog",
@@ -1059,7 +1059,7 @@ def parse_picker_open(value: dict[str, Any]) -> PickerOpen:
         or value.get("type") != "picker.open"
         or value.get("kind") not in {"model", "reasoning"}
     ):
-        raise ValueError("Loopdy Link picker request is invalid")
+        raise ValueError("bighelp Link picker request is invalid")
     return PickerOpen(
         request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
         session_id=_session_coordinate(value.get("sessionId")),
@@ -1071,7 +1071,7 @@ def parse_picker_open(value: dict[str, Any]) -> PickerOpen:
 
 def parse_picker_selection(value: dict[str, Any]) -> PickerSelection:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link picker selection is invalid")
+        raise ValueError("bighelp Link picker selection is invalid")
     kind = value.get("kind")
     common = {
         "version",
@@ -1088,7 +1088,7 @@ def parse_picker_selection(value: dict[str, Any]) -> PickerSelection:
         or value.get("type") != "picker.select"
         or kind not in {"model", "reasoning"}
     ):
-        raise ValueError("Loopdy Link picker selection is invalid")
+        raise ValueError("bighelp Link picker selection is invalid")
     provider = model = selected_value = None
     if kind == "model":
         provider = _picker_identifier(value.get("provider"), "provider", 1, 128)
@@ -1130,10 +1130,10 @@ def parse_session_fork_request(value: dict[str, Any]) -> SessionForkRequest:
         or value.get("type") != "session.fork.request"
         or value.get("checkpointRole") not in {"user", "assistant"}
     ):
-        raise ValueError("Loopdy Link session fork is invalid")
+        raise ValueError("bighelp Link session fork is invalid")
     user_turn = _positive(value.get("userTurn"), "userTurn")
     if user_turn > 1_000_000:
-        raise ValueError("Loopdy Link session fork turn is invalid")
+        raise ValueError("bighelp Link session fork turn is invalid")
     return SessionForkRequest(
         request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
         source_session_id=_session_coordinate(
@@ -1171,7 +1171,7 @@ def parse_command_catalog_request(value: dict[str, Any]) -> CommandCatalogReques
         or value.get("version") != 1
         or value.get("type") != "commands.catalog.request"
     ):
-        raise ValueError("Loopdy Link command catalog request is invalid")
+        raise ValueError("bighelp Link command catalog request is invalid")
     return CommandCatalogRequest(
         request_id=_opaque(value.get("requestId"), "requestId", 16, 128),
         session_id=_session_coordinate(value.get("sessionId")),
@@ -1187,12 +1187,12 @@ def command_catalog_payload(
     sent_at: int,
 ) -> dict[str, Any]:
     if not isinstance(commands, list) or len(commands) > 1_000:
-        raise ValueError("Loopdy Link command catalog is invalid")
+        raise ValueError("bighelp Link command catalog is invalid")
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for command in commands:
         if not isinstance(command, dict):
-            raise ValueError("Loopdy Link command is invalid")
+            raise ValueError("bighelp Link command is invalid")
         expected = {
             "name",
             "description",
@@ -1204,26 +1204,26 @@ def command_catalog_payload(
             "requiresArguments",
         }
         if set(command) != expected:
-            raise ValueError("Loopdy Link command is invalid")
+            raise ValueError("bighelp Link command is invalid")
         name = _command_name(command.get("name"), "name")
         if name in seen:
-            raise ValueError("Loopdy Link command names must be unique")
+            raise ValueError("bighelp Link command names must be unique")
         seen.add(name)
         aliases = command.get("aliases")
         if not isinstance(aliases, list) or len(aliases) > 32:
-            raise ValueError("Loopdy Link command aliases are invalid")
+            raise ValueError("bighelp Link command aliases are invalid")
         alias_rows = [_command_name(alias, "alias") for alias in aliases]
         if len(set(alias_rows)) != len(alias_rows):
-            raise ValueError("Loopdy Link command aliases must be unique")
+            raise ValueError("bighelp Link command aliases must be unique")
         argument_mode = command.get("argumentMode")
         source = command.get("source")
         requires_arguments = command.get("requiresArguments")
         if argument_mode not in {"none", "text", "options", "mixed"}:
-            raise ValueError("Loopdy Link command argument mode is invalid")
+            raise ValueError("bighelp Link command argument mode is invalid")
         if source not in {"core", "plugin", "skill", "user"}:
-            raise ValueError("Loopdy Link command source is invalid")
+            raise ValueError("bighelp Link command source is invalid")
         if not isinstance(requires_arguments, bool):
-            raise ValueError("Loopdy Link command requirement is invalid")
+            raise ValueError("bighelp Link command requirement is invalid")
         rows.append(
             {
                 "name": name,
@@ -1250,7 +1250,7 @@ def command_catalog_payload(
         "sentAt": _positive(sent_at, "sentAt"),
     }
     if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 240_000:
-        raise ValueError("Loopdy Link command catalog is too large")
+        raise ValueError("bighelp Link command catalog is too large")
     return payload
 
 
@@ -1258,19 +1258,19 @@ def verified_fork_prefix(
     history: list[dict[str, Any]], request: SessionForkRequest
 ) -> list[dict[str, Any]]:
     if not isinstance(history, list) or not history or len(history) > 1_000_000:
-        raise ValueError("Loopdy Link session history is invalid")
+        raise ValueError("bighelp Link session history is invalid")
     user_turn = 0
     user_index: int | None = None
     for index, message in enumerate(history):
         if not isinstance(message, dict):
-            raise ValueError("Loopdy Link session history is invalid")
+            raise ValueError("bighelp Link session history is invalid")
         if message.get("role") == "user":
             user_turn += 1
             if user_turn == request.user_turn:
                 user_index = index
                 break
     if user_index is None:
-        raise ValueError("Loopdy Link fork checkpoint is stale")
+        raise ValueError("bighelp Link fork checkpoint is stale")
 
     checkpoint_index = user_index
     if request.checkpoint_role == "assistant":
@@ -1284,16 +1284,16 @@ def verified_fork_prefix(
             ):
                 checkpoint_index = index
         if checkpoint_index < 0:
-            raise ValueError("Loopdy Link fork checkpoint is stale")
+            raise ValueError("bighelp Link fork checkpoint is stale")
 
     content = history[checkpoint_index].get("content")
     if not isinstance(content, str):
-        raise ValueError("Loopdy Link fork checkpoint is stale")
+        raise ValueError("bighelp Link fork checkpoint is stale")
     actual = base64.urlsafe_b64encode(
         hashlib.sha256(content.encode("utf-8")).digest()
     ).decode("ascii").rstrip("=")
     if not hmac.compare_digest(actual, request.checkpoint_digest):
-        raise ValueError("Loopdy Link fork checkpoint changed")
+        raise ValueError("bighelp Link fork checkpoint changed")
     return list(history[: checkpoint_index + 1])
 
 
@@ -1306,7 +1306,7 @@ def session_fork_result(
     sent_at: int,
 ) -> dict[str, Any]:
     if status not in {"completed", "failed", "conflict"}:
-        raise ValueError("Loopdy Link session fork result is invalid")
+        raise ValueError("bighelp Link session fork result is invalid")
     return {
         "version": 1,
         "type": "session.fork.result",
@@ -1329,15 +1329,15 @@ def voice_audio_chunks(
     sent_at: int,
 ) -> list[dict[str, Any]]:
     if not isinstance(audio, bytes) or not audio or len(audio) > 8 * 1024 * 1024:
-        raise ValueError("Loopdy Link voice audio size is invalid")
+        raise ValueError("bighelp Link voice audio size is invalid")
     if mime_type not in {"audio/mpeg", "audio/ogg", "audio/wav", "audio/flac"}:
-        raise ValueError("Loopdy Link voice MIME type is invalid")
+        raise ValueError("bighelp Link voice MIME type is invalid")
     provider_name = _label(provider, "provider", 80)
     timestamp = _positive(sent_at, "sentAt")
     chunk_size = 90 * 1024
     count = (len(audio) + chunk_size - 1) // chunk_size
     if not 1 <= count <= 92:
-        raise ValueError("Loopdy Link voice chunk count is invalid")
+        raise ValueError("bighelp Link voice chunk count is invalid")
     digest = base64.urlsafe_b64encode(hashlib.sha256(audio).digest()).decode("ascii").rstrip("=")
     chunks: list[dict[str, Any]] = []
     for index in range(count):
@@ -1366,7 +1366,7 @@ def voice_speak_error(
     *, request: VoiceSpeakRequest, code: str, message: str, sent_at: int
 ) -> dict[str, Any]:
     if code not in {"unavailable", "synthesis_failed", "audio_too_large"}:
-        raise ValueError("Loopdy Link voice error code is invalid")
+        raise ValueError("bighelp Link voice error code is invalid")
     return {
         "version": 1,
         "type": "voice.speak.error",
@@ -1389,24 +1389,24 @@ def model_picker_payload(
     sent_at: int,
 ) -> dict[str, Any]:
     if not isinstance(providers, list) or not 1 <= len(providers) <= 32:
-        raise ValueError("Loopdy Link model provider count is invalid")
+        raise ValueError("bighelp Link model provider count is invalid")
     rows: list[dict[str, Any]] = []
     total_models = 0
     for provider in providers:
         if not isinstance(provider, dict):
-            raise ValueError("Loopdy Link model provider is invalid")
+            raise ValueError("bighelp Link model provider is invalid")
         models = provider.get("models")
         if not isinstance(models, list) or not 1 <= len(models) <= 50:
-            raise ValueError("Loopdy Link model count is invalid")
+            raise ValueError("bighelp Link model count is invalid")
         model_ids = [
             _model_picker_identifier(model, "model", 1, 256)
             for model in models
         ]
         if len(set(model_ids)) != len(model_ids):
-            raise ValueError("Loopdy Link model identifiers must be unique")
+            raise ValueError("bighelp Link model identifiers must be unique")
         total_models += len(model_ids)
         if total_models > 800:
-            raise ValueError("Loopdy Link total model count is invalid")
+            raise ValueError("bighelp Link total model count is invalid")
         rows.append(
             {
                 "id": _picker_identifier(provider.get("slug"), "provider", 1, 128),
@@ -1435,7 +1435,7 @@ def model_picker_payload(
         "sentAt": _positive(sent_at, "sentAt"),
     }
     if len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 180_000:
-        raise ValueError("Loopdy Link model picker is too large")
+        raise ValueError("bighelp Link model picker is too large")
     return value
 
 
@@ -1448,15 +1448,15 @@ def choice_picker_payload(
     sent_at: int,
 ) -> dict[str, Any]:
     if not isinstance(choices, list) or not 1 <= len(choices) <= 16:
-        raise ValueError("Loopdy Link choice count is invalid")
+        raise ValueError("bighelp Link choice count is invalid")
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for choice in choices:
         if not isinstance(choice, dict):
-            raise ValueError("Loopdy Link choice is invalid")
+            raise ValueError("bighelp Link choice is invalid")
         value = _picker_identifier(choice.get("value"), "choiceValue", 1, 64)
         if value in seen:
-            raise ValueError("Loopdy Link choice values must be unique")
+            raise ValueError("bighelp Link choice values must be unique")
         seen.add(value)
         rows.append(
             {
@@ -1493,7 +1493,7 @@ def picker_result(
         "failed",
         "expired",
     }:
-        raise ValueError("Loopdy Link picker result is invalid")
+        raise ValueError("bighelp Link picker result is invalid")
     return {
         "version": 1,
         "type": "picker.result",
@@ -1527,12 +1527,12 @@ def parse_relay_ready(value: dict[str, Any]) -> RelayReady:
         frozenset(expected),
         frozenset(expected | {"scope"}),
     }:
-        raise ValueError("Loopdy Link relay readiness is invalid")
+        raise ValueError("bighelp Link relay readiness is invalid")
     if value.get("version") != 1 or value.get("type") != "relay.ready":
-        raise ValueError("Loopdy Link relay readiness is invalid")
+        raise ValueError("bighelp Link relay readiness is invalid")
     scope = value.get("scope", "link_wake")
     if scope not in {"link_wake", "host_relay"}:
-        raise ValueError("Loopdy Link relay readiness scope is invalid")
+        raise ValueError("bighelp Link relay readiness scope is invalid")
     enrollment = _positive(value.get("enrollmentRevision"), "enrollmentRevision")
     acknowledgement = _positive(
         value.get("acknowledgementRevision"), "acknowledgementRevision"
@@ -1540,30 +1540,30 @@ def parse_relay_ready(value: dict[str, Any]) -> RelayReady:
     sent_at = _positive(value.get("sentAt"), "sentAt")
     lease_expires = _positive(value.get("leaseExpires"), "leaseExpires")
     if acknowledgement != enrollment + 1 or not sent_at < lease_expires <= sent_at + 2_592_000:
-        raise ValueError("Loopdy Link relay readiness revisions are invalid")
+        raise ValueError("bighelp Link relay readiness revisions are invalid")
     raw_ids = value.get("acknowledgedSenderKeyIds")
     if not isinstance(raw_ids, list):
-        raise ValueError("Loopdy Link relay sender keys must be an array")
+        raise ValueError("bighelp Link relay sender keys must be an array")
     if not 1 <= len(raw_ids) <= 2:
-        raise ValueError("Loopdy Link relay sender-key acknowledgement count is invalid")
+        raise ValueError("bighelp Link relay sender-key acknowledgement count is invalid")
     if len(set(raw_ids)) != len(raw_ids):
-        raise ValueError("Loopdy Link relay sender keys must be unique")
+        raise ValueError("bighelp Link relay sender keys must be unique")
     sender_ids = tuple(_b64url(item, "senderKeyId", 32) for item in raw_ids)
     recipient_public_key = _b64url(
         value.get("recipientPublicKey"), "recipientPublicKey", 65
     )
     if _decode_b64url(recipient_public_key)[0] != 4:
-        raise ValueError("Loopdy Link relay recipient key is invalid")
+        raise ValueError("bighelp Link relay recipient key is invalid")
     environment = value.get("environment")
     topic = value.get("topic")
     if environment not in {"production", "sandbox"}:
-        raise ValueError("Loopdy Link relay environment is invalid")
+        raise ValueError("bighelp Link relay environment is invalid")
     if (
         not isinstance(topic, str)
         or len(topic) > 255
         or re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", topic) is None
     ):
-        raise ValueError("Loopdy Link relay topic is invalid")
+        raise ValueError("bighelp Link relay topic is invalid")
     return RelayReady(
         device_id=_opaque(value.get("deviceId"), "deviceId", 1, 96),
         enrollment_revision=enrollment,
@@ -1593,7 +1593,7 @@ def assistant_message(
     draft_id: int | None = None,
 ) -> dict[str, Any]:
     if delivery not in {"draft", "final"}:
-        raise ValueError("Loopdy Link assistant delivery is invalid")
+        raise ValueError("bighelp Link assistant delivery is invalid")
     value: dict[str, Any] = {
         "version": 1,
         "type": "assistant.message",
@@ -1623,7 +1623,7 @@ def notification_event(
     card: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if event_type not in EVENT_TYPES:
-        raise ValueError("Loopdy Link notification event type is invalid")
+        raise ValueError("bighelp Link notification event type is invalid")
     value: dict[str, Any] = {
         "version": 1,
         "type": "notification.event",
@@ -1664,9 +1664,9 @@ def activity_event(
     from_member_id: str | None = None,
 ) -> dict[str, Any]:
     if kind not in {"reasoning", "tool", "subagent", "bot_handoff"}:
-        raise ValueError("Loopdy Link activity kind is invalid")
+        raise ValueError("bighelp Link activity kind is invalid")
     if lifecycle not in {"running", "succeeded", "failed", "cancelled"}:
-        raise ValueError("Loopdy Link activity lifecycle is invalid")
+        raise ValueError("bighelp Link activity lifecycle is invalid")
     if kind == "reasoning":
         valid_identity = all(
             value is None
@@ -1690,11 +1690,11 @@ def activity_event(
             and subagent_id is None
         )
     if not valid_identity:
-        raise ValueError("Loopdy Link activity identity is invalid")
+        raise ValueError("bighelp Link activity identity is invalid")
     if kind not in {"tool", "bot_handoff"} and (arguments is not None or result is not None):
-        raise ValueError("Loopdy Link activity detail is invalid")
+        raise ValueError("bighelp Link activity detail is invalid")
     if kind != "tool" and tool_name is not None:
-        raise ValueError("Loopdy Link tool detail is invalid")
+        raise ValueError("bighelp Link tool detail is invalid")
     value: dict[str, Any] = {
         "version": 1,
         "type": "activity.event",
@@ -1713,12 +1713,12 @@ def activity_event(
     for key, candidate in (("arguments", arguments), ("result", result)):
         if candidate is not None:
             if kind == "bot_handoff" and len(candidate.encode("utf-8")) > 64_000:
-                raise ValueError(f"Loopdy Link {key} is invalid")
+                raise ValueError(f"bighelp Link {key} is invalid")
             value[key] = _activity_detail(candidate, key, 65_536)
     if duration_ms is not None:
         duration = _nonnegative(duration_ms, "durationMs")
         if duration > 86_400_000:
-            raise ValueError("Loopdy Link durationMs is invalid")
+            raise ValueError("bighelp Link durationMs is invalid")
         value["durationMs"] = duration
     for key, candidate, maximum in (
         ("toolCallId", tool_call_id, 180),
@@ -1755,9 +1755,9 @@ def session_context(
     maximum = _positive(context_max, "contextMax")
     percent = _nonnegative(context_percent, "contextPercent")
     if percent > 100:
-        raise ValueError("Loopdy Link contextPercent is invalid")
+        raise ValueError("bighelp Link contextPercent is invalid")
     if type(is_compacting) is not bool:
-        raise ValueError("Loopdy Link isCompacting is invalid")
+        raise ValueError("bighelp Link isCompacting is invalid")
     value = {
         "version": 1,
         "type": "session.context",
@@ -1795,7 +1795,7 @@ def session_todos(
     """Build Hermes' revisioned full todo snapshot for one encrypted chat."""
 
     if not isinstance(todos, list) or len(todos) > 256:
-        raise ValueError("Loopdy Link todos are invalid")
+        raise ValueError("bighelp Link todos are invalid")
     projected: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in todos:
@@ -1803,14 +1803,14 @@ def session_todos(
             {"id", "content", "status"},
             {"id", "content", "status", "parent"},
         ):
-            raise ValueError("Loopdy Link todo is invalid")
+            raise ValueError("bighelp Link todo is invalid")
         item_id = _activity_label(raw.get("id"), "todo id", 128)
         if item_id in seen:
-            raise ValueError("Loopdy Link todo id is invalid")
+            raise ValueError("bighelp Link todo id is invalid")
         seen.add(item_id)
         status = raw.get("status")
         if status not in {"pending", "in_progress", "completed", "cancelled"}:
-            raise ValueError("Loopdy Link todo status is invalid")
+            raise ValueError("bighelp Link todo status is invalid")
         item: dict[str, Any] = {
             "id": item_id,
             "content": _activity_detail(raw.get("content"), "todo content", 4_000),
@@ -1819,7 +1819,7 @@ def session_todos(
         if "parent" in raw:
             parent = _activity_label(raw.get("parent"), "todo parent", 128)
             if parent == item_id:
-                raise ValueError("Loopdy Link todo parent is invalid")
+                raise ValueError("bighelp Link todo parent is invalid")
             item["parent"] = parent
         projected.append(item)
     return {
@@ -1841,7 +1841,7 @@ def session_subagents(
     """Build the active delegated-child roster for one encrypted chat."""
 
     if not isinstance(subagents, list) or len(subagents) > 256:
-        raise ValueError("Loopdy Link subagent roster is invalid")
+        raise ValueError("bighelp Link subagent roster is invalid")
     projected: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     seen_sessions: set[str] = set()
@@ -1850,13 +1850,13 @@ def session_subagents(
             {"id", "sessionId", "role", "goal", "startedAt"},
             {"id", "sessionId", "parentId", "role", "goal", "startedAt"},
         ):
-            raise ValueError("Loopdy Link subagent is invalid")
+            raise ValueError("bighelp Link subagent is invalid")
         subagent_id = _opaque(raw.get("id"), "subagent id", 1, 180)
         child_session_id = _session_coordinate(
             raw.get("sessionId"), field="subagent sessionId"
         )
         if subagent_id in seen_ids or child_session_id in seen_sessions:
-            raise ValueError("Loopdy Link subagent identity is invalid")
+            raise ValueError("bighelp Link subagent identity is invalid")
         seen_ids.add(subagent_id)
         seen_sessions.add(child_session_id)
         item: dict[str, Any] = {
@@ -1869,7 +1869,7 @@ def session_subagents(
         if "parentId" in raw:
             parent_id = _opaque(raw.get("parentId"), "subagent parentId", 1, 180)
             if parent_id == subagent_id:
-                raise ValueError("Loopdy Link subagent parentId is invalid")
+                raise ValueError("bighelp Link subagent parentId is invalid")
             item["parentId"] = parent_id
         projected.append(item)
     return {
@@ -1915,14 +1915,14 @@ def generative_ui_form_result(
     sent_at: int,
 ) -> dict[str, Any]:
     if state not in {"success", "error"}:
-        raise ValueError("Loopdy Link form result state is invalid")
+        raise ValueError("bighelp Link form result state is invalid")
     allowed_codes = {
         "accepted", "request_not_found", "request_expired", "owner_mismatch",
         "invalid_value", "already_submitted", "already_consumed",
         "idempotency_conflict", "payload_too_large", "internal_error",
     }
     if code not in allowed_codes:
-        raise ValueError("Loopdy Link form result code is invalid")
+        raise ValueError("bighelp Link form result code is invalid")
     return {
         "version": 1,
         "type": "generative.ui.form.result",
@@ -2000,12 +2000,12 @@ def parse_backpressure(value: Any) -> tuple[str, int, int]:
         or value.get("type") != "backpressure"
         or value.get("reason") != "storage_limit"
     ):
-        raise ValueError("Loopdy Link backpressure is invalid")
+        raise ValueError("bighelp Link backpressure is invalid")
     frame_id = _opaque(value.get("id"), "id", 16, 128)
     sequence = _positive(value.get("sequence"), "sequence")
     delay = _positive(value.get("retryAfterMs"), "retryAfterMs")
     if not 100 <= delay <= 30_000:
-        raise ValueError("Loopdy Link backpressure delay is invalid")
+        raise ValueError("bighelp Link backpressure delay is invalid")
     return frame_id, sequence, delay
 
 
@@ -2019,7 +2019,7 @@ def workspace_result(
     message: str | None = None,
 ) -> dict[str, Any]:
     if status not in {"completed", "failed", "conflict"}:
-        raise ValueError("Loopdy Link workspace result status is invalid")
+        raise ValueError("bighelp Link workspace result status is invalid")
     if request.groups_result_version is not None:
         validate_result_version(request.groups_result_version, request.operation)
     if request.operation in AVAILABLE_WIKI_OPERATIONS:
@@ -2052,7 +2052,7 @@ def workspace_result(
         )
     )
     if not isinstance(projected, dict):
-        raise ValueError("Loopdy Link workspace result payload is invalid")
+        raise ValueError("bighelp Link workspace result payload is invalid")
     result: dict[str, Any] = {
         "version": 1,
         "type": "workspace.result",
@@ -2065,22 +2065,22 @@ def workspace_result(
     if request.groups_result_version == 1:
         result["groupsResultVersion"] = 1
     if (code is None) != (message is None):
-        raise ValueError("Loopdy Link workspace error fields are invalid")
+        raise ValueError("bighelp Link workspace error fields are invalid")
     if code is not None and message is not None:
         if not re.fullmatch(r"[A-Za-z0-9_]{1,80}", code):
-            raise ValueError("Loopdy Link workspace error code is invalid")
+            raise ValueError("bighelp Link workspace error code is invalid")
         result["code"] = code
         result["message"] = _activity_label(message, "message", 2_000)
     if request.groups_result_version == 1 and len(
         json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     ) > GROUPS_RESULT_ENVELOPE_BYTES:
-        raise ValueError("Loopdy Link workspace result envelope is too large")
+        raise ValueError("bighelp Link workspace result envelope is too large")
     return result
 
 
 def _project_git_workspace_payload(operation: str, value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link Project Git payload is invalid")
+        raise ValueError("bighelp Link Project Git payload is invalid")
     base_keys = {"agentId", "sessionId", "workspaceId"}
     suffix = operation.removeprefix("projects.git.")
     expected = {
@@ -2098,7 +2098,7 @@ def _project_git_workspace_payload(operation: str, value: Any) -> dict[str, Any]
         },
     }.get(suffix)
     if expected is None or set(value) != expected:
-        raise ValueError("Loopdy Link Project Git payload is invalid")
+        raise ValueError("bighelp Link Project Git payload is invalid")
     projected: dict[str, Any] = {
         "agentId": _opaque(value.get("agentId"), "agentId", 1, 64),
         "sessionId": _session_coordinate(value.get("sessionId")),
@@ -2134,14 +2134,14 @@ def _project_git_workspace_payload(operation: str, value: Any) -> dict[str, Any]
                 r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
                 key,
             ):
-                raise ValueError("Loopdy Link Project Git idempotency key is invalid")
+                raise ValueError("bighelp Link Project Git idempotency key is invalid")
             projected["idempotencyKey"] = key
     return projected
 
 
 def _project_git_input(operation: str, value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link Project Git input is invalid")
+        raise ValueError("bighelp Link Project Git input is invalid")
     expected = {
         "stage": {"mode", "paths"},
         "commit": {"message"},
@@ -2150,14 +2150,14 @@ def _project_git_input(operation: str, value: Any) -> dict[str, Any]:
         "push": {"remote", "branch"},
     }[operation]
     if set(value) != expected:
-        raise ValueError("Loopdy Link Project Git input is invalid")
+        raise ValueError("bighelp Link Project Git input is invalid")
     if operation == "stage":
         raw_paths = value.get("paths")
         if not isinstance(raw_paths, list) or not 1 <= len(raw_paths) <= 500:
-            raise ValueError("Loopdy Link Project Git paths are invalid")
+            raise ValueError("bighelp Link Project Git paths are invalid")
         paths = [_project_git_path(path) for path in raw_paths]
         if len(set(paths)) != len(paths):
-            raise ValueError("Loopdy Link Project Git paths are invalid")
+            raise ValueError("bighelp Link Project Git paths are invalid")
         return {
             "mode": _project_git_choice(value.get("mode"), {"stage", "unstage"}),
             "paths": paths,
@@ -2170,7 +2170,7 @@ def _project_git_input(operation: str, value: Any) -> dict[str, Any]:
             or len(message.encode("utf-8")) > 10_000
             or any(ord(character) < 32 and character not in "\n\t" for character in message)
         ):
-            raise ValueError("Loopdy Link Project Git commit message is invalid")
+            raise ValueError("bighelp Link Project Git commit message is invalid")
         return {"message": message}
     remote = _project_git_ref_name(value.get("remote"), "remote")
     result = {"remote": remote}
@@ -2191,7 +2191,7 @@ def _project_git_path(value: Any) -> str:
         or any(ord(character) < 32 for character in value)
         or "://" in value
     ):
-        raise ValueError("Loopdy Link Project Git path is invalid")
+        raise ValueError("bighelp Link Project Git path is invalid")
     return value
 
 
@@ -2207,25 +2207,25 @@ def _project_git_ref_name(value: Any, label: str) -> str:
         or "\\" in value
         or any(character.isspace() or ord(character) < 32 for character in value)
     ):
-        raise ValueError(f"Loopdy Link Project Git {label} is invalid")
+        raise ValueError(f"bighelp Link Project Git {label} is invalid")
     return value
 
 
 def _project_git_choice(value: Any, allowed: set[str]) -> str:
     if not isinstance(value, str) or value not in allowed:
-        raise ValueError("Loopdy Link Project Git choice is invalid")
+        raise ValueError("bighelp Link Project Git choice is invalid")
     return value
 
 
 def _project_git_status_token(value: Any) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
-        raise ValueError("Loopdy Link Project Git status token is invalid")
+        raise ValueError("bighelp Link Project Git status token is invalid")
     return value
 
 
 def _bounded_integer(value: Any, minimum: int, maximum: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-        raise ValueError("Loopdy Link Project Git page is invalid")
+        raise ValueError("bighelp Link Project Git page is invalid")
     return value
 
 
@@ -2239,25 +2239,25 @@ def _workspace_json(
     maximum_bytes: int = 196_608,
 ) -> Any:
     if depth > 8:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise ValueError("Loopdy Link workspace payload is invalid")
+            raise ValueError("bighelp Link workspace payload is invalid")
         return value
     if isinstance(value, str):
         if len(value.encode("utf-8")) > 256_000 or any(
             ord(character) < 32 and character not in "\n\r\t"
             for character in value
         ):
-            raise ValueError("Loopdy Link workspace payload is invalid")
+            raise ValueError("bighelp Link workspace payload is invalid")
         return value
     if isinstance(value, list):
         if len(value) > 500:
-            raise ValueError("Loopdy Link workspace payload is invalid")
+            raise ValueError("bighelp Link workspace payload is invalid")
         projected = [
             _workspace_json(
                 item,
@@ -2270,14 +2270,14 @@ def _workspace_json(
         ]
     elif isinstance(value, dict):
         if len(value) > 200:
-            raise ValueError("Loopdy Link workspace payload is invalid")
+            raise ValueError("bighelp Link workspace payload is invalid")
         projected = {}
         for key, item in value.items():
             if (
                 not isinstance(key, str)
                 or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", key)
             ):
-                raise ValueError("Loopdy Link workspace payload key is invalid")
+                raise ValueError("bighelp Link workspace payload key is invalid")
             canonical = "".join(character for character in key.lower() if character.isalnum())
             if (
                 (canonical.startswith("gateway") and (*path, key) not in allowed_gateway_paths)
@@ -2293,7 +2293,7 @@ def _workspace_json(
                     )
                 )
             ):
-                raise ValueError("Loopdy Link workspace payload key is invalid")
+                raise ValueError("bighelp Link workspace payload key is invalid")
             projected[key] = _workspace_json(
                 item,
                 depth=depth + 1,
@@ -2302,7 +2302,7 @@ def _workspace_json(
                 path=(*path, key),
             )
     else:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     if depth == 0 and len(
         json.dumps(
             projected,
@@ -2311,7 +2311,7 @@ def _workspace_json(
             sort_keys=True,
         ).encode("utf-8")
     ) > maximum_bytes:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     return projected
 
 
@@ -2326,7 +2326,7 @@ def _workspace_json_allowing_dashboard_cards(value: Any) -> Any:
         return _workspace_json(value, depth=0)
     events = value["events"]
     if len(events) > 500:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     stripped_events = []
     cards = []
     for index, event in enumerate(events):
@@ -2354,14 +2354,14 @@ def _workspace_json_allowing_dashboard_cards(value: Any) -> Any:
 
 def _workspace_json_allowing_skill_archive(value: Any) -> Any:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     encoded = value.get("dataBase64")
     if not isinstance(encoded, str) or not 1 <= len(encoded) <= 2_100_000:
-        raise ValueError("Loopdy Link skill archive is invalid")
+        raise ValueError("bighelp Link skill archive is invalid")
     try:
         base64.b64decode(encoded, validate=True)
     except (ValueError, TypeError) as exc:
-        raise ValueError("Loopdy Link skill archive is invalid") from exc
+        raise ValueError("bighelp Link skill archive is invalid") from exc
     placeholder = dict(value)
     placeholder["dataBase64"] = "AA=="
     _workspace_json(placeholder, depth=0)
@@ -2409,27 +2409,27 @@ def _validate_workspace_avatar_blobs(value: Any) -> None:
 def _avatar_payload(value: Any) -> dict[str, Any]:
     avatar = value
     if not isinstance(avatar, dict) or set(avatar) != {"mimeType", "byteCount", "sha256", "data"}:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     if avatar.get("mimeType") not in {"image/png", "image/jpeg", "image/webp"}:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     byte_count = avatar.get("byteCount")
     if not isinstance(byte_count, int) or isinstance(byte_count, bool) or byte_count <= 0:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     sha256 = avatar.get("sha256")
     if not isinstance(sha256, str) or not 16 <= len(sha256) <= 128:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     data = avatar.get("data")
     if not isinstance(data, str) or len(data) > MAX_AVATAR_WORKSPACE_PLAINTEXT_BYTES:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     prefix = f"data:{avatar['mimeType']};base64,"
     if not data.startswith(prefix):
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     try:
         blob = base64.b64decode(data.removeprefix(prefix), validate=True)
     except ValueError as exc:
-        raise ValueError("Loopdy Link workspace payload is invalid") from exc
+        raise ValueError("bighelp Link workspace payload is invalid") from exc
     if len(blob) != byte_count:
-        raise ValueError("Loopdy Link workspace payload is invalid")
+        raise ValueError("bighelp Link workspace payload is invalid")
     return avatar
 
 
@@ -2441,44 +2441,44 @@ def _device_tool_turn_id(value: Any) -> str:
         not isinstance(value, str)
         or re.fullmatch(r"[A-Za-z0-9_:-]{1,512}", value) is None
     ):
-        raise ValueError("Loopdy Link device tool turnId is invalid")
+        raise ValueError("bighelp Link device tool turnId is invalid")
     return value
 
 
 def _device_tool_operation(value: Any) -> str:
     if not isinstance(value, str) or value not in DEVICE_TOOL_OPERATIONS:
-        raise ValueError("Loopdy Link device tool operation is invalid")
+        raise ValueError("bighelp Link device tool operation is invalid")
     return value
 
 
 def _device_tool_json(value: Any, *, depth: int = 0) -> Any:
     if depth > 4:
-        raise ValueError("Loopdy Link device tool JSON is too deep")
+        raise ValueError("bighelp Link device tool JSON is too deep")
     if value is None or isinstance(value, (str, bool, int, float)):
         if isinstance(value, float) and (not math.isfinite(value)):
-            raise ValueError("Loopdy Link device tool JSON is invalid")
+            raise ValueError("bighelp Link device tool JSON is invalid")
         if isinstance(value, str) and len(value) > 8_000:
-            raise ValueError("Loopdy Link device tool text is too large")
+            raise ValueError("bighelp Link device tool text is too large")
         return value
     if isinstance(value, list):
         if len(value) > 200:
-            raise ValueError("Loopdy Link device tool list is too large")
+            raise ValueError("bighelp Link device tool list is too large")
         return [_device_tool_json(item, depth=depth + 1) for item in value]
     if isinstance(value, dict):
         if len(value) > 64:
-            raise ValueError("Loopdy Link device tool object is too large")
+            raise ValueError("bighelp Link device tool object is too large")
         return {
             _opaque(key, "device tool key", 1, 96): _device_tool_json(item, depth=depth + 1)
             for key, item in value.items()
         }
-    raise ValueError("Loopdy Link device tool JSON is invalid")
+    raise ValueError("bighelp Link device tool JSON is invalid")
 
 
 def _device_tool_string(value: Any, field: str, *, required: bool = False, maximum: int = 4_000) -> str | None:
     if value is None and not required:
         return None
     if not isinstance(value, str) or not value or len(value) > maximum:
-        raise ValueError(f"Loopdy Link device tool {field} is invalid")
+        raise ValueError(f"bighelp Link device tool {field} is invalid")
     return value
 
 
@@ -2491,7 +2491,7 @@ def _device_tool_date(value: Any, field: str, *, required: bool = False) -> str 
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Loopdy Link device tool {field} is invalid") from exc
+        raise ValueError(f"bighelp Link device tool {field} is invalid") from exc
     return raw
 
 
@@ -2509,7 +2509,7 @@ def _device_tool_range(
         end_date = datetime.fromisoformat(end.replace("Z", "+00:00"))
         elapsed = (end_date - start_date).total_seconds()
         if elapsed <= 0 or elapsed > MAX_DEVICE_TOOL_DATE_RANGE_SECONDS:
-            raise ValueError("Loopdy Link device tool date range is invalid")
+            raise ValueError("bighelp Link device tool date range is invalid")
 
 
 def _device_tool_ordered_dates(
@@ -2520,14 +2520,14 @@ def _device_tool_ordered_dates(
     start_date = datetime.fromisoformat(start.replace("Z", "+00:00"))
     end_date = datetime.fromisoformat(end.replace("Z", "+00:00"))
     if end_date <= start_date:
-        raise ValueError("Loopdy Link device tool date range is invalid")
+        raise ValueError("bighelp Link device tool date range is invalid")
 
 
 def _device_tool_limit(value: Any) -> None:
     if value is not None and (
         type(value) is not int or not 1 <= value <= MAX_DEVICE_TOOL_LIST_LIMIT
     ):
-        raise ValueError("Loopdy Link device tool limit is invalid")
+        raise ValueError("bighelp Link device tool limit is invalid")
 
 
 def _device_tool_id_list(value: dict[str, Any], field: str) -> None:
@@ -2539,12 +2539,12 @@ def _device_tool_id_list(value: dict[str, Any], field: str) -> None:
         or not 1 <= len(ids) <= MAX_DEVICE_TOOL_ID_COUNT
         or any(not isinstance(item, str) or not item or len(item) > 512 for item in ids)
     ):
-        raise ValueError(f"Loopdy Link device tool {field} is invalid")
+        raise ValueError(f"bighelp Link device tool {field} is invalid")
 
 
 def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link device tool arguments are invalid")
+        raise ValueError("bighelp Link device tool arguments are invalid")
     common_range = {"start", "end", "timeZone", "limit"}
     allowed: set[str]
     if operation == "health.read":
@@ -2566,7 +2566,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
     else:
         allowed = {"id", "expectedRevision"}
     if not set(value).issubset(allowed):
-        raise ValueError("Loopdy Link device tool arguments contain an unknown key")
+        raise ValueError("bighelp Link device tool arguments contain an unknown key")
     result = dict(value)
     if operation in {"health.read", "calendar.list"}:
         _device_tool_range(result, required=True)
@@ -2578,7 +2578,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             or not 1 <= len(types) <= len(HEALTH_TYPES)
             or any(item not in HEALTH_TYPES for item in types)
         ):
-            raise ValueError("Loopdy Link device tool types are invalid")
+            raise ValueError("bighelp Link device tool types are invalid")
     if operation == "calendar.list":
         _device_tool_id_list(result, "calendarIDs")
     elif operation == "reminders.list":
@@ -2586,9 +2586,9 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
         _device_tool_limit(result.get("limit"))
         _device_tool_id_list(result, "listIDs")
         if "completed" in result and type(result["completed"]) is not bool:
-            raise ValueError("Loopdy Link device tool completed is invalid")
+            raise ValueError("bighelp Link device tool completed is invalid")
         if "includeUndated" in result and type(result["includeUndated"]) is not bool:
-            raise ValueError("Loopdy Link device tool includeUndated is invalid")
+            raise ValueError("bighelp Link device tool includeUndated is invalid")
     if operation in {"calendar.create", "reminders.create"}:
         _device_tool_string(result.get("title"), "title", required=True)
     if operation.startswith("calendar.") and operation != "calendar.list":
@@ -2599,7 +2599,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             _device_tool_string(result.get("id"), "id", required=True, maximum=512)
             _device_tool_string(result.get("expectedRevision"), "expectedRevision", required=True, maximum=512)
         if "span" in result and result["span"] != "thisEvent":
-            raise ValueError("Loopdy Link device tool recurrence is unsupported")
+            raise ValueError("bighelp Link device tool recurrence is unsupported")
         for field in ("calendarID", "location", "notes", "url", "title"):
             if field in result:
                 _device_tool_string(result[field], field)
@@ -2609,7 +2609,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
         if "occurrenceStart" in result:
             _device_tool_date(result["occurrenceStart"], "occurrenceStart", required=True)
         if ("start" in result or "end" in result) and "timeZone" not in result:
-            raise ValueError("Loopdy Link device tool timeZone is required")
+            raise ValueError("bighelp Link device tool timeZone is required")
         if "timeZone" in result:
             _device_tool_string(result["timeZone"], "timeZone", required=True, maximum=128)
     if operation.startswith("reminders.") and operation != "reminders.list":
@@ -2625,13 +2625,13 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             if field in result:
                 _device_tool_date(result[field], field, required=True)
         if ("dueDate" in result or "startDate" in result) and "timeZone" not in result:
-            raise ValueError("Loopdy Link device tool timeZone is required")
+            raise ValueError("bighelp Link device tool timeZone is required")
         if "timeZone" in result:
             _device_tool_string(result["timeZone"], "timeZone", required=True, maximum=128)
         if "priority" in result and (type(result["priority"]) is not int or not 0 <= result["priority"] <= 9):
-            raise ValueError("Loopdy Link device tool priority is invalid")
+            raise ValueError("bighelp Link device tool priority is invalid")
         if "completed" in result and type(result["completed"]) is not bool:
-            raise ValueError("Loopdy Link device tool completed is invalid")
+            raise ValueError("bighelp Link device tool completed is invalid")
     return _device_tool_json(result)
 
 
@@ -2646,7 +2646,7 @@ def _opaque(value: Any, field: str, minimum: int, maximum: int) -> str:
         or len(value) > maximum
         or not _OPAQUE.fullmatch(value)
     ):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
@@ -2657,7 +2657,7 @@ def _session_coordinate(value: Any, field: str = "sessionId") -> str:
 
 def _label(value: Any, field: str, maximum: int) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     normalized = " ".join(value.split())
     allowed_punctuation = set(" .,'’()&+-_")
     if (
@@ -2666,13 +2666,13 @@ def _label(value: Any, field: str, maximum: int) -> str:
         or len(normalized) > maximum
         or any(not (character.isalnum() or character in allowed_punctuation) for character in normalized)
     ):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return normalized
 
 
 def _activity_label(value: Any, field: str, maximum: int) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     normalized = " ".join(value.split())
     if (
         not normalized
@@ -2680,7 +2680,7 @@ def _activity_label(value: Any, field: str, maximum: int) -> str:
         or len(normalized) > maximum
         or not normalized.isprintable()
     ):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return normalized
 
 
@@ -2691,7 +2691,7 @@ def _activity_detail(value: Any, field: str, maximum: int) -> str:
         or len(value) > maximum
         or any(not character.isprintable() and character not in "\n\t" for character in value)
     ):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
@@ -2699,12 +2699,12 @@ def _picker_title(value: Any, field: str, maximum: int) -> str:
     """Project Hermes' Markdown command title into native picker text.
 
     Hermes' interactive reasoning title is formatted for text surfaces (for
-    example ``**Effort:** `medium` `` and line breaks). Loopdy renders this
+    example ``**Effort:** `medium` `` and line breaks). bighelp renders this
     title as native UI, so remove those lightweight delimiters, normalize
     whitespace, and retain the same printable-label validation.
     """
     if not isinstance(value, str):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     plain = re.sub(r"[*_`~]", "", value)
     return _activity_label(" ".join(plain.split()), field, maximum)
 
@@ -2712,7 +2712,7 @@ def _picker_title(value: Any, field: str, maximum: int) -> str:
 def _picker_result_message(value: Any, field: str, maximum: int) -> str:
     """Project Hermes' text response into the native picker's single-line status."""
     if not isinstance(value, str):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return _activity_label(" ".join(value.split()), field, maximum)
 
 
@@ -2723,7 +2723,7 @@ def _picker_identifier(value: Any, field: str, minimum: int, maximum: int) -> st
         or value != value.strip()
         or any(character.isspace() or not character.isprintable() for character in value)
     ):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
@@ -2735,49 +2735,49 @@ def _model_picker_identifier(value: Any, field: str, minimum: int, maximum: int)
         or value != value.strip()
         or not value.isprintable()
     ):
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
 def _text(value: Any, field: str, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or "\x00" in value:
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
 def _form_submission_values(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or len(value) > 12:
-        raise ValueError("Loopdy Link form values are invalid")
+        raise ValueError("bighelp Link form values are invalid")
     if len(canonical_json(value).encode("utf-8")) > 8_192:
-        raise ValueError("Loopdy Link form values are invalid")
+        raise ValueError("bighelp Link form values are invalid")
     for key, candidate in value.items():
         if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", key):
-            raise ValueError("Loopdy Link form value key is invalid")
+            raise ValueError("bighelp Link form value key is invalid")
         values = candidate if isinstance(candidate, list) else [candidate]
         if len(values) > 10:
-            raise ValueError("Loopdy Link form values are invalid")
+            raise ValueError("bighelp Link form values are invalid")
         for item in values:
             if item is None or isinstance(item, (dict, list)):
-                raise ValueError("Loopdy Link form values are invalid")
+                raise ValueError("bighelp Link form values are invalid")
             if isinstance(item, str) and (len(item) > 2_000 or "\x00" in item):
-                raise ValueError("Loopdy Link form values are invalid")
+                raise ValueError("bighelp Link form values are invalid")
             if isinstance(item, (int, float)) and not isinstance(item, bool):
                 if not math.isfinite(float(item)) or abs(float(item)) > 1_000_000_000_000:
-                    raise ValueError("Loopdy Link form values are invalid")
+                    raise ValueError("bighelp Link form values are invalid")
             elif not isinstance(item, (str, bool)):
-                raise ValueError("Loopdy Link form values are invalid")
+                raise ValueError("bighelp Link form values are invalid")
     return dict(value)
 
 
 def _positive(value: Any, field: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
 def _nonnegative(value: Any, field: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return value
 
 
@@ -2787,16 +2787,16 @@ def _decode_b64url(value: str) -> bytes:
             value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
         )
     except (ValueError, UnicodeEncodeError) as error:
-        raise ValueError("Loopdy Link base64url is invalid") from error
+        raise ValueError("bighelp Link base64url is invalid") from error
     if base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=") != value:
-        raise ValueError("Loopdy Link base64url is invalid")
+        raise ValueError("bighelp Link base64url is invalid")
     return decoded
 
 
 def _b64url(value: Any, field: str, expected_length: int) -> str:
     encoded = _opaque(value, field, 1, 2_048)
     if len(_decode_b64url(encoded)) != expected_length:
-        raise ValueError(f"Loopdy Link {field} is invalid")
+        raise ValueError(f"bighelp Link {field} is invalid")
     return encoded
 
 
@@ -2810,7 +2810,7 @@ def _command_name(value: Any, field: str) -> str:
             for character in value
         )
     ):
-        raise ValueError(f"Loopdy Link command {field} is invalid")
+        raise ValueError(f"bighelp Link command {field} is invalid")
     return value
 
 
@@ -2822,7 +2822,7 @@ def _command_args_hint(value: Any) -> str:
 
 def _personality_name(value: Any, *, allows_neutral: bool) -> str:
     if not isinstance(value, str):
-        raise ValueError("Loopdy Link personality name is invalid")
+        raise ValueError("bighelp Link personality name is invalid")
     name = value.strip().lower()
     if allows_neutral and name in {"", "none", "default", "neutral"}:
         return ""
@@ -2834,20 +2834,20 @@ def _personality_name(value: Any, *, allows_neutral: bool) -> str:
             for character in name
         )
     ):
-        raise ValueError("Loopdy Link personality name is invalid")
+        raise ValueError("bighelp Link personality name is invalid")
     return name
 
 
 def _personality_definition(value: Any, *, response: bool = False) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("Loopdy Link personality definition is invalid")
+        raise ValueError("bighelp Link personality definition is invalid")
     required = {"name", "description", "systemPrompt", "tone", "style"}
     optional = {"originalName"}
     if response:
         required |= {"builtIn", "customized"}
         optional = set()
     if not required.issubset(value) or not set(value).issubset(required | optional):
-        raise ValueError("Loopdy Link personality definition is invalid")
+        raise ValueError("bighelp Link personality definition is invalid")
     description = _personality_line(value.get("description"), "description", 240)
     tone = _personality_line(value.get("tone"), "tone", 240)
     style = _personality_line(value.get("style"), "style", 240)
@@ -2858,7 +2858,7 @@ def _personality_definition(value: Any, *, response: bool = False) -> dict[str, 
         or len(prompt) > 20_000
         or "\x00" in prompt
     ):
-        raise ValueError("Loopdy Link personality systemPrompt is invalid")
+        raise ValueError("bighelp Link personality systemPrompt is invalid")
     result: dict[str, Any] = {
         "name": _personality_name(value.get("name"), allows_neutral=False),
         "description": description,
@@ -2870,7 +2870,7 @@ def _personality_definition(value: Any, *, response: bool = False) -> dict[str, 
         if not isinstance(value.get("builtIn"), bool) or not isinstance(
             value.get("customized"), bool
         ):
-            raise ValueError("Loopdy Link personality source is invalid")
+            raise ValueError("bighelp Link personality source is invalid")
         result["builtIn"] = value["builtIn"]
         result["customized"] = value["customized"]
     elif "originalName" in value:
@@ -2887,7 +2887,7 @@ def _personality_line(value: Any, field: str, maximum: int) -> str:
         or value != value.strip()
         or (value and not value.isprintable())
     ):
-        raise ValueError(f"Loopdy Link personality {field} is invalid")
+        raise ValueError(f"bighelp Link personality {field} is invalid")
     return value
 
 

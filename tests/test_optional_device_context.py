@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from gateway.config import PlatformConfig
 from gateway.platform_registry import PlatformEntry, platform_registry
-from loopdy_plugin.adapter import LoopdyAdapter, MessageEvent
+from loopdy_plugin.adapter import BighelpAdapter, MessageEvent
 from loopdy_plugin.link_client import InboundLinkTurn
 from loopdy_plugin.link_contracts import UserMessage
 from loopdy_plugin.registration import _device_tools_supported
@@ -45,7 +45,7 @@ class OptionalDeviceContextTests(unittest.TestCase):
     def test_stock_host_admits_verified_chat_without_optional_context(self):
         completed = asyncio.Event()
 
-        class ObservedAdapter(LoopdyAdapter):
+        class ObservedAdapter(BighelpAdapter):
             async def on_processing_complete(self, event, outcome):
                 await super().on_processing_complete(event, outcome)
                 completed.set()

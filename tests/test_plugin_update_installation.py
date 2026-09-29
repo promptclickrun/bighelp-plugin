@@ -2,6 +2,7 @@
 import importlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -30,7 +31,7 @@ class PluginUpdateInstallationTests(unittest.TestCase):
                 return result.stdout.strip()
             command(["git", "init", "-q", "-b", "main", str(repo)])
             command(["git", "-C", str(repo), "add", "."])
-            commit = ["git", "-C", str(repo), "-c", "user.name=Loopdy Test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m"]
+            commit = ["git", "-C", str(repo), "-c", "user.name=bighelp Test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m"]
             command(commit + ["baseline fixture"])
             old = command(["git", "-C", str(repo), "rev-parse", "HEAD"])
             home.mkdir(parents=True, exist_ok=True)
@@ -51,15 +52,21 @@ class PluginUpdateInstallationTests(unittest.TestCase):
             data.write_text('{"fixture":"preserve-this-pairing"}')
             config_before, pairing_before = config.read_bytes(), data.read_bytes()
             (repo / "update-proof.txt").write_text("new revision installed through the actual Hermes installer\n")
-            command(["git", "-C", str(repo), "add", "update-proof.txt"])
+            # Updates install the latest published release: a newer version, tagged.
+            manifest = repo / "plugin.yaml"
+            manifest.write_text(re.sub(r'(?m)^version:.*$', 'version: "999.0.0"', manifest.read_text()))
+            command(["git", "-C", str(repo), "add", "update-proof.txt", "plugin.yaml"])
             command(commit + ["updated fixture"])
+            command(["git", "-C", str(repo), "tag", "v999.0.0"])
             target = command(["git", "-C", str(repo), "rev-parse", "HEAD"])
             manager = api.PluginUpdateManager(home / "plugin-data" / "loopdy" / "plugin-update", installed, "default", launch_worker=lambda _: None)
             operation = "update_real_install_0123456789"
             manager.start(operation, "device_fixture", False)
-            # Only the remote address is redirected to a real local Git fixture.
-            # Fetch, revision pinning, scan, doctor, backup, installer and readback are real.
-            with patch.object(worker, "SOURCE_URL", repo.as_uri()):
+            # Only the remote address and the GitHub release lookup are redirected to the
+            # real local Git fixture. Tag lookup, fetch, revision pinning, scan, doctor,
+            # backup, installer and readback are real.
+            with patch.object(worker, "SOURCE_URL", repo.as_uri()), \
+                    patch.object(worker, "_latest_release_tag", return_value="v999.0.0"):
                 worker._run_operation(manager, operation)
             result = manager.status(operation, "device_fixture")
             self.assertEqual(result["phase"], "installed_restart_required")

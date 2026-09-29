@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .live_voice_auth import (
-    CODEX_MODEL, CodexLiveAuth, LiveAuthError, LiveCredentials, PublicLiveAuth,
+    CODEX_MODEL, CodexLiveAuth, LiveAuthError, LiveCredentialScopeError, LiveCredentials, PublicLiveAuth,
 )
 
 CODEX_CALL_URL = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
@@ -36,7 +36,7 @@ MAX_PROVIDER_EVENT_NAME_BYTES = 128
 VOICES = frozenset({"arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"})
 _CALL_ID = re.compile(r"(?:rtc_[A-Za-z0-9_-]{1,124}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z")
 DEFAULT_INSTRUCTIONS = (
-    "You are Loopdy's conversational voice front end. You have no tools of your own; "
+    "You are bighelp's conversational voice front end. You have no tools of your own; "
     "delegate every request that needs facts, current information or careful reasoning to the "
     "client Hermes agent. This includes calendar, reminders and health questions, and any request "
     "to do, check, find, make, fix, run, remember or schedule something. Delegate before answering "
@@ -364,6 +364,9 @@ class _LiveTransport:
         except asyncio.CancelledError:
             await self._shutdown()
             raise
+        except LiveCredentialScopeError:
+            await self._shutdown()
+            raise LiveProviderError("credentials_unavailable", stage="auth", allocation_state=self._allocation) from None
         except LiveAuthError:
             await self._shutdown()
             raise LiveProviderError("authentication_failed", stage="auth", allocation_state=self._allocation) from None
@@ -784,7 +787,7 @@ class PublicLiveProvider(_LiveTransport):
     voices = frozenset({"marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
                         "meridian", "bossa", "tempo", "beacon", "delta", "cinder"})
     default_instructions = (
-        "You are Loopdy's conversational voice front end. Delegate real work to the client; "
+        "You are bighelp's conversational voice front end. Delegate real work to the client; "
         "you have no tools. Keep conversation natural while independent jobs run. Never "
         "invent status or completion. Speak verified results naturally; do not expose "
         "private reasoning. Audio interruption does not cancel accepted jobs."

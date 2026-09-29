@@ -1,6 +1,6 @@
 # Workspace Files
 
-Read-only access to folders the host operator grants, through the plugin API and the `hermes loopdy files` CLI. The bighelp app browses granted folders with it.
+Read-only access to folders the host operator grants, through the plugin API and the `hermes bighelp files` CLI. The bighelp app browses granted folders with it.
 
 ## Ownership and access
 
@@ -59,14 +59,14 @@ https://hermes-agent.nousresearch.com/docs/developer-guide/plugins
 After this candidate is reviewed, merged and installed, the registered commands are:
 
 ```sh
-hermes loopdy files grant demo --root /absolute/path/to/project --label 'Demo project'
-hermes loopdy files roots
-hermes loopdy files list demo --path '' --limit 100
-hermes loopdy files list demo --path docs --query readme
-hermes loopdy files read demo README.md
-hermes loopdy files status demo
-hermes loopdy files diff demo README.md --side worktree --expected-status-token "$STATUS_TOKEN"
-hermes loopdy files revoke demo --yes
+hermes bighelp files grant demo --root /absolute/path/to/project --label 'Demo project'
+hermes bighelp files roots
+hermes bighelp files list demo --path '' --limit 100
+hermes bighelp files list demo --path docs --query readme
+hermes bighelp files read demo README.md
+hermes bighelp files status demo
+hermes bighelp files diff demo README.md --side worktree --expected-status-token "$STATUS_TOKEN"
+hermes bighelp files revoke demo --yes
 ```
 
 The example root is a placeholder for a directory the operator explicitly approves. `STATUS_TOKEN` is the exact `status_token` returned by the preceding status request. Listing/read pagination accepts `--offset`, `--limit` and `--revision`; diff pagination accepts `--offset` and `--limit`. Failed commands print a structured, path-redacted error and exit nonzero. Revocation requires `--yes`. Grant/revoke changes affect this plugin's permissions only and do not alter Hermes Projects.

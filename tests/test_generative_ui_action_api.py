@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from loopdy_plugin.generative_ui import render_v2_envelope
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +32,7 @@ class GenerativeUiActionApiTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.store = LoopdyStore(Path(temporary.name) / "api.sqlite3")
+        self.store = BighelpStore(Path(temporary.name) / "api.sqlite3")
         module_name = f"loopdy_dashboard_action_api_{id(self)}"
         spec = importlib.util.spec_from_file_location(module_name, PLUGIN_ROOT / "dashboard" / "plugin_api.py")
         module = importlib.util.module_from_spec(spec)
@@ -49,7 +49,7 @@ class GenerativeUiActionApiTests(unittest.TestCase):
         from datetime import datetime, timezone
         now = datetime(2026, 8, 22, 0, 0, tzinfo=timezone.utc)
         card = render_v2_envelope(
-            "loopdy_render_form",
+            "bighelp_render_form",
             payload,
             now=now,
             profile="personal",

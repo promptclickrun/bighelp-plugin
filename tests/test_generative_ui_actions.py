@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loopdy_plugin.generative_ui import canonical_json, validate_submission_values
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.tools import register
 
 
@@ -40,7 +40,7 @@ class GenerativeUiActionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.store = LoopdyStore(Path(self.temporary.name) / "loopdy.sqlite3")
+        self.store = BighelpStore(Path(self.temporary.name) / "loopdy.sqlite3")
         self.context = _Context()
         register(
             self.context,
@@ -52,7 +52,7 @@ class GenerativeUiActionTests(unittest.TestCase):
 
     def render_form(self, session_id: str = "stored-session") -> dict:
         return json.loads(
-            self.context.tools["loopdy_render_form"](
+            self.context.tools["bighelp_render_form"](
                 form_fixture(),
                 session_id=session_id,
                 task_id="task-1",
@@ -76,19 +76,19 @@ class GenerativeUiActionTests(unittest.TestCase):
         self.assertEqual(
             set(self.context.tools),
             {
-                "loopdy_render_summary", "loopdy_render_metrics", "loopdy_render_list", "loopdy_render_timeline",
-                "loopdy_render_weather_forecast", "loopdy_render_sports_game", "loopdy_render_stock_quote",
-                "loopdy_render_chart", "loopdy_render_dashboard", "loopdy_render_form",
-                "loopdy_render_card",
-                "loopdy_render_checklist", "loopdy_render_selection", "loopdy_render_automation",
-                "loopdy_search_card_templates", "loopdy_get_card_template", "loopdy_render_card_template",
-                "loopdy_await_form_response", "loopdy_marketplace_prepare_upload",
-                "loopdy_react_to_message", "bighelp_request_secure_input",
+                "bighelp_render_summary", "bighelp_render_metrics", "bighelp_render_list", "bighelp_render_timeline",
+                "bighelp_render_weather_forecast", "bighelp_render_sports_game", "bighelp_render_stock_quote",
+                "bighelp_render_chart", "bighelp_render_dashboard", "bighelp_render_form",
+                "bighelp_render_card",
+                "bighelp_render_checklist", "bighelp_render_selection", "bighelp_render_automation",
+                "bighelp_search_card_templates", "bighelp_get_card_template", "bighelp_render_card_template",
+                "bighelp_await_form_response", "bighelp_marketplace_prepare_upload",
+                "bighelp_react_to_message", "bighelp_request_secure_input",
             },
         )
         for name, schema in self.context.schemas.items():
             self.assertFalse(schema["parameters"]["additionalProperties"], name)
-        self.assertEqual(set(self.context.schemas["loopdy_await_form_response"]["parameters"]["properties"]), {"request_id"})
+        self.assertEqual(set(self.context.schemas["bighelp_await_form_response"]["parameters"]["properties"]), {"request_id"})
 
     def test_render_form_transactionally_stores_exact_profile_session_and_schema(self) -> None:
         card = self.render_form()
@@ -127,15 +127,15 @@ class GenerativeUiActionTests(unittest.TestCase):
     def test_await_is_the_only_exact_session_consumer_and_erases_values(self) -> None:
         self.render_form()
         self.submit()
-        wrong = json.loads(self.context.tools["loopdy_await_form_response"]({"request_id": REQUEST_ID}, session_id="wrong"))
+        wrong = json.loads(self.context.tools["bighelp_await_form_response"]({"request_id": REQUEST_ID}, session_id="wrong"))
         self.assertEqual(wrong["code"], "owner_mismatch")
-        consumed = json.loads(self.context.tools["loopdy_await_form_response"]({"request_id": REQUEST_ID}, session_id="stored-session"))
+        consumed = json.loads(self.context.tools["bighelp_await_form_response"]({"request_id": REQUEST_ID}, session_id="stored-session"))
         self.assertEqual(consumed["state"], "success")
         self.assertEqual(consumed["values"], {"bags": 2, "departure_day": "friday"})
         self.assertIsNone(self.store.get_form_request(REQUEST_ID)["values"])
-        second = json.loads(self.context.tools["loopdy_await_form_response"]({"request_id": REQUEST_ID}, session_id="stored-session"))
+        second = json.loads(self.context.tools["bighelp_await_form_response"]({"request_id": REQUEST_ID}, session_id="stored-session"))
         self.assertEqual(second["code"], "already_consumed")
-        malformed = json.loads(self.context.tools["loopdy_await_form_response"]({"request_id": "not-a-request"}, session_id="stored-session"))
+        malformed = json.loads(self.context.tools["bighelp_await_form_response"]({"request_id": "not-a-request"}, session_id="stored-session"))
         self.assertEqual(malformed["code"], "request_not_found")
 
     def test_pending_expiry_status_and_concurrent_claims_are_deterministic(self) -> None:
@@ -153,7 +153,7 @@ class GenerativeUiActionTests(unittest.TestCase):
         )
         self.assertEqual(expired["code"], "request_expired")
 
-        self.store = LoopdyStore(Path(self.temporary.name) / "concurrent.sqlite3")
+        self.store = BighelpStore(Path(self.temporary.name) / "concurrent.sqlite3")
         self.context = _Context()
         register(self.context, store=self.store, profile="personal", now=lambda: NOW, request_id_factory=lambda: REQUEST_ID)
         self.render_form()

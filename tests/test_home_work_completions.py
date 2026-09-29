@@ -23,14 +23,14 @@ class HomeWorkCompletionTests(unittest.TestCase):
         from pathlib import Path
         from loopdy_plugin.activity_bridge import LinkActivityBroker
         from loopdy_plugin.registration import register
-        from loopdy_plugin.store import LoopdyStore
+        from loopdy_plugin.store import BighelpStore
         if __package__:
             from .test_registration import _Context, _Service
         else:
             from test_registration import _Context, _Service
 
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "events.sqlite3")
+            store = BighelpStore(Path(directory) / "events.sqlite3")
             service, context = _Service(), _Context()
             service.store = store
             class RecordingBroker(LinkActivityBroker):
@@ -55,7 +55,7 @@ class HomeWorkCompletionTests(unittest.TestCase):
                            profile_name="personal", completed=True, failed=False)
             context.hooks["on_session_end"](**payload)
             context.hooks["on_session_end"](**payload)
-            reopened = LoopdyStore(Path(directory) / "events.sqlite3")
+            reopened = BighelpStore(Path(directory) / "events.sqlite3")
             rows = [row for row in reopened.list_events() if row["type"] == "session.completed"]
             self.assertEqual(len(rows), 1, "Repeated observer delivery must not duplicate a run")
             self.assertEqual(rows[0]["profile"], "personal")
@@ -71,7 +71,7 @@ class HomeWorkCompletionTests(unittest.TestCase):
         from pathlib import Path
         from loopdy_plugin.activity_bridge import LinkActivityBroker
         from loopdy_plugin.registration import register
-        from loopdy_plugin.store import LoopdyStore
+        from loopdy_plugin.store import BighelpStore
         if __package__:
             from .test_registration import _Context, _Service
         else:
@@ -79,7 +79,7 @@ class HomeWorkCompletionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             service, context = _Service(), _Context()
-            service.store = LoopdyStore(Path(directory) / "events.sqlite3")
+            service.store = BighelpStore(Path(directory) / "events.sqlite3")
             service.enqueue = lambda event, target: service.store.record_event(event, target=target)
             register(context, service=service, activity_broker=LinkActivityBroker())
             context.hooks["subagent_start"](parent_session_id="parent-work", child_session_id="child-work",

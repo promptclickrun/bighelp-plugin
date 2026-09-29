@@ -18,8 +18,8 @@ from loopdy_plugin.provider import DeliveryError, DeliveryReceipt, LiveActivityS
 from loopdy_plugin.providers.apns import ApnsPushProvider
 from loopdy_plugin.relay_client import RelayConfig, RelayOutcomeUnknown, RelayPushProvider
 from loopdy_plugin.relay_crypto import b64url_encode, key_id, public_key_bytes
-from loopdy_plugin.service import LoopdyService, _session_reference
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.service import BighelpService, _session_reference
+from loopdy_plugin.store import BighelpStore
 
 
 @dataclass
@@ -94,10 +94,10 @@ class _BlockingLiveProvider(_LiveProvider):
 
 
 class ServiceTests(unittest.TestCase):
-    def _store(self, directory: str) -> LoopdyStore:
-        return LoopdyStore(Path(directory) / "loopdy.sqlite3")
+    def _store(self, directory: str) -> BighelpStore:
+        return BighelpStore(Path(directory) / "loopdy.sqlite3")
 
-    def _configure_apns(self, store: LoopdyStore, directory: str) -> None:
+    def _configure_apns(self, store: BighelpStore, directory: str) -> None:
         key_path = Path(directory) / "AuthKey_FIXTURE01.p8"
         key_path.write_bytes(
             ec.generate_private_key(ec.SECP256R1()).private_bytes(
@@ -187,7 +187,7 @@ class ServiceTests(unittest.TestCase):
                 provider="direct",
             )
             provider = _Provider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
             event = build_event(
                 "channel.message",
                 correlation=("proactive-message",),
@@ -231,7 +231,7 @@ class ServiceTests(unittest.TestCase):
                     preferences={"enabled_types": [event_type]},
                 )
             provider = _Provider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
 
             for event_type in event_types:
                 before = len(provider.calls)
@@ -259,7 +259,7 @@ class ServiceTests(unittest.TestCase):
                     preferences=preferences,
                 )
             provider = _Provider()
-            service = LoopdyService(
+            service = BighelpService(
                 store,
                 providers={"managed": provider},
                 now_fn=lambda: datetime(2026, 8, 15, 23, 0),
@@ -295,7 +295,7 @@ class ServiceTests(unittest.TestCase):
                 },
             )
             provider = _Provider()
-            service = LoopdyService(
+            service = BighelpService(
                 store,
                 providers={"managed": provider},
                 now_fn=lambda: datetime(2026, 8, 15, 15, 0, tzinfo=timezone.utc),
@@ -329,7 +329,7 @@ class ServiceTests(unittest.TestCase):
                 }
             )
             sleeps: list[float] = []
-            service = LoopdyService(
+            service = BighelpService(
                 store,
                 providers={"managed": provider},
                 sleep_fn=sleeps.append,
@@ -368,7 +368,7 @@ class ServiceTests(unittest.TestCase):
                     ],
                 }
             )
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
             service.deliver(
                 build_event("channel.message", correlation=("receipts",)),
                 target="all",
@@ -400,7 +400,7 @@ class ServiceTests(unittest.TestCase):
             store = self._store(directory)
             store.set_provider_mode("managed")
             provider = _Provider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
 
             self.assertFalse(service.health()["ready"])
             registered = service.register_device(
@@ -427,7 +427,7 @@ class ServiceTests(unittest.TestCase):
             store = self._store(directory)
             self._configure_apns(store, directory)
             managed, direct = _Provider(), _Provider()
-            service = LoopdyService(store, providers={"managed": managed, "direct": direct})
+            service = BighelpService(store, providers={"managed": managed, "direct": direct})
             self.addCleanup(service.close)
             service.register_device(device_id="managed-phone", endpoint_id="ExponentPushToken[fixture-managed]", provider="managed")
             service.register_device(device_id="direct-phone", endpoint_id="a" * 64, provider="direct")
@@ -440,7 +440,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_live_activity_registration_requires_direct_apns_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            service = LoopdyService(self._store(directory))
+            service = BighelpService(self._store(directory))
             with self.assertRaisesRegex(ValueError, "Configure direct APNs"):
                 service.register_live_activity(
                     session_id="stored",
@@ -458,7 +458,7 @@ class ServiceTests(unittest.TestCase):
             direct = _LiveProvider()
             session_id = "session-sanitized"
             store.upsert_live_activity(session_id=session_id, live_session_id=session_id, profile="default", activity_id="activity-sanitized", push_token="a" * 64, token_environment="production")
-            service = LoopdyService(store, providers={"direct": direct}, timestamp_fn=lambda: int(time.time()) + 10)
+            service = BighelpService(store, providers={"direct": direct}, timestamp_fn=lambda: int(time.time()) + 10)
             self.addCleanup(service.close)
             result = service.update_live_activities(session_id=session_id, profile="default", phase="running", detail="private detail", tool_name="private tool", active_session_count=0)
             self.assertEqual(result, {"matched": 1, "delivered": 1, "failed": 0})
@@ -472,7 +472,7 @@ class ServiceTests(unittest.TestCase):
 
 
     def test_direct_live_activity_reregistration_cannot_cross_session_ownership(self) -> None:
-        class RacingStore(LoopdyStore):
+        class RacingStore(BighelpStore):
             raced = False
 
             def active_live_activity(self, activity_id, **expected):
@@ -499,7 +499,7 @@ class ServiceTests(unittest.TestCase):
                 token_environment="production",
             )
             direct = _LiveProvider()
-            service = LoopdyService(store, providers={"direct": direct})
+            service = BighelpService(store, providers={"direct": direct})
 
             result = service.update_live_activities(
                 session_id="old-session",
@@ -512,7 +512,7 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(len(store.active_live_activities("new-session", "default")), 1)
 
             self._configure_apns(service.store, directory)
-            configured = LoopdyService(
+            configured = BighelpService(
                 service.store,
                 providers={"direct": _LiveProvider()},
             )
@@ -534,7 +534,7 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
             self._configure_apns(store, directory)
-            service = LoopdyService(store, providers={"direct": _LiveProvider()})
+            service = BighelpService(store, providers={"direct": _LiveProvider()})
             self.assertIsInstance(service._provider("direct"), ApnsPushProvider)
             store.clear_apns_config()
 
@@ -553,7 +553,7 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
             provider = _LiveProvider()
-            service = LoopdyService(store, providers={"direct": provider})
+            service = BighelpService(store, providers={"direct": provider})
 
             service.set_provider_mode("managed")
 
@@ -563,7 +563,7 @@ class ServiceTests(unittest.TestCase):
     def test_repeated_provider_rotation_does_not_retain_closed_identity_bookkeeping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
-            service = LoopdyService(store, providers={"managed": _Provider()})
+            service = BighelpService(store, providers={"managed": _Provider()})
 
             for _ in range(8):
                 with service._provider_lock:
@@ -577,7 +577,7 @@ class ServiceTests(unittest.TestCase):
             service.close()
 
     def test_receipt_ledger_read_failure_does_not_block_provider_retirement(self) -> None:
-        class RaisingStore(LoopdyStore):
+        class RaisingStore(BighelpStore):
             def __init__(self, path):
                 super().__init__(path)
                 self.receipt_reads = 0
@@ -605,7 +605,7 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = RaisingStore(Path(directory) / "loopdy.sqlite3")
             provider = ReceiptProvider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
 
             service.reconcile_receipts()
             service.close()
@@ -632,7 +632,7 @@ class ServiceTests(unittest.TestCase):
                     DeliveryError("transport_error", retryable=True),
                 ]
             )
-            service = LoopdyService(
+            service = BighelpService(
                 store,
                 providers={"direct": provider},
                 sleep_fn=lambda _delay: None,
@@ -679,7 +679,7 @@ class ServiceTests(unittest.TestCase):
                     self.closed = True
 
             provider = BlockingProvider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
             event = build_event("channel.message", correlation=("ordinary-close",))
             delivery = threading.Thread(target=lambda: service.deliver(event, target="all"))
             delivery.start()
@@ -708,7 +708,7 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
             provider = CountingProvider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
             with service._provider_lock:
                 service._providers.pop("managed")
 
@@ -718,7 +718,7 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(provider.close_count, 1)
 
     def test_delivery_releases_provider_lease_when_sent_ledger_write_fails(self) -> None:
-        class RaisingStore(LoopdyStore):
+        class RaisingStore(BighelpStore):
             def record_device_delivery(self, **kwargs):
                 if kwargs.get("status") == "sent":
                     raise RuntimeError("ledger unavailable")
@@ -732,7 +732,7 @@ class ServiceTests(unittest.TestCase):
                 provider="managed",
             )
             provider = _Provider()
-            service = LoopdyService(store, providers={"managed": provider})
+            service = BighelpService(store, providers={"managed": provider})
             event = build_event("channel.message", correlation=("ledger-failure",))
 
             with self.assertRaisesRegex(RuntimeError, "ledger unavailable"):
@@ -743,7 +743,7 @@ class ServiceTests(unittest.TestCase):
     def test_closed_service_rejects_provider_creation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
-            service = LoopdyService(store)
+            service = BighelpService(store)
             service.close()
 
             with self.assertRaisesRegex(DeliveryError, "service_closed"):
@@ -777,7 +777,7 @@ class ServiceTests(unittest.TestCase):
                 token_environment="production",
             )
             provider = _LiveProvider()
-            service = LoopdyService(store, providers={"direct": provider})
+            service = BighelpService(store, providers={"direct": provider})
             self.assertTrue(
                 service.enqueue_live_activity_update(
                     session_id="live",
@@ -814,7 +814,7 @@ class ServiceTests(unittest.TestCase):
             provider = _LiveProvider(
                 [DeliveryError("transport_error", retryable=True) for _ in range(3)]
             )
-            service = LoopdyService(
+            service = BighelpService(
                 store,
                 providers={"direct": provider},
                 sleep_fn=lambda _delay: None,
@@ -859,7 +859,7 @@ class ServiceTests(unittest.TestCase):
             provider = _LiveProvider(
                 [DeliveryError("transport_error", retryable=True) for _ in range(3)]
             )
-            service = LoopdyService(
+            service = BighelpService(
                 store,
                 providers={"direct": provider},
                 sleep_fn=lambda _delay: None,
@@ -902,7 +902,7 @@ class ServiceTests(unittest.TestCase):
                 token_environment="production",
             )
             first_provider = _LiveProvider()
-            first = LoopdyService(
+            first = BighelpService(
                 store,
                 providers={"direct": first_provider},
                 timestamp_fn=lambda: 1_700_000_000,
@@ -916,7 +916,7 @@ class ServiceTests(unittest.TestCase):
             first.close()
 
             second_provider = _LiveProvider()
-            second = LoopdyService(
+            second = BighelpService(
                 self._store(directory),
                 providers={"direct": second_provider},
                 timestamp_fn=lambda: 1_700_000_000,
@@ -966,12 +966,12 @@ class ServiceTests(unittest.TestCase):
                     network_sends.append((str(kwargs["phase"]), int(kwargs["timestamp"])))
                     return DeliveryReceipt(delivery_id="newer")
 
-            terminal_service = LoopdyService(
+            terminal_service = BighelpService(
                 store,
                 providers={"direct": _BlockingTerminalProvider()},
                 timestamp_fn=lambda: 100,
             )
-            newer_service = LoopdyService(
+            newer_service = BighelpService(
                 self._store(directory),
                 providers={"direct": _RecordingProvider()},
                 timestamp_fn=lambda: 100,
@@ -1043,12 +1043,12 @@ class ServiceTests(unittest.TestCase):
                     network_sends.append((str(kwargs["phase"]), int(kwargs["timestamp"])))
                     return DeliveryReceipt(delivery_id="followup")
 
-            completion_service = LoopdyService(
+            completion_service = BighelpService(
                 store,
                 providers={"direct": _BlockingCompletionProvider()},
                 timestamp_fn=lambda: 100,
             )
-            followup_service = LoopdyService(
+            followup_service = BighelpService(
                 self._store(directory),
                 providers={"direct": _FollowupProvider()},
                 timestamp_fn=lambda: 100,
@@ -1106,7 +1106,7 @@ class ServiceTests(unittest.TestCase):
                 token_environment="production",
             )
             provider = _BlockingLiveProvider(fail_if_closed=True)
-            service = LoopdyService(store, providers={"direct": provider})
+            service = BighelpService(store, providers={"direct": provider})
             delivery_result: dict[str, object] = {}
 
             def deliver() -> None:
@@ -1155,7 +1155,7 @@ class ServiceTests(unittest.TestCase):
             failing = _LiveProvider(
                 [DeliveryError("transport_error", retryable=True) for _ in range(3)]
             )
-            first = LoopdyService(
+            first = BighelpService(
                 store,
                 providers={"direct": failing},
                 sleep_fn=lambda _delay: None,
@@ -1172,7 +1172,7 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(len(store.pending_live_activity_updates()), 1)
 
             recovered = _LiveProvider()
-            second = LoopdyService(store, providers={"direct": recovered})
+            second = BighelpService(store, providers={"direct": recovered})
             deadline = time.monotonic() + 3
             while store.pending_live_activity_updates() and time.monotonic() < deadline:
                 time.sleep(0.05)
@@ -1194,7 +1194,7 @@ class ServiceTests(unittest.TestCase):
                 token_environment="production",
             )
             provider = _BlockingLiveProvider()
-            service = LoopdyService(store, providers={"direct": provider}, queue_size=1)
+            service = BighelpService(store, providers={"direct": provider}, queue_size=1)
             self.assertTrue(
                 service.enqueue_live_activity_update(
                     session_id="live", profile="default", status="reasoning", detail="Working"
@@ -1241,7 +1241,7 @@ class ServiceTests(unittest.TestCase):
                 token_environment="production",
             )
             provider = _LiveProvider()
-            service = LoopdyService(store, providers={"direct": provider})
+            service = BighelpService(store, providers={"direct": provider})
             result = service.update_live_activities(
                 session_id="live",
                 profile="default",

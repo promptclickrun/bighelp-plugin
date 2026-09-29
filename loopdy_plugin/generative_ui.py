@@ -60,11 +60,11 @@ def validate_render_payload(payload):
 
 
 def render_envelope(tool_name, payload):
-    expected = {"loopdy_render_" + component for component in COMPONENT_FIELDS}
+    expected = {"bighelp_render_" + component for component in COMPONENT_FIELDS}
     if tool_name not in expected:
         raise ValueError("unsupported renderer tool")
     value = validate_render_payload(payload)
-    if value["component"] != tool_name.removeprefix("loopdy_render_"):
+    if value["component"] != tool_name.removeprefix("bighelp_render_"):
         raise ValueError("tool/component mismatch")
     return {"schema": "loopdy.generative_ui", "version": 1, **value}
 
@@ -203,8 +203,8 @@ def render_v2_envelope(
     if not isinstance(payload, dict):
         raise GenerativeUIError("invalid_payload", "Renderer arguments must be an object")
     _payload_size(payload, V2_MAX_BYTES)
-    expected_component = tool_name.removeprefix("loopdy_render_")
-    if tool_name != f"loopdy_render_{expected_component}" or expected_component not in V2_COMPONENTS:
+    expected_component = tool_name.removeprefix("bighelp_render_")
+    if tool_name != f"bighelp_render_{expected_component}" or expected_component not in V2_COMPONENTS:
         raise GenerativeUIError("unsupported_component", "Unsupported renderer tool")
     allowed = {"schema", "version", "component", "title", "subtitle", "data"}
     if expected_component != "form":

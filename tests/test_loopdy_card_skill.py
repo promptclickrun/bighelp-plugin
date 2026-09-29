@@ -13,13 +13,13 @@ class LoopdyCardSkillTests(unittest.TestCase):
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("bighelp Cards", skill)
-        self.assertIn("`loopdy_render_card`", skill)
-        self.assertIn("references/loopdy-cards.md", skill)
+        self.assertIn("`bighelp_render_card`", skill)
+        self.assertIn("references/bighelp-cards.md", skill)
         self.assertIn("typed v2", skill)
         self.assertIn("visual parity", skill)
 
     def test_reference_states_the_static_data_and_non_executable_boundary(self) -> None:
-        reference = (SKILL_ROOT / "references" / "loopdy-cards.md").read_text(
+        reference = (SKILL_ROOT / "references" / "bighelp-cards.md").read_text(
             encoding="utf-8"
         )
 
@@ -36,7 +36,7 @@ class LoopdyCardSkillTests(unittest.TestCase):
                 self.assertIn(required, reference)
 
     def test_reference_covers_the_finite_language_and_static_examples(self) -> None:
-        reference = (SKILL_ROOT / "references" / "loopdy-cards.md").read_text(
+        reference = (SKILL_ROOT / "references" / "bighelp-cards.md").read_text(
             encoding="utf-8"
         )
 

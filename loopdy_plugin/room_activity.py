@@ -268,7 +268,7 @@ class RoomActivityHub:
                 if observation is None:
                     return
             except (ValueError, TypeError, UnicodeError, OverflowError):
-                logger.warning("Loopdy room observation rejected: invalid_projection")
+                logger.warning("bighelp room observation rejected: invalid_projection")
                 for feed in feeds:
                     feed.projection_drops += 1
                     feed.source_state = "unsupported_payload"

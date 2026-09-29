@@ -24,6 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .naming import TOOLSET
+
 logger = logging.getLogger(__name__)
 
 CAPABILITY = "native-agent-board-v1"
@@ -659,7 +661,7 @@ class ActivityRecorder:
 def register(ctx: Any) -> None:
     """Register the board tool and its activity/approval observers."""
     ctx.register_tool(
-        name=TOOL_NAME, toolset="loopdy",
+        name=TOOL_NAME, toolset=TOOLSET,
         schema={"name": TOOL_NAME, "description": TOOL_DESCRIPTION, "parameters": TOOL_PARAMETERS},
         handler=lambda args, **_: handle_tool(args), emoji="📌",
     )

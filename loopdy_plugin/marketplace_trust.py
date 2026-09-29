@@ -1,4 +1,4 @@
-"""Public trust anchors for releases from the Loopdy marketplace.
+"""Public trust anchors for releases from the bighelp marketplace.
 
 Only public Ed25519 keys belong here. An explicit environment override replaces
 this set, including an empty string to disable marketplace release trust.
