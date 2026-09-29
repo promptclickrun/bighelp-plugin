@@ -51,12 +51,12 @@ class ToolRegistrationTests(unittest.TestCase):
         self.assertIn("progressively disclose", skill)
         self.assertIn("`tool_search`, `tool_describe`, and `tool_call`", skill)
         self.assertIn("invoke that exact renderer", skill)
-        self.assertIn("loopdy_render_weather_forecast", skill)
+        self.assertIn("bighelp_render_weather_forecast", skill)
         self.assertIn("Do not stop at a prose-only forecast", skill)
-        self.assertIn("complete final channel-delivery payload", skill)
-        self.assertIn("no Markdown fence", skill)
-        self.assertIn("delivered to `loopdy`", skill)
-        self.assertIn("hermes send --to loopdy:all", skill)
+        # Scheduled cards ride the run's own reply and notification; the Link inbox is retired.
+        self.assertIn('`deliver: "local"`', skill)
+        self.assertIn("retired Link inbox", skill)
+        self.assertNotIn("hermes send --to loopdy:all", skill)
 
     def test_install_guidance_matches_progressive_renderer_disclosure(self):
         guidance = (
@@ -87,12 +87,12 @@ class ToolRegistrationTests(unittest.TestCase):
     def test_root_entrypoint_registers_model_schema_and_json_result(self):
         context = _Context()
         register(context, service=_Service())
-        schema = context.schemas["loopdy_render_summary"]
-        self.assertEqual(schema["name"], "loopdy_render_summary")
+        schema = context.schemas["bighelp_render_summary"]
+        self.assertEqual(schema["name"], "bighelp_render_summary")
         self.assertFalse(schema["parameters"]["additionalProperties"])
         self.assertNotIn("function", schema)
         weather_provenance = context.schemas[
-            "loopdy_render_weather_forecast"
+            "bighelp_render_weather_forecast"
         ]["parameters"]["properties"]["provenance"]
         self.assertEqual(
             weather_provenance["properties"]["valid_until"],
@@ -121,14 +121,14 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema["parameters"], SECURE_INPUT_PARAMETERS)
                 self.assertIn("never see it", description)
                 continue
-            if tool_name == "loopdy_react_to_message":
+            if tool_name == "bighelp_react_to_message":
                 from loopdy_plugin.reactions import PARAMETERS
                 self.assertEqual(renderer_schema["parameters"], PARAMETERS)
                 self.assertIn("tapback", description)
                 self.assertIn("never as a status signal", description)
                 self.assertIn("Never narrate", description)
                 continue
-            if tool_name == "loopdy_await_form_response":
+            if tool_name == "bighelp_await_form_response":
                 self.assertNotIn("renderer", description)
                 self.assertIn("exact-session", description)
                 continue
@@ -138,19 +138,19 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertIn("Only publish what the user asked you to surface", description)
                 self.assertIn("Never create schedules or posts on your own initiative", description)
                 continue
-            if tool_name == "loopdy_marketplace_prepare_upload":
+            if tool_name == "bighelp_marketplace_prepare_upload":
                 self.assertIn("private marketplace", description)
                 self.assertIn("cannot submit or publish", description)
                 self.assertTrue(renderer_schema["parameters"]["properties"]["validateOnly"])
                 continue
-            self.assertIn("direct callable native Loopdy renderer", description)
+            self.assertIn("direct callable native bighelp renderer", description)
             self.assertIn("visible in the current tool list", description)
             self.assertIn("tool_search", description)
             self.assertIn("tool_describe", description)
             self.assertIn("tool_call", description)
             self.assertIn("progressively disclosed", description)
 
-        result = context.tools["loopdy_render_summary"]({
+        result = context.tools["bighelp_render_summary"]({
             "version": 1,
             "component": "summary",
             "title": "Ready",

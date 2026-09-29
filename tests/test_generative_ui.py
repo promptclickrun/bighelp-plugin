@@ -7,7 +7,7 @@ from loopdy_plugin.generative_ui import validate_render_payload, render_envelope
 class GenerativeUiContractTests(unittest.TestCase):
     def test_summary_is_versioned_and_bounded(self):
         payload = {"component": "summary", "version": 1, "title": "Status", "body": "Ready"}
-        value = render_envelope("loopdy_render_summary", payload)
+        value = render_envelope("bighelp_render_summary", payload)
         self.assertEqual(value["version"], 1)
         self.assertEqual(value["component"], "summary")
 

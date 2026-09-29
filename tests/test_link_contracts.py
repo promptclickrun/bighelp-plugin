@@ -415,14 +415,14 @@ class LinkContractTests(unittest.TestCase):
             detail=None,
             occurred_at=1_788_000_012,
             tool_call_id="call_weather_fixture_01",
-            tool_name="loopdy_render_weather_forecast",
+            tool_name="bighelp_render_weather_forecast",
             arguments='{"city":"Chicago"}',
             result="Forecast returned.\n```json\n{\"temperature\":72}\n```",
         )
 
         self.assertEqual(event["type"], "activity.event")
         self.assertEqual(event["toolCallId"], "call_weather_fixture_01")
-        self.assertEqual(event["toolName"], "loopdy_render_weather_forecast")
+        self.assertEqual(event["toolName"], "bighelp_render_weather_forecast")
         self.assertEqual(event["arguments"], '{"city":"Chicago"}')
         self.assertEqual(
             event["result"],
@@ -775,7 +775,7 @@ class LinkContractTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import generative_ui_event
 
         card = render_envelope(
-            "loopdy_render_summary",
+            "bighelp_render_summary",
             {
                 "schema": "loopdy.generative_ui",
                 "version": 1,

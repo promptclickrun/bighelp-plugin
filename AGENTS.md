@@ -57,7 +57,8 @@ Many features span both repos. The app's side of each route lives in the app rep
 | `__init__.py`, `loopdy_plugin/registration.py` | Entry point: registers the platform adapter, hooks, tools and skills with Hermes |
 | `loopdy_plugin/native_api.py` | The app's routes under `/api/plugins/loopdy/native/…` (`router`, `_NativeRoute`, `NativeAPIError`) |
 | `loopdy_plugin/native_context.py` | `/native/context`: the feature list the app checks before calling a route |
-| `loopdy_plugin/tools.py`, `generative_ui.py`, `loopdy_cards.py` | Agent tools and native cards (`loopdy_render_*`) |
+| `loopdy_plugin/tools.py`, `generative_ui.py`, `loopdy_cards.py` | Agent tools and native cards (`bighelp_render_*`) |
+| `loopdy_plugin/agent_guide.py`, `skills/bighelp/` | What agents are told about bighelp: the chat brief and the `bighelp` skill |
 | `loopdy_plugin/agent_board.py`, `provider_usage.py`, `secure_input.py`, `agent_templates.py`, `reactions.py` | Feature modules |
 | `loopdy_plugin/live_voice_*.py`, `native_voice.py`, `voice_*.py` | Live and turn-based voice |
 | `loopdy_plugin/managed_notifications*.py`, `sealed_alerts.py` | Notifications and Live Activities |
@@ -75,12 +76,13 @@ The plugin was first called Loopdy. These names are stored on hosts or used by t
 - the plugin name in `plugin.yaml`
 - the `hermes loopdy` CLI and `/api/plugins/loopdy/…` routes
 - `LOOPDY_*` environment variables
-- the `loopdy` platform target
-- `loopdy_render_*`, `loopdy_await_form_response` and `loopdy_react_to_message` tools
+- the `loopdy` platform target and the `loopdy` toolset (saved Hermes settings name it)
+- the `loopdy:` skill namespace (it follows the plugin name)
 - the `X-Loopdy-Request-ID` header
 - the `plugin-data/loopdy` folder
 
-New tools and user-facing text say bighelp (for example `bighelp_board` and `bighelp_request_secure_input`).
+Tools and user-facing text say bighelp. The tools were `loopdy_*` until 2.20.0; the app never depended on tool
+names, so the rename was safe. Card wire formats (`loopdy.generative_ui`, the `loopdy-card` fence) stay.
 
 ## How the plugin loads (read this before touching shared state)
 
@@ -109,6 +111,19 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
 5. **Version:** bump `plugin.yaml` and `PLUGIN_VERSION` in `loopdy_plugin/link_contracts.py` together.
    `tests/test_portability.py` checks that they match.
 6. **After merge:** the app pins the new version and the merge commit, and adds its side of the route.
+
+## What agents are told
+
+- The app starts and reopens chats with session source `bighelp`. Hermes has no built-in hint for it, so the
+  plugin's prompt section (`agent_guide.py`) is the agent's description of where it is. Before, chats had no
+  source and Hermes called them its terminal UI: no files, no cards, "cron can't reach you".
+- The section is rendered once per new session and frozen, and Hermes caps all plugins' sections together at
+  8,000 characters. Keep the brief short and put detail in `skills/bighelp/SKILL.md`.
+- Plugin skills are not listed in the agent's skill index. Agents find them only through the brief or another
+  skill, so link new skills from `skills/bighelp/SKILL.md` and register them in `agent_guide.SKILLS`.
+- A scheduled job's reply reaches the phone as a managed notification from the run itself. Guidance says
+  `deliver: "local"`: an omitted `deliver` falls back to another channel's home chat, and `loopdy` delivery is
+  the retired Link inbox.
 
 ## Hermes compatibility
 

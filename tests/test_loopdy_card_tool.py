@@ -15,16 +15,16 @@ LIVE_FIXTURE = PLUGIN_ROOT / "fixtures" / "loopdy_card_v1" / "live-weather.json"
 SCHEMA = PLUGIN_ROOT / "spec" / "loopdy-card-v1.schema.json"
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 LEGACY_RENDERERS = [
-    "loopdy_render_summary",
-    "loopdy_render_metrics",
-    "loopdy_render_list",
-    "loopdy_render_timeline",
-    "loopdy_render_weather_forecast",
-    "loopdy_render_sports_game",
-    "loopdy_render_stock_quote",
-    "loopdy_render_chart",
-    "loopdy_render_dashboard",
-    "loopdy_render_form",
+    "bighelp_render_summary",
+    "bighelp_render_metrics",
+    "bighelp_render_list",
+    "bighelp_render_timeline",
+    "bighelp_render_weather_forecast",
+    "bighelp_render_sports_game",
+    "bighelp_render_stock_quote",
+    "bighelp_render_chart",
+    "bighelp_render_dashboard",
+    "bighelp_render_form",
 ]
 
 
@@ -51,9 +51,9 @@ class LoopdyCardToolTests(unittest.TestCase):
     def test_exactly_one_generic_renderer_is_registered_in_the_stable_order(self) -> None:
         context = self.context()
 
-        self.assertEqual(1, context.names.count("loopdy_render_card"))
+        self.assertEqual(1, context.names.count("bighelp_render_card"))
         self.assertEqual(
-            [*LEGACY_RENDERERS, "loopdy_render_checklist", "loopdy_render_selection", "loopdy_render_automation", "loopdy_render_card", "loopdy_await_form_response", "loopdy_marketplace_prepare_upload", "loopdy_react_to_message", "bighelp_request_secure_input"],
+            [*LEGACY_RENDERERS, "bighelp_render_checklist", "bighelp_render_selection", "bighelp_render_automation", "bighelp_render_card", "bighelp_await_form_response", "bighelp_marketplace_prepare_upload", "bighelp_react_to_message", "bighelp_request_secure_input"],
             context.names,
         )
 
@@ -68,11 +68,11 @@ class LoopdyCardToolTests(unittest.TestCase):
             "$defs": portable["$defs"],
         }
 
-        schema = context.schemas["loopdy_render_card"]
-        self.assertEqual("loopdy_render_card", schema["name"])
+        schema = context.schemas["bighelp_render_card"]
+        self.assertEqual("bighelp_render_card", schema["name"])
         self.assertEqual(expected, schema["parameters"])
         description = str(schema["description"])
-        self.assertIn("native Loopdy Card", description)
+        self.assertIn("native bighelp Card", description)
         self.assertIn("progressively disclosed", description)
         self.assertIn("data_sources must be empty", description)
         self.assertIn("live Card data refresh is unavailable", description)
@@ -82,7 +82,7 @@ class LoopdyCardToolTests(unittest.TestCase):
         context = self.context()
         payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
-        result = json.loads(context.handlers["loopdy_render_card"](payload))
+        result = json.loads(context.handlers["bighelp_render_card"](payload))
 
         from loopdy_plugin.generative_ui import extract_rendered_envelope
         self.assertEqual("loopdy.card_delivery", result["schema"])
@@ -107,7 +107,7 @@ class LoopdyCardToolTests(unittest.TestCase):
         )
 
         with self.assertRaises(LoopdyCardError) as caught:
-            context.handlers["loopdy_render_card"](payload)
+            context.handlers["bighelp_render_card"](payload)
 
         self.assertEqual("invalid_url", caught.exception.code)
 
@@ -116,7 +116,7 @@ class LoopdyCardToolTests(unittest.TestCase):
         payload = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
 
         with self.assertRaises(LoopdyCardError) as caught:
-            context.handlers["loopdy_render_card"](payload)
+            context.handlers["bighelp_render_card"](payload)
 
         self.assertEqual("live_data_unavailable", caught.exception.code)
 

@@ -49,7 +49,7 @@ class GenerativeUiActionApiTests(unittest.TestCase):
         from datetime import datetime, timezone
         now = datetime(2026, 8, 22, 0, 0, tzinfo=timezone.utc)
         card = render_v2_envelope(
-            "loopdy_render_form",
+            "bighelp_render_form",
             payload,
             now=now,
             profile="personal",

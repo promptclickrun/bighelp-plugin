@@ -19,7 +19,7 @@ class CardMessageDeliveryTests(unittest.TestCase):
     def test_registered_summary_returns_exact_assistant_fence(self):
         registry = ToolRegistry()
         register(registry)
-        tool = registry.tools["loopdy_render_summary"]
+        tool = registry.tools["bighelp_render_summary"]
         result = json.loads(tool["handler"]({
             "component": "summary", "version": 1,
             "title": "Fixture", "body": "Persist this card with its answer.",

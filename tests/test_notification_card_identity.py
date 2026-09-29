@@ -69,7 +69,7 @@ class NotificationCardIdentityTests(unittest.TestCase):
             self.assertEqual(rows[0]["detail"]["generative_ui"], card)
 
         stock_fixture = Path(__file__).resolve().parents[1] / "fixtures/generative_ui_v2/valid-stock.json"
-        stock = render_v2_envelope("loopdy_render_stock_quote", json.loads(stock_fixture.read_text()),
+        stock = render_v2_envelope("bighelp_render_stock_quote", json.loads(stock_fixture.read_text()),
                                   now=datetime(2026, 8, 22, tzinfo=timezone.utc))
         for card in (self.card, stock):
             with self.subTest(schema=card["schema"]), tempfile.TemporaryDirectory() as folder:

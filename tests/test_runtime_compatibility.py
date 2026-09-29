@@ -37,7 +37,7 @@ print(json.dumps({"ok": report.ok, "report": report.format_text(),
         self.assertTrue(report["ok"], report["report"])
         self.assertIn("pre_approval_request", report["hooks"])
         self.assertIn("post_tool_call", report["hooks"])
-        self.assertIn("loopdy_render_summary", report["tools"])
+        self.assertIn("bighelp_render_summary", report["tools"])
         self.assertEqual("on_room_member_activity" in report["hooks"], report["supports_room_activity"])
 
     def test_missing_room_hook_omits_only_room_activity_and_returns_unavailable(self):

@@ -13,7 +13,7 @@ class LoopdyCardSkillTests(unittest.TestCase):
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("bighelp Cards", skill)
-        self.assertIn("`loopdy_render_card`", skill)
+        self.assertIn("`bighelp_render_card`", skill)
         self.assertIn("references/loopdy-cards.md", skill)
         self.assertIn("typed v2", skill)
         self.assertIn("visual parity", skill)

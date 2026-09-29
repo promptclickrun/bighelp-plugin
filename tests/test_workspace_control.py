@@ -3629,7 +3629,7 @@ class HermesWorkspaceBackendTests(unittest.TestCase):
         )
         payload["provenance"]["valid_until"] = "2026-08-22T01:00:00Z"
         card = render_v2_envelope(
-            "loopdy_render_weather_forecast",
+            "bighelp_render_weather_forecast",
             payload,
             now=datetime(2026, 8, 22, tzinfo=timezone.utc),
             profile="default",

@@ -210,6 +210,8 @@ def register(
             bridge=device_tool_bridge if legacy_device_tools else None,
         )
     register_marketplace_publish_skill(ctx)
+    from .agent_guide import register as register_agent_guide
+    register_agent_guide(ctx)
     # Feed, Ideas, Goals, Activity and Approvals history for the bighelp app.
     # The tool writes only when an agent is asked to; the observers only record.
     try:
@@ -430,18 +432,18 @@ def _pre_llm_call(
     sections.append(
         "[Loopdy native presentation]\n"
         "When structured presentation is clearer than prose, call exactly one matching "
-        "direct renderer such as loopdy_render_weather_forecast, "
-        "loopdy_render_stock_quote, loopdy_render_chart, loopdy_render_dashboard, or "
-        "loopdy_render_form. Those typed v2 renderers remain preferred for their existing "
+        "direct renderer such as bighelp_render_weather_forecast, "
+        "bighelp_render_stock_quote, bighelp_render_chart, bighelp_render_dashboard, or "
+        "bighelp_render_form. Those typed v2 renderers remain preferred for their existing "
         "polished use cases. For a new static layout that does not match a typed renderer, "
-        "use loopdy_render_card with embedded values and an empty data_sources array. "
+        "use bighelp_render_card with embedded values and an empty data_sources array. "
         "Live Loopdy Card data refresh is unavailable in this release. "
         "In interactive chat, a renderer tool call alone does not display a card: include the returned "
         "display_markdown exactly once in the assistant answer so it survives history and exports. "
         "For scheduler-owned Loopdy Inbox delivery, instead return only the raw JSON object from the "
         "wrapper's card field. "
         "For current weather or forecast requests, use "
-        "loopdy_render_weather_forecast after obtaining the data when a card is useful; "
+        "bighelp_render_weather_forecast after obtaining the data when a card is useful; "
         "if Hermes has progressively disclosed the renderer, use the official "
         "tool_search, tool_describe, and tool_call bridge to load and invoke that exact "
         "renderer. Do not stop at prose when the native card is relevant, and do not "
@@ -499,7 +501,7 @@ def _publish_generative_ui_result(
     payload: dict[str, Any],
 ) -> None:
     tool_name = str(payload.get("tool_name") or "").strip()
-    if not tool_name.startswith("loopdy_render_"):
+    if not tool_name.startswith("bighelp_render_"):
         return
     if str(payload.get("status") or "").strip().lower() not in {
         "ok", "success", "succeeded", "completed",

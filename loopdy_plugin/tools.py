@@ -188,7 +188,7 @@ def _v2_handler(
         )
         if value["component"] == "form":
             if store is None or not hasattr(store, "create_form_request"):
-                raise ValueError("Loopdy form storage is unavailable")
+                raise ValueError("bighelp form storage is unavailable")
             store.create_form_request(
                 request_id=value["action"]["request_id"],
                 profile=value["action"]["owner"]["profile"],
@@ -212,7 +212,7 @@ def _await_handler(*, store: Any, profile: str, now: Callable[[], datetime]):
         if not isinstance(payload, dict) or set(payload) != {"request_id"}:
             raise ValueError("await arguments must contain only request_id")
         if store is None or not hasattr(store, "consume_form_response"):
-            raise ValueError("Loopdy form storage is unavailable")
+            raise ValueError("bighelp form storage is unavailable")
         try:
             value = store.consume_form_response(
                 request_id=payload["request_id"],
@@ -233,7 +233,7 @@ def _template_store(store: Any) -> Any:
         hasattr(store, name)
         for name in ("list_card_templates", "get_card_template")
     ):
-        raise ValueError("Loopdy card template storage is unavailable")
+        raise ValueError("bighelp card template storage is unavailable")
     return store
 
 
@@ -277,7 +277,7 @@ def _template_get_handler(*, store: Any, profile: str):
             template_id=template_id,
         )
         if template is None:
-            raise ValueError("Loopdy card template was not found")
+            raise ValueError("bighelp card template was not found")
         return canonical_card_json({"template": template})
 
     return handle
@@ -301,7 +301,7 @@ def _template_render_handler(
             template_id=template_id,
         )
         if template is None:
-            raise ValueError("Loopdy card template was not found")
+            raise ValueError("bighelp card template was not found")
         values = _validated_template_parameters(template["parameters_schema"], parameters)
         document = _substitute_template_parameters(
             template["document"],
@@ -309,7 +309,7 @@ def _template_render_handler(
             declared_names=set(template["parameters_schema"]["properties"]),
         )
         # This deliberately ends on the same renderer-owned validator as
-        # loopdy_render_card; templates do not gain a parallel rendering path.
+        # bighelp_render_card; templates do not gain a parallel rendering path.
         return canonical_card_json(rendered_card_delivery(render_card(document, now=now())))
 
     return handle
@@ -532,8 +532,8 @@ def _template_tool_description(action: str) -> str:
         if action == "Render" else ""
     )
     return (
-        f"{action} profile-installed Loopdy Card templates for the direct callable native "
-        "Loopdy renderer. Call it when visible in the current tool list. When progressively "
+        f"{action} profile-installed bighelp Card templates for the direct callable native "
+        "bighelp renderer. Call it when visible in the current tool list. When progressively "
         "disclosed, use tool_search, tool_describe, and tool_call to invoke this exact tool."
         + delivery
     )
@@ -611,12 +611,12 @@ def _marketplace_publish_parameters() -> dict[str, Any]:
 def _marketplace_publish_handler(publisher: Any):
     async def handle(payload, **_kwargs):
         if publisher is None or not callable(getattr(publisher, "prepare_upload", None)):
-            raise ValueError("Loopdy Marketplace publishing is unavailable")
+            raise ValueError("bighelp Marketplace publishing is unavailable")
         result = publisher.prepare_upload(payload)
         if inspect.isawaitable(result):
             result = await result
         if not isinstance(result, dict):
-            raise ValueError("Loopdy Marketplace publishing returned an invalid result")
+            raise ValueError("bighelp Marketplace publishing returned an invalid result")
         return json.dumps(
             result, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         )
@@ -639,17 +639,17 @@ def register(
     selected_profile = str(profile or getattr(ctx, "profile_name", "default") or "default")
     clock = now or (lambda: datetime.now(timezone.utc))
     for component in ("summary", "metrics", "list", "timeline"):
-        name = f"loopdy_render_{component}"
+        name = f"bighelp_render_{component}"
         ctx.register_tool(
             name=name,
             toolset="loopdy",
             schema={
                 "name": name,
                 "description": (
-                    f"Render a bounded Loopdy {component} display-only card. "
+                    f"Render a bounded bighelp {component} display-only card. "
                     "The tool call alone does not display the card: include the returned "
                     "display_markdown exactly once in the assistant answer. "
-                    "This is a direct callable native Loopdy renderer. Call it directly "
+                    "This is a direct callable native bighelp renderer. Call it directly "
                     "when it is visible in the current tool list. When Hermes has "
                     "progressively disclosed it and it is absent, use the official "
                     "tool_search, tool_describe, and tool_call bridge to invoke this "
@@ -660,15 +660,15 @@ def register(
             handler=_handler(name),
         )
     for component in V2_COMPONENTS:
-        name = f"loopdy_render_{component}"
+        name = f"bighelp_render_{component}"
         ctx.register_tool(
             name=name,
             toolset="loopdy",
             schema={
                 "name": name,
                 "description": (
-                    f"Render a bounded Loopdy {component} native v2 card. This is a direct callable "
-                    "native Loopdy renderer. The tool call alone does not display the card: include "
+                    f"Render a bounded bighelp {component} native v2 card. This is a direct callable "
+                    "native bighelp renderer. The tool call alone does not display the card: include "
                     "the returned display_markdown exactly once in the assistant answer. Call it "
                     "directly when it is visible in the current "
                     "tool list. When Hermes has progressively disclosed it and it is absent, use "
@@ -686,34 +686,32 @@ def register(
             ),
         )
     ctx.register_tool(
-        name="loopdy_render_card",
+        name="bighelp_render_card",
         toolset="loopdy",
         schema={
-            "name": "loopdy_render_card",
+            "name": "bighelp_render_card",
             "description": (
-                "Render one bounded static native Loopdy Card from the finite component catalog. "
+                "Render one bounded static native bighelp Card from the finite component catalog. "
                 "All displayed values must be embedded in the payload and data_sources must be empty; "
-                "live Card data refresh is unavailable in this release. This is the direct callable native Loopdy renderer. "
+                "live Card data refresh is unavailable in this release. This is the direct callable native bighelp renderer. "
                 "Call this renderer directly when it is visible in the current tool list. When Hermes has progressively "
                 "disclosed it and it is absent, use the official tool_search, tool_describe, "
                 "and tool_call bridge to invoke this exact renderer; do not substitute or "
-                "wrap another tool. In normal interactive chat, the tool call alone does not display the card: "
-                "include the returned display_markdown exactly once in the assistant answer. For scheduler-owned "
-                "Loopdy Inbox delivery, preserve the raw-envelope path: your final response must be exactly the "
-                "JSON object in the returned card field, with no prose or code fence. The renderer tool result "
-                "alone is not delivered by cron."
+                "wrap another tool. The tool call alone does not display the card: include the returned "
+                "display_markdown exactly once in the assistant answer. In a scheduled job, do the same in the "
+                "run's final reply, after one plain sentence the user's notification can show."
             ),
             "parameters": _card_parameters(),
         },
         handler=_card_handler(clock),
     )
     ctx.register_tool(
-        name="loopdy_await_form_response",
+        name="bighelp_await_form_response",
         toolset="loopdy",
         schema={
-            "name": "loopdy_await_form_response",
+            "name": "bighelp_await_form_response",
             "description": (
-                "Wait for one exact-session Loopdy form response. Call this tool directly; it must "
+                "Wait for one exact-session bighelp form response. Call this tool directly; it must "
                 "not be routed through tool_search, tool_describe, or tool_call."
             ),
             "parameters": _strict_object(
@@ -724,15 +722,15 @@ def register(
         handler=_await_handler(store=store, profile=selected_profile, now=clock),
     )
     ctx.register_tool(
-        name="loopdy_marketplace_prepare_upload",
+        name="bighelp_marketplace_prepare_upload",
         toolset="loopdy",
         schema={
-            "name": "loopdy_marketplace_prepare_upload",
+            "name": "bighelp_marketplace_prepare_upload",
             "description": (
-                "Validate one explicitly selected Loopdy theme attachment, installed card "
+                "Validate one explicitly selected bighelp theme attachment, installed card "
                 "template, or profile-owned skill and, only when the current user request "
                 "authorizes that exact source and destination, prepare a private marketplace "
-                "draft for review in Loopdy My Uploads. Use validateOnly first. This tool "
+                "draft for review in bighelp My Uploads. Use validateOnly first. This tool "
                 "cannot submit or publish a listing."
             ),
             "parameters": _marketplace_publish_parameters(),
@@ -746,13 +744,13 @@ def register(
     ):
         template_tools = (
             (
-                "loopdy_search_card_templates",
+                "bighelp_search_card_templates",
                 _template_tool_description("Search"),
                 _strict_object({"query": {"type": "string", "maxLength": 120}}, ["query"]),
                 _template_search_handler(store=store, profile=selected_profile),
             ),
             (
-                "loopdy_get_card_template",
+                "bighelp_get_card_template",
                 _template_tool_description("Get"),
                 _strict_object(
                     {"template_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}},
@@ -761,7 +759,7 @@ def register(
                 _template_get_handler(store=store, profile=selected_profile),
             ),
             (
-                "loopdy_render_card_template",
+                "bighelp_render_card_template",
                 _template_tool_description("Render"),
                 _strict_object(
                     {

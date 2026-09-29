@@ -133,10 +133,10 @@ def register(ctx: Any) -> bool:
     if not supported():
         return False
     ctx.register_tool(
-        name="loopdy_react_to_message",
+        name="bighelp_react_to_message",
         toolset="loopdy",
         schema={
-            "name": "loopdy_react_to_message",
+            "name": "bighelp_react_to_message",
             "description": (
                 "React to the person's message in the bighelp app with one emoji, the way "
                 "you'd tapback in iMessage: something funny gets a 😂, good news or warmth a "

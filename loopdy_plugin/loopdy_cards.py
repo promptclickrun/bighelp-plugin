@@ -175,9 +175,9 @@ def validate_card_input(
     required = allowed - {"importance", "valid_until"}
     _object(value, allowed, required)
     if value["schema"] != "loopdy.card":
-        _raise("invalid_schema", "Unsupported Loopdy Card schema")
+        _raise("invalid_schema", "Unsupported bighelp Card schema")
     if isinstance(value["version"], bool) or value["version"] != 1:
-        _raise("unsupported_version", "Unsupported Loopdy Card version")
+        _raise("unsupported_version", "Unsupported bighelp Card version")
     _text(value["title"])
     _text(value["spoken_summary"])
     if "importance" in value and value["importance"] not in {"normal", "important", "urgent"}:
@@ -196,7 +196,7 @@ def validate_card_input(
     if sources and not allow_live_data_for_testing:
         _raise(
             "live_data_unavailable",
-            "Live Loopdy Card data sources are not available in this release",
+            "Live bighelp Card data sources are not available in this release",
         )
     elements = value["elements"]
     if not isinstance(elements, dict) or not 1 <= len(elements) <= MAX_ELEMENTS:

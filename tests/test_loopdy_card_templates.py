@@ -107,7 +107,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
             invalid_card["sha256"] = hashlib.sha256(
                 canonical_json(invalid_card["document"]).encode("utf-8")
             ).hexdigest()
-            with self.assertRaisesRegex(ValueError, "Loopdy Card schema"):
+            with self.assertRaisesRegex(ValueError, "bighelp Card schema"):
                 store.install_card_template(profile="personal", template=invalid_card)
 
             bad_hash = _template()
@@ -269,18 +269,18 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             register_tools(context, store=store, profile="personal", now=lambda: NOW)
 
             names = {
-                "loopdy_search_card_templates",
-                "loopdy_get_card_template",
-                "loopdy_render_card_template",
+                "bighelp_search_card_templates",
+                "bighelp_get_card_template",
+                "bighelp_render_card_template",
             }
             self.assertTrue(names.issubset(context.tools))
-            search = json.loads(context.tools["loopdy_search_card_templates"]({"query": "health"}))
+            search = json.loads(context.tools["bighelp_search_card_templates"]({"query": "health"}))
             self.assertEqual([item["id"] for item in search["templates"]], ["build-health"])
-            fetched = json.loads(context.tools["loopdy_get_card_template"]({
+            fetched = json.loads(context.tools["bighelp_get_card_template"]({
                 "template_id": "build-health"
             }))
             self.assertEqual(fetched["template"], _template())
-            rendered = json.loads(context.tools["loopdy_render_card_template"]({
+            rendered = json.loads(context.tools["bighelp_render_card_template"]({
                 "template_id": "build-health",
                 "parameters": {},
             }))
@@ -293,11 +293,11 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             isolated.profile_name = "research"
             register_plugin(isolated, service=_Service(store))
             self.assertEqual(
-                json.loads(isolated.tools["loopdy_search_card_templates"]({"query": ""})),
+                json.loads(isolated.tools["bighelp_search_card_templates"]({"query": ""})),
                 {"templates": []},
             )
             with self.assertRaisesRegex(ValueError, "not found"):
-                isolated.tools["loopdy_get_card_template"]({"template_id": "build-health"})
+                isolated.tools["bighelp_get_card_template"]({"template_id": "build-health"})
 
     def test_render_template_validates_and_substitutes_declared_parameters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -319,7 +319,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             context = _PluginContext()
             register_tools(context, store=store, profile="personal", now=lambda: NOW)
 
-            rendered = json.loads(context.tools["loopdy_render_card_template"]({
+            rendered = json.loads(context.tools["bighelp_render_card_template"]({
                 "template_id": "status-card",
                 "parameters": {"Status-Label": "Ready"},
             }))
@@ -335,7 +335,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             )
             self.assertEqual(validate_card_result(rendered, now=NOW), rendered)
             with self.assertRaisesRegex(ValueError, "invalid"):
-                context.tools["loopdy_render_card_template"]({
+                context.tools["bighelp_render_card_template"]({
                     "template_id": "status-card",
                     "parameters": {"Status-Label": "Unknown"},
                 })
@@ -365,7 +365,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             unsafe["sha256"] = hashlib.sha256(
                 canonical_json(unsafe["document"]).encode("utf-8")
             ).hexdigest()
-            with self.assertRaisesRegex(ValueError, "Live Loopdy Card data sources"):
+            with self.assertRaisesRegex(ValueError, "Live bighelp Card data sources"):
                 store.install_card_template(profile="personal", template=unsafe)
 
 

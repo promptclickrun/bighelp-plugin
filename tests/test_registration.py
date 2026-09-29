@@ -404,7 +404,7 @@ class RegistrationTests(unittest.TestCase):
         context.hooks["post_tool_call"](
             **coordinates,
             profile_name="personal",
-            tool_name="loopdy_render_summary",
+            tool_name="bighelp_render_summary",
             tool_call_id="call_render_fixture_0001",
             status="ok",
             result=json.dumps(
@@ -456,7 +456,7 @@ class RegistrationTests(unittest.TestCase):
             session_id=session_id,
             turn_id=turn_id,
             profile_name="personal",
-            tool_name="loopdy_render_card",
+            tool_name="bighelp_render_card",
             tool_call_id="call_render_card_fixture_0001",
             status="ok",
             result=json.dumps(rendered),
@@ -478,7 +478,7 @@ class RegistrationTests(unittest.TestCase):
             "session_id": "session_coordinate_0004",
             "turn_id": "turn_coordinate_0004",
             "profile_name": "personal",
-            "tool_name": "loopdy_render_summary",
+            "tool_name": "bighelp_render_summary",
             "tool_call_id": "call_render_fixture_0002",
             "result": json.dumps(
                 {
@@ -897,7 +897,7 @@ class RegistrationTests(unittest.TestCase):
         )
 
         self.assertIn("Alex", result["context"])
-        self.assertIn("loopdy_render_weather_forecast", result["context"])
+        self.assertIn("bighelp_render_weather_forecast", result["context"])
         self.assertIn("structured presentation", result["context"])
         self.assertIn("tool_search", result["context"])
         self.assertIn("Do not stop at prose", result["context"])
@@ -952,7 +952,8 @@ class RegistrationTests(unittest.TestCase):
                 "kanban_task_blocked",
             } | ({"on_room_member_activity"} if "on_room_member_activity" in VALID_HOOKS else set()),
         )
-        self.assertEqual(set(context.skills), {"loopdy-marketplace-publish", "bighelp-feed-and-ideas"})
+        self.assertEqual(set(context.skills), {"loopdy-marketplace-publish", "bighelp-feed-and-ideas", "bighelp",
+                                               "generative-ui", "custom-theme-authoring"})
         self.assertTrue(context.skills["bighelp-feed-and-ideas"]["path"].is_file())
         self.assertTrue(context.skills["loopdy-marketplace-publish"]["path"].is_file())
 
