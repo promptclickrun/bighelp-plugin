@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import ec
-from loopdy_plugin.adapter import LoopdyAdapter
+from loopdy_plugin.adapter import BighelpAdapter
 from loopdy_plugin.direct_runtime import DirectRuntime, DirectSettings
 from loopdy_plugin.link_client import LinkRuntimeConfig
 from loopdy_plugin.direct_connection import canonical_enrollment_transcript
@@ -28,7 +28,7 @@ class DirectAdapterTests(unittest.IsolatedAsyncioTestCase):
         class Workspace:
             async def execute(self,request,**kwargs):
                 return {"agents":[{"id":"default","name":"Fixture"}]}
-        adapter=LoopdyAdapter(PlatformConfig(enabled=True),service=_Service(),link_client=link,workspace_controller=Workspace())
+        adapter=BighelpAdapter(PlatformConfig(enabled=True),service=_Service(),link_client=link,workspace_controller=Workspace())
         catalog={"version":1,"devices":[_device("host_1",role="host",epoch=7),_device("phone_1",role="mobile",epoch=11)]}
         with tempfile.TemporaryDirectory() as root:
             with socket.socket() as bound:

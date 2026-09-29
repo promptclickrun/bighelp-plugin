@@ -1,4 +1,4 @@
-"""Thread-safe Hermes lifecycle projection onto the existing Loopdy Link socket."""
+"""Thread-safe Hermes lifecycle projection onto the existing bighelp Link socket."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from .link_contracts import (
 )
 
 
-logger = logging.getLogger("hermes.plugins.loopdy.activity")
+logger = logging.getLogger("hermes.plugins.bighelp.activity")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]+$")
 _INTERNAL_TURN = re.compile(r"^[A-Za-z0-9_:-]+$")
 
@@ -402,7 +402,7 @@ class LinkActivityBroker:
             entry = resolver(hermes_session)
         except Exception as exc:
             logger.warning(
-                "Loopdy Link session lookup failed (%s)", type(exc).__name__
+                "bighelp Link session lookup failed (%s)", type(exc).__name__
             )
             return None
         origin = getattr(entry, "origin", None)
@@ -435,7 +435,7 @@ class LinkActivityBroker:
         try:
             state = self._goal_provider(session_id)
         except Exception as exc:
-            logger.warning("Loopdy goal snapshot failed (%s)", type(exc).__name__)
+            logger.warning("bighelp goal snapshot failed (%s)", type(exc).__name__)
             return None
         if not isinstance(state, dict):
             return None
@@ -530,7 +530,7 @@ class LinkActivityBroker:
             snapshot = provider(session_id)
         except Exception as exc:
             logger.warning(
-                "Loopdy context snapshot failed (%s)", type(exc).__name__
+                "bighelp context snapshot failed (%s)", type(exc).__name__
             )
             return False
         if not isinstance(snapshot, dict):
@@ -796,7 +796,7 @@ class LinkActivityBroker:
                 observed = True
             except Exception:
                 # Independent presentation failure cannot disable legacy Link.
-                logger.warning("Loopdy presentation observer rejected an event")
+                logger.warning("bighelp presentation observer rejected an event")
         with self._lock:
             loop = self._loop
             queue = self._queue
@@ -885,7 +885,7 @@ class LinkActivityBroker:
         try:
             queue.put_nowait(payload)
         except asyncio.QueueFull:
-            logger.warning("Loopdy Link activity queue remained full")
+            logger.warning("bighelp Link activity queue remained full")
 
     async def _drain(self) -> None:
         while True:
@@ -910,7 +910,7 @@ class LinkActivityBroker:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "Loopdy Link activity delivery failed (%s)", type(exc).__name__
+                    "bighelp Link activity delivery failed (%s)", type(exc).__name__
                 )
             finally:
                 queue.task_done()
@@ -1407,7 +1407,7 @@ def _publish(
         logger.warning("Hermes activity coordinates were invalid")
         return
     if not broker.publish(payload):
-        logger.debug("Loopdy Link activity has no attached socket")
+        logger.debug("bighelp Link activity has no attached socket")
 
 
 def _event_id(prefix: str, *coordinates: str) -> str:

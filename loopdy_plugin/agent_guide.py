@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 
 SESSION_SOURCE = "bighelp"
 SECTION_ID = "bighelp"

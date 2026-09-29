@@ -1,4 +1,4 @@
-"""Loopdy management surface over Hermes' canonical personality owner."""
+"""bighelp management surface over Hermes' canonical personality owner."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class PersonalityCatalogManager:
                     "name": name,
                     # Hermes appends a three-character ellipsis after `width`
                     # when truncating. Reserve that space so the canonical
-                    # preview always fits Loopdy Link's 240-character field.
+                    # preview always fits bighelp Link's 240-character field.
                     "description": describe_personality(value, width=237),
                     "systemPrompt": render_personality_prompt(value),
                     "tone": str(structured.get("tone") or "").strip(),

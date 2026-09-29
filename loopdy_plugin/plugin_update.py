@@ -1,4 +1,4 @@
-"""Durable, restart-safe self-update coordination for the Loopdy plugin.
+"""Durable, restart-safe self-update coordination for the bighelp plugin.
 
 The journal and copied worker live in profile-local plugin data, outside the
 replaceable installation.  This module never accepts an update source, ref,
@@ -30,7 +30,9 @@ SOURCE_URL = "https://github.com/promptclickrun/bighelp-plugin"
 PLUGIN_REPOSITORIES = ("promptclickrun/bighelp-plugin", "promptclickrun/loopdy-plugin")
 APP_REPOSITORIES = ("promptclickrun/bighelp-ios", "promptclickrun/loopdy-ios")
 APP_SOURCE_URL = "https://github.com/promptclickrun/bighelp-ios"
-SOURCE_BRANCH = "main"
+# Updates install the latest published release. A merge that bumps the version
+# publishes one (.github/workflows/release.yml); other merges don't reach hosts.
+RELEASES_URL = "https://api.github.com/repos/promptclickrun/bighelp-plugin/releases/latest"
 PLUGIN_NAME = "loopdy"
 _OPERATION_ID = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -143,7 +145,7 @@ class _FileLock:
                     raise
                 if time.monotonic() >= deadline:
                     handle.close()
-                    raise TimeoutError("Loopdy plugin update state is busy") from exc
+                    raise TimeoutError("bighelp plugin update state is busy") from exc
                 time.sleep(0.05)
 
     def __exit__(self, _kind: Any, _value: Any, _traceback: Any) -> None:
@@ -192,7 +194,7 @@ class PluginUpdateManager:
         operation_id = _operation_id(operation_id)
         device_id = _device_id(device_id)
         if type(restart) is not bool:
-            raise ValueError("Loopdy plugin update restart choice is invalid")
+            raise ValueError("bighelp plugin update restart choice is invalid")
 
         with _FileLock(self.state_lock_path):
             state = self._read_state()
@@ -204,12 +206,12 @@ class PluginUpdateManager:
                     or existing.get("profile") != self.profile
                     or existing.get("plugin_root") != str(self.plugin_root)
                 ):
-                    raise ValueError("Loopdy plugin update operation conflicts with existing state")
+                    raise ValueError("bighelp plugin update operation conflicts with existing state")
                 return self._public_status(state, existing)
 
             for operation in state["operations"].values():
                 if operation.get("phase") not in _TERMINAL_PHASES:
-                    raise ValueError("Another Loopdy plugin update is already in progress")
+                    raise ValueError("Another bighelp plugin update is already in progress")
 
             runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
             now = int(time.time())
@@ -220,7 +222,7 @@ class PluginUpdateManager:
                 "profile": self.profile,
                 "plugin_root": str(self.plugin_root),
                 "phase": "launching",
-                "message": "Preparing the Loopdy plugin update.",
+                "message": "Preparing the bighelp plugin update.",
                 "target_revision": "",
                 "prior_revision": _metadata_revision(self.plugin_root),
                 "started_runtime_id": str(runtime.get("runtime_id") or ""),
@@ -267,10 +269,10 @@ class PluginUpdateManager:
             operation = state["operations"].get(selected) if selected else None
             if operation is None:
                 if operation_id is not None:
-                    raise ValueError("Loopdy plugin update operation was not found")
+                    raise ValueError("bighelp plugin update operation was not found")
                 return self._idle_status(state)
             if device_id is not None and operation.get("device_id") not in {device_id, local_cli_device_id(self.profile)}:
-                raise ValueError("Loopdy plugin update operation belongs to another device")
+                raise ValueError("bighelp plugin update operation belongs to another device")
             if self._reconcile_completion(state, operation):
                 self._write_state(state)
             return self._public_status(state, operation)
@@ -356,16 +358,16 @@ class PluginUpdateManager:
         try:
             value = json.loads(self.journal_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise PluginUpdateError("Loopdy plugin update journal is unreadable") from exc
+            raise PluginUpdateError("bighelp plugin update journal is unreadable") from exc
         if (
             not isinstance(value, dict)
             or value.get("version") != 1
             or not isinstance(value.get("operations"), dict)
         ):
-            raise PluginUpdateError("Loopdy plugin update journal is invalid")
+            raise PluginUpdateError("bighelp plugin update journal is invalid")
         operations = value["operations"]
         if len(operations) > 64:
-            raise PluginUpdateError("Loopdy plugin update journal is invalid")
+            raise PluginUpdateError("bighelp plugin update journal is invalid")
         for key, operation in operations.items():
             if (
                 not isinstance(key, str)
@@ -373,13 +375,13 @@ class PluginUpdateManager:
                 or not isinstance(operation, dict)
                 or operation.get("operation_id") != key
             ):
-                raise PluginUpdateError("Loopdy plugin update journal is invalid")
+                raise PluginUpdateError("bighelp plugin update journal is invalid")
         latest = value.get("latest_operation_id", "")
         if latest and (not isinstance(latest, str) or latest not in operations):
-            raise PluginUpdateError("Loopdy plugin update journal is invalid")
+            raise PluginUpdateError("bighelp plugin update journal is invalid")
         runtime = value.get("runtime")
         if runtime is not None and not isinstance(runtime, dict):
-            raise PluginUpdateError("Loopdy plugin update journal is invalid")
+            raise PluginUpdateError("bighelp plugin update journal is invalid")
         return value
 
     def _write_state(self, state: dict[str, Any]) -> None:
@@ -430,7 +432,7 @@ class PluginUpdateManager:
             "installed_revision": installed,
             "active_revision": str(runtime.get("revision") or "")[:40],
             "runtime_id": str(runtime.get("runtime_id") or "")[:128],
-            "message": "No Loopdy plugin update is in progress.",
+            "message": "No bighelp plugin update is in progress.",
         }
         return _wire_status(value)
 
@@ -453,7 +455,7 @@ class PluginUpdateManager:
             and operation.get("link_response_runtime_id") == runtime_id
         ):
             operation["phase"] = "complete"
-            operation["message"] = "The updated Loopdy plugin is active and Link responded."
+            operation["message"] = "The updated bighelp plugin is active and Link responded."
             operation["updated_at"] = int(time.time())
             return True
         return False
@@ -474,7 +476,7 @@ class PluginUpdateManager:
     def _launch_detached_worker(self, operation_id: str) -> None:
         expected = self.hermes_home / "plugins" / PLUGIN_NAME
         if self.plugin_root != expected:
-            raise PluginUpdateError("Self-update requires an installed Loopdy plugin")
+            raise PluginUpdateError("Self-update requires an installed bighelp plugin")
 
         worker_root = self.data_root / "workers" / operation_id
         worker_root.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -589,19 +591,19 @@ def _wire_status(value: dict[str, Any]) -> dict[str, Any]:
 
 def _operation_id(value: Any) -> str:
     if not isinstance(value, str) or _OPERATION_ID.fullmatch(value) is None:
-        raise ValueError("Loopdy plugin update operation ID is invalid")
+        raise ValueError("bighelp plugin update operation ID is invalid")
     return value
 
 
 def _device_id(value: Any) -> str:
     if not isinstance(value, str) or _DEVICE_ID.fullmatch(value) is None:
-        raise ValueError("Loopdy plugin update device ID is invalid")
+        raise ValueError("bighelp plugin update device ID is invalid")
     return value
 
 
 def _profile(value: Any) -> str:
     if not isinstance(value, str) or _PROFILE.fullmatch(value) is None:
-        raise ValueError("Loopdy plugin update profile is invalid")
+        raise ValueError("bighelp plugin update profile is invalid")
     return value
 
 
@@ -647,7 +649,7 @@ __all__ = [
     "PluginUpdateError",
     "PluginUpdateManager",
     "RUNTIME_ID",
-    "SOURCE_BRANCH",
+    "RELEASES_URL",
     "SOURCE_URL",
     "local_cli_device_id",
     "new_operation_id",

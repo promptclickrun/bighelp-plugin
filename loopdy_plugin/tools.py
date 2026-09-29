@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .naming import CARD_SCHEMA, GENERATIVE_UI_SCHEMA, TOOLSET, card_input
 from .generative_ui import (
     V2_COMPONENTS,
     render_envelope,
@@ -19,7 +20,7 @@ from .store import form_action_response
 
 def _parameters(component):
     fields = {
-        "schema": {"type": "string", "const": "loopdy.generative_ui"},
+        "schema": {"type": "string", "const": GENERATIVE_UI_SCHEMA},
         "version": {"type": "integer", "const": 1},
         "component": {"type": "string", "const": component},
         "title": {"type": "string", "maxLength": 500},
@@ -39,7 +40,7 @@ def _handler(tool_name):
         if not isinstance(payload, dict):
             raise ValueError("renderer arguments must be an object")
         return json.dumps(
-            rendered_card_delivery(render_envelope(tool_name, payload)),
+            rendered_card_delivery(render_envelope(tool_name, card_input(payload))),
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
@@ -64,7 +65,7 @@ def _v2_parameters(component: str) -> dict[str, Any]:
         ["source_name", "source_timestamp", "retrieved_at", "cache_status"],
     )
     properties = {
-        "schema": {"type": "string", "const": "loopdy.generative_ui"},
+        "schema": {"type": "string", "const": GENERATIVE_UI_SCHEMA},
         "version": {"type": "integer", "const": 2},
         "component": {"type": "string", "const": component},
         "title": _text(120),
@@ -87,7 +88,7 @@ def _card_parameters() -> dict[str, Any]:
     portable = json.loads(schema_path.read_text(encoding="utf-8"))
     return {
         "type": portable["type"],
-        "properties": portable["properties"],
+        "properties": {**portable["properties"], "schema": {"const": CARD_SCHEMA}},
         "required": portable["required"],
         "additionalProperties": portable["additionalProperties"],
         "$defs": portable["$defs"],
@@ -96,7 +97,7 @@ def _card_parameters() -> dict[str, Any]:
 
 def _card_handler(now: Callable[[], datetime]):
     def handle(payload, **_kwargs):
-        return canonical_card_json(rendered_card_delivery(render_card(payload, now=now())))
+        return canonical_card_json(rendered_card_delivery(render_card(card_input(payload), now=now())))
 
     return handle
 
@@ -180,7 +181,7 @@ def _v2_handler(
         created = now()
         value = render_v2_envelope(
             tool_name,
-            payload,
+            card_input(payload),
             now=created,
             profile=profile,
             session_id=str(kwargs.get("session_id") or ""),
@@ -642,7 +643,7 @@ def register(
         name = f"bighelp_render_{component}"
         ctx.register_tool(
             name=name,
-            toolset="loopdy",
+            toolset=TOOLSET,
             schema={
                 "name": name,
                 "description": (
@@ -663,7 +664,7 @@ def register(
         name = f"bighelp_render_{component}"
         ctx.register_tool(
             name=name,
-            toolset="loopdy",
+            toolset=TOOLSET,
             schema={
                 "name": name,
                 "description": (
@@ -687,7 +688,7 @@ def register(
         )
     ctx.register_tool(
         name="bighelp_render_card",
-        toolset="loopdy",
+        toolset=TOOLSET,
         schema={
             "name": "bighelp_render_card",
             "description": (
@@ -707,7 +708,7 @@ def register(
     )
     ctx.register_tool(
         name="bighelp_await_form_response",
-        toolset="loopdy",
+        toolset=TOOLSET,
         schema={
             "name": "bighelp_await_form_response",
             "description": (
@@ -723,7 +724,7 @@ def register(
     )
     ctx.register_tool(
         name="bighelp_marketplace_prepare_upload",
-        toolset="loopdy",
+        toolset=TOOLSET,
         schema={
             "name": "bighelp_marketplace_prepare_upload",
             "description": (
@@ -782,7 +783,7 @@ def register(
         for name, description, parameters, handler in template_tools:
             ctx.register_tool(
                 name=name,
-                toolset="loopdy",
+                toolset=TOOLSET,
                 schema={
                     "name": name,
                     "description": description,

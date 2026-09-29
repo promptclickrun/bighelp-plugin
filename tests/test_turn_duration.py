@@ -4,14 +4,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from loopdy_plugin.activity_bridge import LinkActivityBroker, publish_hook_activity
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 
 
 class TurnDurationTests(unittest.TestCase):
     def test_socket_detach_does_not_erase_inflight_duration(self):
         import asyncio
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             broker = LinkActivityBroker()
             broker.attach_duration_store(store)
             broker.bind_link_session("stored-session", "visible-session")
@@ -31,7 +31,7 @@ class TurnDurationTests(unittest.TestCase):
 
         for terminal_flag in ("failed", "interrupted"):
             with self.subTest(terminal_flag=terminal_flag), tempfile.TemporaryDirectory() as directory:
-                store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+                store = BighelpStore(Path(directory) / "loopdy.sqlite3")
                 broker = LinkActivityBroker()
                 broker.attach_duration_store(store)
                 broker.bind_link_session("stored-session", "visible-session")
@@ -71,7 +71,7 @@ class TurnDurationTests(unittest.TestCase):
                 db.append_message("stored-session", "assistant", "Done again", timestamp=90002.25)
                 canonical = db.get_messages("stored-session", limit=2, offset=2, latest=True)
                 self.assertEqual(canonical[-1]["timestamp"], 120.25)
-                store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+                store = BighelpStore(Path(directory) / "loopdy.sqlite3")
                 store.record_turn_duration("stored-session", "turn-0001", 120.25, 20125)
                 class Backend(HermesWorkspaceBackend):
                     async def _session_messages(self, *args, **kwargs):
@@ -108,7 +108,7 @@ class TurnDurationTests(unittest.TestCase):
                 for index in range(filler_count):
                     db.append_message("stored-session", "user", f"Intervening row {index}", timestamp=200 + index)
                 db.append_message("stored-session", "assistant", "Untimed other answer", timestamp=120.25)
-                store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+                store = BighelpStore(Path(directory) / "loopdy.sqlite3")
                 store.record_turn_duration("stored-session", "turn-0001", 120.25, 20125)
 
                 class Backend(HermesWorkspaceBackend):
@@ -169,7 +169,7 @@ class TurnDurationTests(unittest.TestCase):
                 return None
 
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             store.record_turn_duration("stored-session", "turn-0001", 120.25, 0)
             backend = Backend(service=SimpleNamespace(store=store))
             backend.rows = [{"id": 1, "role": "assistant", "content": "Done", "timestamp": 120.25}]
@@ -194,7 +194,7 @@ class TurnDurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "loopdy.sqlite3"
             broker = LinkActivityBroker()
-            broker.attach_duration_store(LoopdyStore(path))
+            broker.attach_duration_store(BighelpStore(path))
             broker.bind_link_session("stored-session", "visible-session")
             events = []
             broker.publish = lambda payload: events.append(payload) or True
@@ -211,6 +211,6 @@ class TurnDurationTests(unittest.TestCase):
                 publish_hook_activity("pre_llm_call", broker=broker, profile="default", payload=payload, occurred_at=90100)
             terminal = [event for event in events if event.get("lifecycle") == "succeeded"]
             self.assertEqual([event.get("durationMs") for event in terminal], [20125])
-            self.assertEqual(LoopdyStore(path).turn_durations("stored-session"), {120.25: 20125})
-            self.assertEqual(LoopdyStore(path).turn_durations("another-session"), {})
+            self.assertEqual(BighelpStore(path).turn_durations("stored-session"), {120.25: 20125})
+            self.assertEqual(BighelpStore(path).turn_durations("another-session"), {})
             self.assertFalse(broker.is_active("stored-session", "turn-0001"))

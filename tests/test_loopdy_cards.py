@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from loopdy_plugin.loopdy_cards import (
-    LoopdyCardError,
+    BighelpCardError,
     canonical_json,
     render_card,
     validate_card_input,
@@ -31,7 +31,7 @@ def fixture(name: str) -> dict[str, object]:
 
 
 def assert_code(test: unittest.TestCase, code: str, operation) -> None:
-    with test.assertRaises(LoopdyCardError) as caught:
+    with test.assertRaises(BighelpCardError) as caught:
         operation()
     test.assertEqual(code, caught.exception.code)
 

@@ -1,4 +1,4 @@
-"""Native Loopdy channel target parsing."""
+"""Native bighelp channel target parsing."""
 
 from __future__ import annotations
 

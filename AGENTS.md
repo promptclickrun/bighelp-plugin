@@ -19,10 +19,11 @@ Many features span both repos. The app's side of each route lives in the app rep
 
 ## Mindset
 
-- **Every merge to `main` is a release.**
-  - `hermes loopdy update` installs the newest `main` on real hosts, and the app installs the exact revision it
-    pins. Keep `main` releasable.
-  - Bump the version for any change in behavior.
+- **A merge that bumps the version is a release.**
+  - `.github/workflows/release.yml` publishes it as a GitHub Release. The bighelp app offers the latest release to
+    every host, and `hermes bighelp update` installs it. No app build is needed to ship a plugin update.
+  - Bump the version for any change in behavior; a merge without a bump publishes nothing. Keep `main`
+    releasable anyway.
   - The maintainer merges.
 - **Never break older apps.** Add fields and add new capability names. Don't rename, remove or change the meaning of
   what an app build already uses.
@@ -70,19 +71,24 @@ Many features span both repos. The app's side of each route lives in the app rep
 | `docs/` | One page per feature, with its route contract |
 | `tests/` | `unittest` suites |
 
-## Names that must stay "loopdy"
+## Names
 
-The plugin was first called Loopdy. These names are stored on hosts or used by the app, so never rename them:
-- the plugin name in `plugin.yaml`
-- the `hermes loopdy` CLI and `/api/plugins/loopdy/…` routes
-- `LOOPDY_*` environment variables
-- the `loopdy` platform target and the `loopdy` toolset (saved Hermes settings name it)
-- the `loopdy:` skill namespace (it follows the plugin name)
-- the `X-Loopdy-Request-ID` header
-- the `plugin-data/loopdy` folder
+Everything an agent or a person reads says bighelp: tool names and the `bighelp` toolset, skills, prompts, labels,
+messages, logs, the `hermes bighelp` command and `BIGHELP_*` settings. `loopdy_plugin/naming.py` holds these names
+and the old ones that keep working.
 
-Tools and user-facing text say bighelp. The tools were `loopdy_*` until 2.20.0; the app never depended on tool
-names, so the rename was safe. Card wire formats (`loopdy.generative_ui`, the `loopdy-card` fence) stay.
+The plugin was first called Loopdy. These names are stored on hosts or read by app builds already on phones, so
+they stay until every supported app build speaks the new ones:
+- the plugin name in `plugin.yaml` (so the `plugins/loopdy` folder, `plugins.enabled: [loopdy]` and the
+  `loopdy:` skill prefix, which follows it)
+- the `/api/plugins/loopdy/…` routes, the `X-Loopdy-Request-ID` header and the `plugin-data/loopdy` folder
+- card wire formats (`loopdy.generative_ui`, `loopdy.card`, the `loopdy-card` fence): agents write
+  `bighelp.generative_ui` and `bighelp.card`, and the plugin translates
+- the `loopdy` platform target and the notification formats shared with the app and the notification service
+- the `loopdy_plugin` package name (internal)
+
+Old names that still work: `hermes loopdy …` (hidden), the `loopdy` toolset (an alias for `bighelp`), and
+`LOOPDY_*` settings when the `BIGHELP_*` one isn't set.
 
 ## How the plugin loads (read this before touching shared state)
 
@@ -110,7 +116,8 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
 4. **Docs:** add `docs/<FEATURE>.md` with the full route contract, and a row in the README feature table.
 5. **Version:** bump `plugin.yaml` and `PLUGIN_VERSION` in `loopdy_plugin/link_contracts.py` together.
    `tests/test_portability.py` checks that they match.
-6. **After merge:** the app pins the new version and the merge commit, and adds its side of the route.
+6. **After merge:** the release workflow publishes the new version and the app offers it to hosts. The app adds
+   its side of the route in its own release.
 
 ## What agents are told
 
@@ -139,8 +146,8 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
 
 ## Updates must stay unattended
 
-- The self-updater pins `main` to a commit, validates it, backs up the current copy and installs it with Hermes'
-  installer. It refuses to overwrite a modified install.
+- The self-updater pins the latest release to its commit, validates it, backs up the current copy and installs it
+  with Hermes' installer. It refuses to overwrite a modified install or move a host to an older version.
 - **New `capabilities:` in `plugin.yaml` block automatic updates** until someone approves them on the host. Avoid
   this unless it's truly needed, and call it out in the PR.
 - **Hermes scans the whole plugin on every update**, docs included. A `caution` verdict needs a person to approve it,

@@ -7,8 +7,10 @@ optional end-to-end encrypted notifications.
 Hermes stays in charge of agents, chats, tools, approvals and scheduled tasks. The plugin runs inside Hermes'
 own dashboard and uses its sign-in. It opens no extra ports and needs no bighelp account or public URL.
 
-> The plugin's internal name is still `loopdy`, so commands are `hermes loopdy …` and routes live under
-> `/api/plugins/loopdy/…`. Existing installs keep working.
+> Hermes still knows the plugin by its first name, `loopdy`: that's its folder, its routes under
+> `/api/plugins/loopdy/…` and the `loopdy:` prefix on its skills. Renaming those would cut off app builds already
+> on phones. Everything agents and people read says bighelp, and older names (`hermes loopdy …`, the `loopdy`
+> toolset, `LOOPDY_*` settings) keep working.
 
 ## Requirements
 
@@ -25,7 +27,7 @@ hermes plugins install promptclickrun/bighelp-plugin --enable
 ```
 
 Then restart the Hermes gateway and dashboard the way you normally do. The app can also install or update the
-plugin from its host setup screen; it installs the exact version that app build was tested with.
+plugin from its host setup screen; it installs the latest release.
 
 To install a local checkout, commit your changes first (Hermes installs from Git), then run:
 
@@ -36,13 +38,15 @@ hermes plugins install "file://$PWD" --enable
 ## Update
 
 ```bash
-hermes loopdy update            # install the latest release from main
-hermes loopdy update --restart  # …and restart the gateway once
-hermes loopdy update-status     # check the last update
+hermes bighelp update            # install the latest release
+hermes bighelp update --restart  # …and restart the gateway once
+hermes bighelp update-status     # check the last update
 ```
 
-The updater pins `main` to an exact commit, validates it, backs up the current copy and installs it with Hermes'
-own installer. Your settings stay in place. It refuses to overwrite a modified install. Self-update needs macOS
+Every merge that bumps the version publishes a [GitHub Release](https://github.com/promptclickrun/bighelp-plugin/releases)
+(`.github/workflows/release.yml`); other merges don't reach hosts. The updater looks up the latest release, pins
+its exact commit, validates it, backs up the current copy and installs it with Hermes' own installer. It never
+moves a host to an older version. Your settings stay in place. It refuses to overwrite a modified install. Self-update needs macOS
 launchd or Linux user systemd.
 
 The bighelp app shows when a host's plugin is out of date (Settings › Hosts) and can update it, restart the
@@ -97,10 +101,12 @@ The `skills/` folder ships read-only guidance for agents, opened with `skill_vie
 - `generative-ui`: when and how to use each card tool.
 - `bighelp-feed-and-ideas`: posting to the agent board only when the user asks.
 - `custom-theme-authoring`: making themes the app can import.
-- `loopdy-marketplace-publish`: preparing a theme, card template or skill for review.
+- `bighelp-marketplace-publish`: preparing a theme, card template or skill for review.
 
-The agent tools are named `bighelp_*` since 2.20.0 (they were `loopdy_*`). They stay in the `loopdy` toolset,
-because saved Hermes settings name it.
+Since 3.0.0 the agent tools are named `bighelp_*` and live in the `bighelp` toolset (they were `loopdy_*` in
+`loopdy`). Saved tool settings and scheduled jobs that name the `loopdy` toolset still get these tools. Card
+tools take `schema: "bighelp.generative_ui"` or `"bighelp.card"`; the cards the app receives keep their original
+format, so older app builds still show them.
 
 ## Notifications (optional)
 
@@ -129,18 +135,20 @@ deny) and never invents one. No configuration is needed.
 ## Commands
 
 ```text
-hermes loopdy status                     Plugin and notification status (never prints keys or tokens)
-hermes loopdy update [--restart]         Update from main
-hermes loopdy update-status              Last update result
-hermes loopdy files grant|revoke|roots   Manage read-only workspace folders
-hermes loopdy files list|read|status|diff
-hermes loopdy wiki …                     Host-side wiki grants
+hermes bighelp status                     Plugin and notification status (never prints keys or tokens)
+hermes bighelp update [--restart]         Install the latest release
+hermes bighelp update-status              Last update result
+hermes bighelp files grant|revoke|roots   Manage read-only workspace folders
+hermes bighelp files list|read|status|diff
+hermes bighelp wiki …                     Host-side wiki grants
 ```
+
+`hermes loopdy …` still works for scripts written before 3.0.0.
 
 ## Legacy code
 
 Earlier versions paired hosts through a bighelp Link account and sent notifications through a relay or direct
-APNs. The app no longer uses any of that. The related code, settings and commands (`hermes loopdy link …`,
+APNs. The app no longer uses any of that. The related code, settings and commands (`hermes bighelp link …`,
 `provider`, `configure-apns`, `direct …`) remain only so existing data and compatibility tests keep working.
 Don't set them up on new hosts.
 

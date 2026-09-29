@@ -91,7 +91,7 @@ def parse_authenticated_payload(client, payload, *, sender_device_id, sender_epo
         "generative.ui.form.submit": (contracts.parse_generative_ui_form_submission, types.InboundLinkGenerativeUIFormSubmission),
     }
     if kind not in decoders:
-        raise ValueError("Loopdy payload type is unsupported")
+        raise ValueError("bighelp payload type is unsupported")
     parser, constructor = decoders[kind]
     return constructor(parser(payload), sender_device_id, sender_epoch)
 

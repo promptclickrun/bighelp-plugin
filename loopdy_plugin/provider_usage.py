@@ -41,7 +41,7 @@ _MAX_BYTES = 1_048_576
 
 OK, SIGN_IN, NOT_SHARED, ERROR = "ok", "signInNeeded", "notShared", "error"
 
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 
 
 def available() -> bool:

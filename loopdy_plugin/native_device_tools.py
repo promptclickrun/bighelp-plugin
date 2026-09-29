@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from .link_contracts import device_tool_request, parse_device_tool_result
 
 
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 
 
 CAPABILITY = "native-device-tools-v1"
@@ -560,7 +560,7 @@ def register_middleware(
     register = getattr(ctx, "register_middleware", None)
     if not callable(register):
         logger.warning(
-            "Loopdy native feature %r NOT advertised: the plugin host does not "
+            "bighelp native feature %r NOT advertised: the plugin host does not "
             "expose a callable register_middleware surface, so the native tool "
             "execution middleware could not be installed. The iOS capability "
             "probe will report the feature as missing even though the plugin "
@@ -570,14 +570,14 @@ def register_middleware(
         from hermes_cli.middleware import TOOL_EXECUTION_MIDDLEWARE, VALID_MIDDLEWARE
     except ImportError as exc:
         logger.warning(
-            "Loopdy native feature %r NOT advertised: could not import "
+            "bighelp native feature %r NOT advertised: could not import "
             "hermes_cli.middleware (%s). The host Hermes version predates the "
             "public execution-middleware surface; native device tools are "
             "unavailable until the host is upgraded.", CAPABILITY, exc)
         return False
     if TOOL_EXECUTION_MIDDLEWARE not in VALID_MIDDLEWARE:
         logger.warning(
-            "Loopdy native feature %r NOT advertised: %r is not in the host's "
+            "bighelp native feature %r NOT advertised: %r is not in the host's "
             "VALID_MIDDLEWARE %r. The host's middleware surface does not "
             "include tool execution.", CAPABILITY, TOOL_EXECUTION_MIDDLEWARE,
             tuple(VALID_MIDDLEWARE))
@@ -623,7 +623,7 @@ def register_middleware(
         register(TOOL_EXECUTION_MIDDLEWARE, execute)
     except (AttributeError, TypeError, ValueError) as exc:
         logger.warning(
-            "Loopdy native feature %r NOT advertised: the host rejected the "
+            "bighelp native feature %r NOT advertised: the host rejected the "
             "middleware callback registration (%s).", CAPABILITY, exc)
         return False
     on_unload = getattr(ctx, "on_unload", None)
@@ -640,7 +640,7 @@ def register_middleware(
 
         on_unload(unload)
         logger.info(
-            "Loopdy native feature %r advertised for profile %r: native tool "
+            "bighelp native feature %r advertised for profile %r: native tool "
             "execution middleware is registered with the host lifecycle.",
             CAPABILITY, profile)
     else:
@@ -648,7 +648,7 @@ def register_middleware(
         # phone leases; ``available()`` remains false and the HTTP gate will fail
         # closed.  Keep the callback registration result true for probe contexts.
         logger.warning(
-            "Loopdy native feature %r will NOT be advertised to the iOS "
+            "bighelp native feature %r will NOT be advertised to the iOS "
             "capability probe: the host exposed register_middleware but no "
             "callable on_unload lifecycle, so available() remains false and "
             "native device-tool HTTP requests will fail closed.", CAPABILITY)

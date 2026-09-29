@@ -8,7 +8,7 @@ from gateway.config import PlatformConfig
 from gateway.platform_registry import PlatformEntry, platform_registry
 
 from loopdy_plugin.activity_bridge import LinkActivityBroker, publish_hook_activity
-from loopdy_plugin.adapter import LoopdyAdapter
+from loopdy_plugin.adapter import BighelpAdapter
 
 
 class _Service:
@@ -52,7 +52,7 @@ class ContextWindowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_adapter_reads_context_from_the_official_running_agent(self) -> None:
         broker = _ContextProviderBroker()
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             PlatformConfig(enabled=True),
             service=_Service(),
             link_client=SimpleNamespace(),

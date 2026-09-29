@@ -1,7 +1,7 @@
-"""Supported SessionDB-backed reactions for Loopdy conversations.
+"""Supported SessionDB-backed reactions for bighelp conversations.
 
 The plugin uses Hermes' public session context/state registry. It never imports a
-private TUI handler or patches the runtime. The typed result lets native Loopdy
+private TUI handler or patches the runtime. The typed result lets native bighelp
 paint the write immediately while ordinary history remains authoritative.
 """
 from __future__ import annotations
@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import unicodedata
 from typing import Any
+
+from .naming import TOOLSET
 
 REACTION_SCHEMA = "loopdy.message-reaction"
 
@@ -134,7 +136,7 @@ def register(ctx: Any) -> bool:
         return False
     ctx.register_tool(
         name="bighelp_react_to_message",
-        toolset="loopdy",
+        toolset=TOOLSET,
         schema={
             "name": "bighelp_react_to_message",
             "description": (

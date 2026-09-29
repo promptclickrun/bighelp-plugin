@@ -5,8 +5,8 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from loopdy_plugin.approval import LoopdyApprovalTransport
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.approval import BighelpApprovalTransport
+from loopdy_plugin.store import BighelpStore
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class _Request:
 
 
 class _Service:
-    def __init__(self, store: LoopdyStore):
+    def __init__(self, store: BighelpStore):
         self.store = store
         self.events = []
 
@@ -51,9 +51,9 @@ class _FailedService:
 class ApprovalTransportTests(unittest.TestCase):
     def test_returns_only_the_request_bound_human_decision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             service = _Service(store)
-            transport = LoopdyApprovalTransport(
+            transport = BighelpApprovalTransport(
                 store,
                 service,
                 target="all",
@@ -87,8 +87,8 @@ class ApprovalTransportTests(unittest.TestCase):
 
     def test_delivery_failure_denies_without_waiting_for_the_host_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
-            transport = LoopdyApprovalTransport(
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
+            transport = BighelpApprovalTransport(
                 store,
                 _FailedService(),
                 poll_interval=0.001,

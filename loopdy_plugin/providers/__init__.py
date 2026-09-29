@@ -1,4 +1,4 @@
-"""Push provider implementations bundled with the Loopdy plugin."""
+"""Push provider implementations bundled with the bighelp plugin."""
 
 from .apns import ApnsConfig, ApnsPushProvider, load_apns_config
 from .expo import ExpoPushProvider

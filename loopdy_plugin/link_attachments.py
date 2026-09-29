@@ -1,4 +1,4 @@
-"""Bounded, restart-safe inbound attachment assembly for Loopdy Link."""
+"""Bounded, restart-safe inbound attachment assembly for bighelp Link."""
 
 from __future__ import annotations
 
@@ -59,12 +59,12 @@ class LinkAttachmentInbox:
             try:
                 stored = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
-                raise ValueError("Loopdy Link attachment manifest is invalid") from exc
+                raise ValueError("bighelp Link attachment manifest is invalid") from exc
             next_index = stored.pop("nextIndex", None)
             if stored != expected_manifest or not isinstance(next_index, int):
-                raise ValueError("Loopdy Link attachment metadata changed during upload")
+                raise ValueError("bighelp Link attachment metadata changed during upload")
         if next_index not in {chunk.index, chunk.index + 1}:
-            raise ValueError("Loopdy Link attachment chunks are out of order")
+            raise ValueError("bighelp Link attachment chunks are out of order")
 
         expected_offset = chunk.index * MAX_ATTACHMENT_CHUNK_BYTES
         size = partial.stat().st_size if partial.is_file() else 0
@@ -82,9 +82,9 @@ class LinkAttachmentInbox:
                 with partial.open("rb") as stream:
                     stream.seek(expected_offset)
                     if stream.read() != chunk.data:
-                        raise ValueError("Loopdy Link attachment replay does not match")
+                        raise ValueError("bighelp Link attachment replay does not match")
             else:
-                raise ValueError("Loopdy Link attachment size is invalid")
+                raise ValueError("bighelp Link attachment size is invalid")
             next_index = chunk.index + 1
 
         if chunk.index + 1 < chunk.count:
@@ -185,11 +185,11 @@ class LinkAttachmentInbox:
     @staticmethod
     def _verify_ready(path: Path, reference: AttachmentReference) -> None:
         if not path.is_file() or path.stat().st_size != reference.total_bytes:
-            raise ValueError("Loopdy Link attachment is incomplete")
+            raise ValueError("bighelp Link attachment is incomplete")
         digest = hashlib.sha256(path.read_bytes()).digest()
         encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
         if encoded != reference.sha256:
-            raise ValueError("Loopdy Link attachment digest does not match")
+            raise ValueError("bighelp Link attachment digest does not match")
 
     def _purge_stale(self) -> None:
         self._ensure_roots()

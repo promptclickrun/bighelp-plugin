@@ -20,7 +20,7 @@ GROUPS_RESULT_OPERATIONS = frozenset({
 
 def validate_result_version(value: Any, operation: str) -> int:
     if type(value) is not int or value != 1 or operation not in GROUPS_RESULT_OPERATIONS:
-        raise ValueError("Loopdy groups result negotiation is invalid")
+        raise ValueError("bighelp groups result negotiation is invalid")
     return value
 
 

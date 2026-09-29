@@ -1,5 +1,5 @@
 ---
-name: loopdy-marketplace-publish
+name: bighelp-marketplace-publish
 description: Use when publishing bighelp themes, cards, or skills. Prepare a private draft for review in bighelp.
 ---
 

@@ -124,7 +124,7 @@ class ExpoPushProviderTests(unittest.TestCase):
             event_id="attention-event",
             event_type="attention.required",
             title="Atlas has a question",
-            body="Choose an answer in Loopdy.",
+            body="Choose an answer in bighelp.",
             data={"loopdy": {"event_id": "attention-event"}},
             sound=False,
         )

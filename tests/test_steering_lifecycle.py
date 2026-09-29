@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from gateway.config import PlatformConfig
 from gateway.run import GatewayRunner
-from loopdy_plugin.adapter import LoopdyAdapter
+from loopdy_plugin.adapter import BighelpAdapter
 from loopdy_plugin.link_client import InboundLinkTurn, LoopdyLinkClient
 from loopdy_plugin.link_contracts import UserMessage
 # Hermes also has a tests package. Resolve fixtures within this suite.
@@ -32,7 +32,7 @@ class SteeringLifecycleTests(unittest.TestCase):
     def make_fixture(self, *, link=None, handler=None):
         link = link or _LinkClient()
         broker = _ActivityBroker()
-        adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(),
+        adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(),
                                 link_client=link, activity_broker=broker)
         session = "session-steer-lifecycle-0001"
         # No provider, credentials, or model request: exercise the real stock

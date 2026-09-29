@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from loopdy_plugin.loopdy_cards import LoopdyCardError
+from loopdy_plugin.loopdy_cards import BighelpCardError
 from loopdy_plugin.tools import register
 
 
@@ -60,9 +60,10 @@ class LoopdyCardToolTests(unittest.TestCase):
     def test_generic_renderer_parameters_match_the_canonical_input_schema(self) -> None:
         context = self.context()
         portable = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        # Agents write "bighelp.card"; the portable (app-facing) contract keeps its name.
         expected = {
             "type": portable["type"],
-            "properties": portable["properties"],
+            "properties": {**portable["properties"], "schema": {"const": "bighelp.card"}},
             "required": portable["required"],
             "additionalProperties": portable["additionalProperties"],
             "$defs": portable["$defs"],
@@ -95,6 +96,24 @@ class LoopdyCardToolTests(unittest.TestCase):
             result["content_hash"],
         )
 
+    def test_agents_write_bighelp_names_and_the_app_still_gets_the_names_it_reads(self) -> None:
+        # Builds already on phones only render the loopdy.* names, so those stay on the wire.
+        context = self.context()
+        payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        from loopdy_plugin.generative_ui import extract_rendered_envelope
+
+        for name in ("bighelp.card", "loopdy.card"):
+            with self.subTest(schema=name):
+                result = extract_rendered_envelope(
+                    json.loads(context.handlers["bighelp_render_card"]({**payload, "schema": name})))
+                self.assertEqual("loopdy.card", result["schema"])
+        summary = {"version": 1, "component": "summary", "title": "Build", "body": "All checks passed."}
+        for name in ("bighelp.generative_ui", "loopdy.generative_ui"):
+            with self.subTest(schema=name):
+                result = extract_rendered_envelope(
+                    json.loads(context.handlers["bighelp_render_summary"]({**summary, "schema": name})))
+                self.assertEqual("loopdy.generative_ui", result["schema"])
+
     def test_generic_handler_rejects_an_unsafe_document_before_returning_json(self) -> None:
         context = self.context()
         payload = json.loads(
@@ -106,7 +125,7 @@ class LoopdyCardToolTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
 
-        with self.assertRaises(LoopdyCardError) as caught:
+        with self.assertRaises(BighelpCardError) as caught:
             context.handlers["bighelp_render_card"](payload)
 
         self.assertEqual("invalid_url", caught.exception.code)
@@ -115,7 +134,7 @@ class LoopdyCardToolTests(unittest.TestCase):
         context = self.context()
         payload = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
 
-        with self.assertRaises(LoopdyCardError) as caught:
+        with self.assertRaises(BighelpCardError) as caught:
             context.handlers["bighelp_render_card"](payload)
 
         self.assertEqual("live_data_unavailable", caught.exception.code)
@@ -129,7 +148,7 @@ class LoopdyCardToolTests(unittest.TestCase):
             self.assertNotIn("spoken_summary", parameters["properties"])
         for name in LEGACY_RENDERERS[4:]:
             parameters = context.schemas[name]["parameters"]
-            self.assertEqual("loopdy.generative_ui", parameters["properties"]["schema"]["const"])
+            self.assertEqual("bighelp.generative_ui", parameters["properties"]["schema"]["const"])
             self.assertEqual(2, parameters["properties"]["version"]["const"])
 
 

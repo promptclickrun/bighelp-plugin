@@ -116,8 +116,8 @@ _IMAGE_NAMES = {
 }
 
 
-class LoopdyCardError(ValueError):
-    """Stable validation error raised at every Loopdy Card trust boundary."""
+class BighelpCardError(ValueError):
+    """Stable validation error raised at every bighelp Card trust boundary."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -135,14 +135,14 @@ def canonical_json(value: object) -> str:
         )
     except ValueError as error:
         if "Out of range float" in str(error):
-            raise LoopdyCardError(
+            raise BighelpCardError(
                 "invalid_number", "Non-finite numbers are not allowed"
             ) from error
-        raise LoopdyCardError(
+        raise BighelpCardError(
             "invalid_payload", "Card is not canonical JSON"
         ) from error
     except (TypeError, OverflowError) as error:
-        raise LoopdyCardError(
+        raise BighelpCardError(
             "invalid_payload", "Card is not canonical JSON"
         ) from error
 
@@ -185,8 +185,8 @@ def validate_card_input(
     if "valid_until" in value:
         try:
             valid_until = _timestamp(value["valid_until"])
-        except LoopdyCardError as error:
-            raise LoopdyCardError(
+        except BighelpCardError as error:
+            raise BighelpCardError(
                 "invalid_valid_until", "Card validity timestamp is invalid"
             ) from error
         if not reference < valid_until <= reference + timedelta(days=30):
@@ -255,8 +255,8 @@ def validate_card_result(payload: object, *, now: datetime) -> dict[str, object]
 
     try:
         created = _timestamp(value["created_at"])
-    except LoopdyCardError as error:
-        raise LoopdyCardError(
+    except BighelpCardError as error:
+        raise BighelpCardError(
             "invalid_created_at", "Renderer creation time is invalid"
         ) from error
     if created > observed + timedelta(minutes=5):
@@ -326,8 +326,8 @@ def _data_sources(value: object, reference: datetime) -> list[dict[str, object]]
             _raise("invalid_refresh", "Refresh and stale intervals are invalid")
         try:
             expires = _timestamp(refresh["expires_at"])
-        except LoopdyCardError as error:
-            raise LoopdyCardError(
+        except BighelpCardError as error:
+            raise BighelpCardError(
                 "invalid_expiration", "Data source expiration is invalid"
             ) from error
         if not reference < expires <= reference + timedelta(days=7):
@@ -628,7 +628,7 @@ def _public_https_url(value: object) -> str:
         components = urlsplit(value)
         port = components.port
     except ValueError as error:
-        raise LoopdyCardError("invalid_url", "Data source URL is malformed") from error
+        raise BighelpCardError("invalid_url", "Data source URL is malformed") from error
     if (
         components.scheme.lower() != "https"
         or not components.netloc
@@ -646,7 +646,7 @@ def _public_https_url(value: object) -> str:
     try:
         host.encode("ascii")
     except UnicodeEncodeError as error:
-        raise LoopdyCardError("invalid_url", "Data source host must be ASCII DNS") from error
+        raise BighelpCardError("invalid_url", "Data source host must be ASCII DNS") from error
     try:
         ipaddress.ip_address(host)
     except ValueError:
@@ -765,4 +765,4 @@ def _timestamp_text(value: datetime) -> str:
 
 
 def _raise(code: str, message: str) -> NoReturn:
-    raise LoopdyCardError(code, message)
+    raise BighelpCardError(code, message)

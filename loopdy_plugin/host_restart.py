@@ -17,7 +17,7 @@ from typing import Any
 CAPABILITY = "native-host-restart-v1"
 _DELAY_SECONDS = 0.75
 
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 _lock = threading.Lock()
 _scheduled = False
 

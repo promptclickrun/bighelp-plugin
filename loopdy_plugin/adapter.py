@@ -1,4 +1,4 @@
-"""Loopdy Hermes platform adapter for Link chat and notification delivery."""
+"""bighelp Hermes platform adapter for Link chat and notification delivery."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from .inbound_dispatch import (
 )
 from .direct_runtime import DirectRuntime, DirectSettings, runtime_owner
 from .control_replies import capture_control_replies, capture_control_reply
-from .events import EVENT_TYPES, LoopdyEvent, build_event
+from .events import EVENT_TYPES, BighelpEvent, build_event
 from .link_client import (
     InboundLinkDirectEnrollment,
     InboundLinkCommandCatalog,
@@ -91,8 +91,8 @@ from .link_crypto import encode_base64url
 from .personality_catalog import PersonalityCatalogManager
 from .plugin_update import PluginUpdateManager
 from .presentation import shape_notification
-from .service import LoopdyService
-from .store import LoopdyStore, form_action_response
+from .service import BighelpService
+from .store import BighelpStore, form_action_response
 from .targets import parse_target, validate_target
 from .workspace_control import (
     HermesWorkspaceBackend,
@@ -101,7 +101,7 @@ from .workspace_control import (
 )
 
 
-_services: dict[str, LoopdyService] = {}
+_services: dict[str, BighelpService] = {}
 _services_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 _MAX_LINK_SESSION_PROFILE_BINDINGS = 4096
@@ -219,7 +219,7 @@ def synthesize_voice_audio(request: VoiceSpeakRequest) -> SynthesizedVoiceAudio:
             raise VoiceSynthesisError("Hermes TTS returned an invalid audio file")
         size = audio_path.stat().st_size
         if not 0 < size <= 8 * 1024 * 1024:
-            raise VoiceSynthesisError("Hermes TTS audio exceeds the Loopdy limit")
+            raise VoiceSynthesisError("Hermes TTS audio exceeds the bighelp limit")
         audio = audio_path.read_bytes()
         extension = audio_path.suffix.lower()
         mime_type = {
@@ -243,17 +243,17 @@ def data_path() -> Path:
     return get_hermes_home() / "plugin-data" / "loopdy" / "loopdy.sqlite3"
 
 
-def get_service() -> LoopdyService:
+def get_service() -> BighelpService:
     key = str(data_path().resolve())
     with _services_lock:
         service = _services.get(key)
         if service is None:
-            service = LoopdyService(LoopdyStore(Path(key)))
+            service = BighelpService(BighelpStore(Path(key)))
             _services[key] = service
         return service
 
 
-def release_service(service: LoopdyService) -> None:
+def release_service(service: BighelpService) -> None:
     service.close()
     with _services_lock:
         for key, cached in list(_services.items()):
@@ -262,7 +262,7 @@ def release_service(service: LoopdyService) -> None:
 
 
 def _loopdy_runtime_cwd(runner: Any, context: Any) -> str | None:
-    """Resolve one Loopdy turn's live Hermes cwd without global process state."""
+    """Resolve one bighelp turn's live Hermes cwd without global process state."""
     source = getattr(context, "source", None)
     if getattr(getattr(source, "platform", None), "value", None) != "loopdy":
         return None
@@ -299,7 +299,7 @@ def _loopdy_runtime_cwd(runner: Any, context: Any) -> str | None:
 
 
 def _install_runtime_cwd_bridge(runner: Any) -> None:
-    """Restore Loopdy's task-local cwd after Hermes binds session variables."""
+    """Restore bighelp's task-local cwd after Hermes binds session variables."""
     if runner is None or getattr(runner, _RUNTIME_CWD_BRIDGE_MARKER, False):
         return
     original = getattr(runner, "_set_session_env", None)
@@ -324,7 +324,7 @@ def _install_runtime_cwd_bridge(runner: Any) -> None:
                         register_task_env_overrides(coordinate, override)
         except Exception:
             logger.warning(
-                "Loopdy could not restore Hermes runtime cwd for session %s",
+                "bighelp could not restore Hermes runtime cwd for session %s",
                 str(getattr(context, "session_id", "") or "")[:80],
                 exc_info=True,
             )
@@ -334,8 +334,8 @@ def _install_runtime_cwd_bridge(runner: Any) -> None:
     setattr(runner, _RUNTIME_CWD_BRIDGE_MARKER, True)
 
 
-class LoopdyAdapter(BasePlatformAdapter):
-    """Turns Hermes outbound messages into opaque Loopdy wakeup events."""
+class BighelpAdapter(BasePlatformAdapter):
+    """Turns Hermes outbound messages into opaque bighelp wakeup events."""
 
     supports_async_delivery = True
     interactive_resume = False
@@ -347,7 +347,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         self,
         config: PlatformConfig,
         *,
-        service: LoopdyService | None = None,
+        service: BighelpService | None = None,
         link_client: LoopdyLinkClient | Any | None = None,
         link_state: Any | None = None,
         activity_broker: Any | None = None,
@@ -368,7 +368,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         voice_synthesizer: Callable[[VoiceSpeakRequest], SynthesizedVoiceAudio] = synthesize_voice_audio,
     ):
         # Restart and shutdown pings are operator lifecycle signals, not user
-        # inbox content. Loopdy presents connection health in its device UI.
+        # inbox content. bighelp presents connection health in its device UI.
         config.gateway_restart_notification = False
         super().__init__(config=config, platform=Platform("loopdy"))
         self.service = service or get_service()
@@ -615,7 +615,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             result = await asyncio.to_thread(snapshot, stored_id)
             return result if isinstance(result, dict) else None
         except Exception as exc:
-            logger.warning("Loopdy goal readback failed (%s)", type(exc).__name__)
+            logger.warning("bighelp goal readback failed (%s)", type(exc).__name__)
             return None
 
     async def _refresh_goal_for_source(self, source: SessionSource) -> None:
@@ -632,7 +632,7 @@ class LoopdyAdapter(BasePlatformAdapter):
                 bind(session_id, source.chat_id)
                 await asyncio.to_thread(publish, session_id, force=True)
         except Exception as exc:
-            logger.warning("Loopdy goal refresh failed (%s)", type(exc).__name__)
+            logger.warning("bighelp goal refresh failed (%s)", type(exc).__name__)
 
     def _context_window_snapshot(self, session_id: str) -> dict[str, Any] | None:
         """Read the live/cached gateway state used by Hermes /status and /context."""
@@ -715,7 +715,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         try:
             usage = usage_reader(session_id, model) if callable(usage_reader) else None
         except Exception as exc:
-            logger.warning("Loopdy usage snapshot failed (%s)", type(exc).__name__)
+            logger.warning("bighelp usage snapshot failed (%s)", type(exc).__name__)
             usage = None
         if isinstance(usage, dict):
             for key in (
@@ -868,7 +868,7 @@ class LoopdyAdapter(BasePlatformAdapter):
     async def _send_broker_payload(self, payload):
         client = self.link_client
         if client is None:
-            raise ConnectionError("Loopdy Link is not configured")
+            raise ConnectionError("bighelp Link is not configured")
         if payload.get("type") == "assistant.message" and payload.get("delivery") == "draft":
             self._require_captured_draft(payload)
             if STATE_BACKED_PRESENTATION_CAPABILITY in set(getattr(client, "capabilities", ())):
@@ -1045,19 +1045,19 @@ class LoopdyAdapter(BasePlatformAdapter):
                             record["cursor"] = self._presentation_hub.reset(agent_id=scope[0], session_id=scope[1])
                             record["incomplete"] = False
         except Exception:
-            logger.warning("Loopdy session presentation update unavailable")
+            logger.warning("bighelp session presentation update unavailable")
         voice = self._live_voice_runtime
         if voice is not None:
             try:
                 voice.observe(event_name, **coordinates)
             except Exception:
-                logger.warning("Loopdy live job observer unavailable")
+                logger.warning("bighelp live job observer unavailable")
         observer = self._presentation_observer
         if observer is not None:
             try:
                 observer(event_name, **coordinates)
             except Exception:
-                logger.warning("Loopdy presentation observer failed (%s)", event_name)
+                logger.warning("bighelp presentation observer failed (%s)", event_name)
         return captured
 
     async def open_direct_session(self, context, agent_id: str, session_id: str):
@@ -1235,7 +1235,7 @@ class LoopdyAdapter(BasePlatformAdapter):
                 await self.disconnect()
                 raise
             if not usable:
-                detail = "Loopdy Link did not complete the socket-ready handshake."
+                detail = "bighelp Link did not complete the socket-ready handshake."
                 link_state = "disconnected"
                 status = getattr(self.link_client, "status", None)
                 if callable(status):
@@ -1265,7 +1265,7 @@ class LoopdyAdapter(BasePlatformAdapter):
                     else "loopdy_provider_not_ready"
                 ),
                 self.link_configuration_error
-                or str(health.get("detail") or "Configure Loopdy notifications first."),
+                or str(health.get("detail") or "Configure bighelp notifications first."),
                 retryable=False,
             )
             await self.disconnect()
@@ -1304,13 +1304,13 @@ class LoopdyAdapter(BasePlatformAdapter):
         elif state == "unready":
             self._set_fatal_error(
                 "loopdy_link_enrollment_unready",
-                detail or "Loopdy Link enrollment is not ready.",
+                detail or "bighelp Link enrollment is not ready.",
                 retryable=True,
             )
         elif state == "superseded":
             self._set_fatal_error(
                 "loopdy_link_superseded",
-                detail or "A newer Hermes runtime owns this Loopdy Link device.",
+                detail or "A newer Hermes runtime owns this bighelp Link device.",
                 retryable=False,
             )
         elif state in {"disconnected", "reconnecting"}:
@@ -1331,17 +1331,17 @@ class LoopdyAdapter(BasePlatformAdapter):
             return result
         client = self.link_client
         if client is None:
-            raise ConnectionError("Loopdy Link is not configured")
+            raise ConnectionError("bighelp Link is not configured")
         wait = getattr(client, "wait_until_connected", None)
         last_error: BaseException | None = None
         for attempt in range(2):
             if callable(wait):
                 ready = await wait(timeout=20.0)
                 if not ready:
-                    last_error = ConnectionError("Loopdy Link is not connected")
+                    last_error = ConnectionError("bighelp Link is not connected")
                     continue
             elif not bool(getattr(client, "connected", False)):
-                last_error = ConnectionError("Loopdy Link is not connected")
+                last_error = ConnectionError("bighelp Link is not connected")
                 continue
             try:
                 def checked_presentation():
@@ -1369,11 +1369,11 @@ class LoopdyAdapter(BasePlatformAdapter):
                 raise
         if last_error is not None:
             raise last_error
-        raise ConnectionError("Loopdy Link control delivery failed")
+        raise ConnectionError("bighelp Link control delivery failed")
 
     async def _deliver_link_notification(
         self,
-        event: LoopdyEvent,
+        event: BighelpEvent,
         *,
         target: str,
     ) -> SendResult:
@@ -1382,7 +1382,7 @@ class LoopdyAdapter(BasePlatformAdapter):
 
     async def _deliver_link_notification_locked(
         self,
-        event: LoopdyEvent,
+        event: BighelpEvent,
         *,
         target: str,
     ) -> SendResult:
@@ -1451,7 +1451,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             )
             return SendResult(
                 success=False,
-                error=f"Loopdy Link notification failed ({type(exc).__name__})",
+                error=f"bighelp Link notification failed ({type(exc).__name__})",
             )
 
     async def disconnect(self) -> None:
@@ -1568,7 +1568,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             except Exception as exc:
                 return SendResult(
                     success=False,
-                    error=f"Loopdy Link delivery failed ({type(exc).__name__})",
+                    error=f"bighelp Link delivery failed ({type(exc).__name__})",
                 )
         target = str(chat_id or self.home_target or "all").strip()
         event = _channel_event(content, metadata=metadata, target=target)
@@ -1591,7 +1591,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=message_id)
         return SendResult(
             success=False,
-            error=str(result.get("error") or "Loopdy delivery failed"),
+            error=str(result.get("error") or "bighelp delivery failed"),
         )
 
     async def _send_link_attachment(
@@ -1604,10 +1604,10 @@ class LoopdyAdapter(BasePlatformAdapter):
         metadata: Dict[str, Any] | None,
     ) -> SendResult:
         if self.link_client is None or not _is_link_chat_id(chat_id):
-            return SendResult(success=False, error="Loopdy Link is not connected")
+            return SendResult(success=False, error="bighelp Link is not connected")
         safe_path = self.validate_media_delivery_path(path)
         if safe_path is None:
-            return SendResult(success=False, error="Loopdy attachment path is unavailable")
+            return SendResult(success=False, error="bighelp attachment path is unavailable")
         content = f"{caption}\nMEDIA:{safe_path}" if caption else f"MEDIA:{safe_path}"
         values = dict(metadata or {})
         try:
@@ -1619,7 +1619,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             if not callable(resolve):
                 return SendResult(
                     success=False,
-                    error="Loopdy attachment storage is unavailable",
+                    error="bighelp attachment storage is unavailable",
                 )
             resolved = await asyncio.to_thread(
                 resolve,
@@ -1634,13 +1634,13 @@ class LoopdyAdapter(BasePlatformAdapter):
             ):
                 return SendResult(
                     success=False,
-                    error="Loopdy attachment could not be cached",
+                    error="bighelp attachment could not be cached",
                 )
             values["_loopdy_message_id"] = message_id
         except Exception as exc:
             return SendResult(
                 success=False,
-                error=f"Loopdy attachment caching failed ({type(exc).__name__})",
+                error=f"bighelp attachment caching failed ({type(exc).__name__})",
             )
         return await self.send(
             chat_id=chat_id,
@@ -1697,14 +1697,14 @@ class LoopdyAdapter(BasePlatformAdapter):
         except ImportError as exc:
             return SendResult(
                 success=False,
-                error=f"Loopdy remote image support is unavailable ({type(exc).__name__})",
+                error=f"bighelp remote image support is unavailable ({type(exc).__name__})",
             )
         try:
             image_path = await cache_image_from_url(image_url)
         except (OSError, ValueError, httpx.HTTPError) as exc:
             return SendResult(
                 success=False,
-                error=f"Loopdy remote image download failed ({type(exc).__name__})",
+                error=f"bighelp remote image download failed ({type(exc).__name__})",
             )
         return await self._send_link_attachment(
             chat_id=chat_id,
@@ -1977,7 +1977,7 @@ class LoopdyAdapter(BasePlatformAdapter):
 
     async def get_chat_info(self, chat_id: str) -> dict[str, str]:
         return {
-            "name": "Loopdy chat" if _is_link_chat_id(chat_id) else str(chat_id),
+            "name": "bighelp chat" if _is_link_chat_id(chat_id) else str(chat_id),
             "type": "dm" if _is_link_chat_id(chat_id) else "notification",
         }
 
@@ -1999,7 +1999,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         metadata: Dict[str, Any] | None = None,
     ) -> SendResult:
         if self.link_client is None or not _is_link_chat_id(chat_id):
-            return SendResult(success=False, error="Loopdy Link is not connected")
+            return SendResult(success=False, error="bighelp Link is not connected")
         values = dict(metadata or {})
         try:
             route = self._response_route(chat_id, values)
@@ -2050,7 +2050,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         except Exception as exc:
             return SendResult(
                 success=False,
-                error=f"Loopdy Link draft failed ({type(exc).__name__})",
+                error=f"bighelp Link draft failed ({type(exc).__name__})",
             )
 
     @staticmethod
@@ -2108,14 +2108,14 @@ class LoopdyAdapter(BasePlatformAdapter):
     ) -> SendResult:
         del session_key, metadata
         if self.link_client is None:
-            return SendResult(success=False, error="Loopdy Link is not connected")
+            return SendResult(success=False, error="bighelp Link is not connected")
         pending = self._take_pending_picker(
             request_id=_picker_request_id.get(),
             session_id=str(chat_id),
             kind="model",
         )
         if pending is None:
-            return SendResult(success=False, error="No active Loopdy model request")
+            return SendResult(success=False, error="No active bighelp model request")
         try:
             payload = model_picker_payload(
                 picker_id=pending.request.request_id,
@@ -2155,7 +2155,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             )
             return SendResult(
                 success=False,
-                error=f"Loopdy model picker failed ({type(exc).__name__})",
+                error=f"bighelp model picker failed ({type(exc).__name__})",
             )
 
     async def send_choice_picker(
@@ -2169,14 +2169,14 @@ class LoopdyAdapter(BasePlatformAdapter):
     ) -> SendResult:
         del session_key, metadata
         if self.link_client is None:
-            return SendResult(success=False, error="Loopdy Link is not connected")
+            return SendResult(success=False, error="bighelp Link is not connected")
         pending = self._take_pending_picker(
             request_id=_picker_request_id.get(),
             session_id=str(chat_id),
             kind="reasoning",
         )
         if pending is None:
-            return SendResult(success=False, error="No active Loopdy reasoning request")
+            return SendResult(success=False, error="No active bighelp reasoning request")
         try:
             payload = choice_picker_payload(
                 picker_id=pending.request.request_id,
@@ -2210,7 +2210,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             )
             return SendResult(
                 success=False,
-                error=f"Loopdy reasoning picker failed ({type(exc).__name__})",
+                error=f"bighelp reasoning picker failed ({type(exc).__name__})",
             )
 
     async def receive_link_turn(self, turn: InboundLinkTurn) -> None:
@@ -2242,7 +2242,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         )
         source = self.build_source(
             chat_id=turn.message.session_id,
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
             user_id=turn.sender_id,
             user_name=turn.message.actor_name,
@@ -2419,10 +2419,10 @@ class LoopdyAdapter(BasePlatformAdapter):
         """Reconcile persisted catalog activity with the live Hermes owner."""
         source = self.build_source(
             chat_id=session_id,
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
             user_id="loopdy-session-state",
-            user_name="Loopdy",
+            user_name="bighelp",
             message_id="loopdy-session-state-refresh",
         )
         source.profile = agent_id
@@ -2481,10 +2481,10 @@ class LoopdyAdapter(BasePlatformAdapter):
     def _remember_verified_link_profile(self, session_id: str, profile: str) -> None:
         resolved_profile = _profile_coordinate(profile)
         if not _is_link_chat_id(session_id) or not resolved_profile:
-            raise ValueError("Loopdy Link session profile is invalid")
+            raise ValueError("bighelp Link session profile is invalid")
         existing = self._link_session_profiles.get(session_id)
         if existing is not None and existing != resolved_profile:
-            raise ValueError("Loopdy Link session cannot change agents")
+            raise ValueError("bighelp Link session cannot change agents")
         self._link_session_profiles.pop(session_id, None)
         self._link_session_profiles[session_id] = resolved_profile
         while len(self._link_session_profiles) > _MAX_LINK_SESSION_PROFILE_BINDINGS:
@@ -2513,7 +2513,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             raise ValueError("The selected agent is unavailable")
         source = self.build_source(
             chat_id=session_id,
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
         )
         source.profile = agent_id
@@ -2621,7 +2621,7 @@ class LoopdyAdapter(BasePlatformAdapter):
 
         connection_id = _link_workspace_connection.get()
         if not connection_id:
-            raise RuntimeError("Loopdy Link connection identity is unavailable")
+            raise RuntimeError("bighelp Link connection identity is unavailable")
         return connection_id
 
     async def _get_link_session_workspace(
@@ -2636,7 +2636,7 @@ class LoopdyAdapter(BasePlatformAdapter):
             raise RuntimeError("Hermes session storage is unavailable")
         source = self.build_source(
             chat_id=session_id,
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
         )
         source.profile = agent_id
@@ -2692,7 +2692,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         )
         verified = self._link_session_profiles.get(session_id, "")
         if explicit and verified and explicit != verified:
-            raise ValueError("Loopdy Link response agent does not match its session")
+            raise ValueError("bighelp Link response agent does not match its session")
         return explicit or verified or _active_profile_id()
 
     async def _workspace_history_context(
@@ -3103,7 +3103,7 @@ class LoopdyAdapter(BasePlatformAdapter):
         with _profile_runtime_scope(get_profile_dir(request.agent_id)):
             source = self.build_source(
                 chat_id=request.source_session_id,
-                chat_name="Loopdy chat",
+                chat_name="bighelp chat",
                 chat_type="dm",
                 user_id=inbound.sender_id,
                 user_name=request.actor_name,
@@ -3120,7 +3120,7 @@ class LoopdyAdapter(BasePlatformAdapter):
 
             target = self.build_source(
                 chat_id=request.fork_session_id,
-                chat_name="Loopdy chat",
+                chat_name="bighelp chat",
                 chat_type="dm",
                 user_id=inbound.sender_id,
                 user_name=request.actor_name,
@@ -3182,10 +3182,10 @@ class LoopdyAdapter(BasePlatformAdapter):
         self._remember_verified_link_profile(request.session_id, request.agent_id)
         source = self.build_source(
             chat_id=request.session_id,
-            chat_name="Loopdy chat",
+            chat_name="bighelp chat",
             chat_type="dm",
             user_id="loopdy_link_control",
-            user_name="Loopdy user",
+            user_name="bighelp user",
             message_id=request.request_id,
         )
         source.profile = request.agent_id
@@ -3401,12 +3401,12 @@ async def standalone_send(
     thread_id: str | None = None,
     media_files: list[str] | None = None,
     force_document: bool = False,
-    service: LoopdyService | Any | None = None,
+    service: BighelpService | Any | None = None,
     link_state: Any | None = None,
-    adapter_factory: Callable[..., LoopdyAdapter | Any] = LoopdyAdapter,
+    adapter_factory: Callable[..., BighelpAdapter | Any] = BighelpAdapter,
 ) -> dict[str, Any]:
     if media_files:
-        return {"error": "Loopdy proactive notifications do not accept attachments"}
+        return {"error": "bighelp proactive notifications do not accept attachments"}
     del force_document
     target = str(
         chat_id
@@ -3420,7 +3420,7 @@ async def standalone_send(
     )
     try:
         if not await adapter.connect():
-            return {"error": "Loopdy Link is unavailable"}
+            return {"error": "bighelp Link is unavailable"}
         result = await adapter.send(
             target,
             message,
@@ -3431,7 +3431,7 @@ async def standalone_send(
                 "success": True,
                 "message_id": str(result.message_id or ""),
             }
-        return {"error": str(result.error or "Loopdy delivery failed")}
+        return {"error": str(result.error or "bighelp delivery failed")}
     finally:
         await adapter.disconnect()
 
@@ -3465,7 +3465,7 @@ def env_enablement() -> dict[str, Any] | None:
         return None
     return {
         "home_target": target,
-        "home_channel": {"chat_id": target, "name": "Loopdy"},
+        "home_channel": {"chat_id": target, "name": "bighelp"},
     }
 
 
@@ -3603,7 +3603,7 @@ def _profile_coordinate(value: Any) -> str:
 
 
 __all__ = [
-    "LoopdyAdapter",
+    "BighelpAdapter",
     "profile_display_name",
     "check_requirements",
     "env_enablement",

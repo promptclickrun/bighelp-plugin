@@ -1,4 +1,4 @@
-"""Validated Loopdy Marketplace packaging and host-side installation.
+"""Validated bighelp Marketplace packaging and host-side installation.
 
 Marketplace content is untrusted. This module validates approved source metadata,
 then delegates quarantine, scanning, collision refusal, and atomic publication to
@@ -382,7 +382,10 @@ def load_marketplace_trust_keys(
     from .marketplace_trust import PRODUCTION_RELEASE_KEYS
 
     source = os.environ if values is None else values
-    setting = "LOOPDY_MARKETPLACE_TRUSTED_ED25519_KEYS"
+    # Hosts set LOOPDY_MARKETPLACE_TRUSTED_ED25519_KEYS before 3.0.0.
+    setting = next((name for name in ("BIGHELP_MARKETPLACE_TRUSTED_ED25519_KEYS",
+                                      "LOOPDY_MARKETPLACE_TRUSTED_ED25519_KEYS") if name in source),
+                   "BIGHELP_MARKETPLACE_TRUSTED_ED25519_KEYS")
     encoded = (
         str(source.get(setting) or "").strip()
         if setting in source
@@ -703,7 +706,7 @@ class MarketplacePublisher:
                 "findings": [
                     _finding("metadata_invalid", "blocking", str(exc))
                 ],
-                "reviewDestination": "Loopdy Marketplace > My Uploads",
+                "reviewDestination": "bighelp Marketplace > My Uploads",
             }
         if request["agentId"] != self.agent_id:
             return {
@@ -718,7 +721,7 @@ class MarketplacePublisher:
                         "The selected source does not belong to this Hermes agent",
                     )
                 ],
-                "reviewDestination": "Loopdy Marketplace > My Uploads",
+                "reviewDestination": "bighelp Marketplace > My Uploads",
             }
         findings: list[dict[str, str]] = _metadata_findings(request["metadata"])
         package = b""
@@ -753,7 +756,7 @@ class MarketplacePublisher:
                 else "valid"
             ),
             "findings": findings,
-            "reviewDestination": "Loopdy Marketplace > My Uploads",
+            "reviewDestination": "bighelp Marketplace > My Uploads",
         }
         if request["validateOnly"] or result["validationState"] == "blocked":
             return result
@@ -766,7 +769,7 @@ class MarketplacePublisher:
                     _finding(
                         "marketplace_unavailable",
                         "blocking",
-                        "Loopdy Link marketplace publishing is not configured",
+                        "bighelp Link marketplace publishing is not configured",
                     ),
                 ],
             }
@@ -790,7 +793,7 @@ class MarketplacePublisher:
             )
         return {
             **projected,
-            "reviewDestination": "Loopdy Marketplace > My Uploads",
+            "reviewDestination": "bighelp Marketplace > My Uploads",
         }
 
     def _selected_package(
@@ -805,7 +808,7 @@ class MarketplacePublisher:
                 raise MarketplacePublishError("Selected card identifier is invalid")
             getter = getattr(self.store, "get_card_template", None)
             if not callable(getter):
-                raise MarketplacePublishError("Loopdy card template storage is unavailable")
+                raise MarketplacePublishError("bighelp card template storage is unavailable")
             template = getter(profile=agent_id, template_id=source_id)
             if not isinstance(template, dict):
                 raise MarketplacePublishError("Selected card template was not found")
@@ -1148,7 +1151,7 @@ def _selected_theme_package(
         raise MarketplacePublishError("Selected theme attachment identifier is invalid")
     reader = getattr(attachment_store, "read", None)
     if not callable(reader):
-        raise MarketplacePublishError("Loopdy attachment storage is unavailable")
+        raise MarketplacePublishError("bighelp attachment storage is unavailable")
     attachment = reader(profile=agent_id, attachment_id=source_id)
     if not isinstance(attachment, dict):
         raise MarketplacePublishError("Selected theme attachment was not found")

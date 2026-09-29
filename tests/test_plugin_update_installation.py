@@ -30,7 +30,7 @@ class PluginUpdateInstallationTests(unittest.TestCase):
                 return result.stdout.strip()
             command(["git", "init", "-q", "-b", "main", str(repo)])
             command(["git", "-C", str(repo), "add", "."])
-            commit = ["git", "-C", str(repo), "-c", "user.name=Loopdy Test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m"]
+            commit = ["git", "-C", str(repo), "-c", "user.name=bighelp Test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m"]
             command(commit + ["baseline fixture"])
             old = command(["git", "-C", str(repo), "rev-parse", "HEAD"])
             home.mkdir(parents=True, exist_ok=True)

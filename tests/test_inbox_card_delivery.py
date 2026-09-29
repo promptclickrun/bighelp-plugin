@@ -59,18 +59,18 @@ class InboxCardDeliveryTests(unittest.TestCase):
 
     def test_persisted_card_and_ordinary_event_survive_backend_and_encryption(self):
         from loopdy_plugin.link_crypto import AccountCipher
-        from loopdy_plugin.store import LoopdyStore
+        from loopdy_plugin.store import BighelpStore
         from loopdy_plugin.workspace_control import HermesWorkspaceBackend
 
         card = rendered_card()
         with tempfile.TemporaryDirectory() as folder:
-            store = LoopdyStore(Path(folder) / "loopdy.sqlite3")
+            store = BighelpStore(Path(folder) / "loopdy.sqlite3")
             event = _channel_event(json.dumps(card), metadata={"job_id": "fixture-job", "profile": "default"})
             store.record_event(event, target="all")
             store.record_event(_channel_event("Ordinary update", metadata={"profile": "default"}), target="all")
             for options in ({}, {"schemaVersion": 2}):
                 # Reopen the actual store, as a later dashboard refresh would.
-                reopened = LoopdyStore(store.path)
+                reopened = BighelpStore(store.path)
                 backend = HermesWorkspaceBackend(service=SimpleNamespace(store=reopened))
                 payload = asyncio.run(backend.dashboard_load(options))
                 result = self.result(payload)

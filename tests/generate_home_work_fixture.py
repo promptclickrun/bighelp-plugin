@@ -14,7 +14,7 @@ from pathlib import Path
 
 from loopdy_plugin.hooks import normalize_hook
 from loopdy_plugin.link_contracts import WorkspaceRequest, workspace_result
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.workspace_control import HermesWorkspaceBackend, WorkspaceController
 from tests.test_registration import _Service
 
@@ -22,7 +22,7 @@ from tests.test_registration import _Service
 def generate() -> dict:
     with tempfile.TemporaryDirectory() as directory:
         service = _Service()
-        service.store = LoopdyStore(Path(directory) / "events.sqlite3")
+        service.store = BighelpStore(Path(directory) / "events.sqlite3")
         payloads = [
             ("on_session_end", dict(platform="loopdy", session_id="contract-user", turn_id="contract-user-turn", completed=True)),
             ("on_session_end", dict(platform="cron", session_id="cron_contract-job_20260906_120000", turn_id="contract-cron-turn", completed=True)),

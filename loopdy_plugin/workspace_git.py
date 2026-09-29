@@ -1,4 +1,4 @@
-"""Bounded, workspace-pinned git operations for the authenticated Loopdy API."""
+"""Bounded, workspace-pinned git operations for the authenticated bighelp API."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
+from . import naming
 from .sensitive import SECRET_PATH_RE, SENSITIVE_CREDENTIAL_BYTES_RE
 
 
@@ -161,15 +162,15 @@ class WorkspaceGitService:
 
     @classmethod
     def from_environment(cls, *, state_path: Path | str) -> "WorkspaceGitService":
-        raw = os.getenv("LOOPDY_WORKSPACE_GIT_CONFIG", "").strip()
+        raw = (naming.env("WORKSPACE_GIT_CONFIG") or "").strip()
         if not raw:
             return cls([], state_path=state_path)
         try:
             value = json.loads(raw)
         except json.JSONDecodeError as error:
-            raise ValueError("LOOPDY_WORKSPACE_GIT_CONFIG must be valid JSON") from error
+            raise ValueError("BIGHELP_WORKSPACE_GIT_CONFIG must be valid JSON") from error
         if not isinstance(value, list):
-            raise ValueError("LOOPDY_WORKSPACE_GIT_CONFIG must be a workspace list")
+            raise ValueError("BIGHELP_WORKSPACE_GIT_CONFIG must be a workspace list")
         return cls(value, state_path=state_path)
 
     def capabilities(self) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""Authenticated Loopdy iPhone Health, Calendar and Reminders tool bridge."""
+"""Authenticated bighelp iPhone Health, Calendar and Reminders tool bridge."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .naming import TOOLSET
 from .inbound_dispatch import ReplyRoute, current_reply_route, current_turn_lease
 
 from .link_contracts import (
@@ -720,7 +721,7 @@ def register(ctx: Any, *, bridge: DeviceToolBridge | None = None) -> None:
         ),
     )
     for name, description, schema, handler in definitions:
-        ctx.register_tool(name=name, toolset="loopdy", schema={"name": name, "description": description, "parameters": schema}, handler=handler, is_async=True)
+        ctx.register_tool(name=name, toolset=TOOLSET, schema={"name": name, "description": description, "parameters": schema}, handler=handler, is_async=True)
 
 
 

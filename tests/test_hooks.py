@@ -88,7 +88,7 @@ class HookNormalizationTests(unittest.TestCase):
         self.assertEqual(notification.title, "Completion alert")
         self.assertEqual(
             notification.body,
-            "Scheduled task complete: Open Loopdy to view the scheduled task result.",
+            "Scheduled task complete: Open bighelp to view the scheduled task result.",
         )
         self.assertEqual(notification.data, {"loopdy": completed.push_payload})
         self.assertNotIn("Private morning weather", repr(notification))

@@ -1,7 +1,8 @@
-"""Hermes registration and CLI surfaces for Loopdy."""
+"""Hermes registration and CLI surfaces for bighelp."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -18,7 +19,7 @@ from typing import Any
 from hermes_constants import get_hermes_home
 
 from .adapter import (
-    LoopdyAdapter,
+    BighelpAdapter,
     check_requirements,
     env_enablement,
     get_service,
@@ -30,7 +31,7 @@ from .adapter import (
     validate_config,
 )
 from .device_tools import DeviceToolBridge, register as register_device_tools
-from .approval import LoopdyApprovalTransport
+from .approval import BighelpApprovalTransport
 from .activity_bridge import (
     LinkActivityBroker,
     external_turn_id,
@@ -38,7 +39,7 @@ from .activity_bridge import (
     publish_hook_activity,
 )
 from .attachments import AttachmentStore
-from .events import LoopdyEvent
+from .events import BighelpEvent
 from .hooks import normalize_hook
 from .generative_ui import extract_rendered_envelope
 from .link_client import load_runtime_config
@@ -46,6 +47,7 @@ from .link_contracts import generative_ui_event, notification_event
 from .link_identity import pre_llm_context_from_state
 from .link_pairing import LINK_ENV_KEYS, pair_host
 from .marketplace import MarketplaceGatewayClient, MarketplacePublisher
+from .naming import CLI_COMMAND, LEGACY_CLI_COMMAND, register_legacy_toolset_alias
 from .plugin_update import (
     PluginUpdateManager,
     local_cli_device_id,
@@ -76,7 +78,7 @@ HOOKS = (
     *DIRECT_OBSERVER_HOOKS,
     *NOTIFICATION_HOOKS,
 )
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 
 
 def _device_tools_supported() -> bool:
@@ -92,14 +94,14 @@ def register_marketplace_publish_skill(ctx: Any) -> None:
         "Prepare a private draft for review in bighelp."
     )
     ctx.register_skill(
-        "loopdy-marketplace-publish",
+        "bighelp-marketplace-publish",
         Path(__file__).resolve().parents[1]
         / "skills"
-        / "loopdy-marketplace-publish"
+        / "bighelp-marketplace-publish"
         / "SKILL.md",
         description=description,
         frontmatter={
-            "name": "loopdy-marketplace-publish",
+            "name": "bighelp-marketplace-publish",
             "description": description,
         },
     )
@@ -139,7 +141,7 @@ def register(
     # adapter-owned and lazy. Non-voice approvals retain the existing presenter.
     voice_adapters = weakref.WeakSet()
     def adapter_factory(config):
-        adapter = LoopdyAdapter(
+        adapter = BighelpAdapter(
             config, service=active_service, link_state=identity_state,
             activity_broker=broker, plugin_update_manager=update_manager,
             device_tool_bridge=device_tool_bridge,
@@ -198,7 +200,7 @@ def register(
     )
     # Hermes 0.21.2 removed the optional ToolExecutionContext carried by
     # MessageEvent. When the public execution-middleware surface is present,
-    # Loopdy's native phone channel owns the tool call and receives Hermes'
+    # bighelp's native phone channel owns the tool call and receives Hermes'
     # authentic hook IDs. Older hosts retain their verified Link path through a
     # separate legacy registration.
     legacy_device_tools = _device_tools_supported()
@@ -219,17 +221,18 @@ def register(
         register_agent_board(ctx)
     except (OSError, ImportError, sqlite3.Error):
         logger.warning("bighelp agent board unavailable")
+    register_legacy_toolset_alias()
 
     ctx.register_platform(
         name="loopdy",
-        label="Loopdy",
+        label="bighelp",
         adapter_factory=adapter_factory,
         check_fn=check_requirements,
         validate_config=validate_config,
         is_connected=is_connected,
         required_env=[],
         install_hint=(
-            "Run `hermes loopdy link pair` and approve the code in Loopdy."
+            "Run `hermes loopdy link pair` and approve the code in bighelp."
         ),
         env_enablement_fn=env_enablement,
         cron_deliver_env_var="LOOPDY_HOME_TARGET",
@@ -248,7 +251,7 @@ def register(
         allow_update_command=False,
     )
 
-    approval = LoopdyApprovalTransport(
+    approval = BighelpApprovalTransport(
         active_service.store,
         active_service,
         target=_home_target(),
@@ -310,19 +313,28 @@ def register(
             ),
         )
 
+    cli_handler = partial(
+        handle_cli,
+        service=active_service,
+        profile=profile,
+        identity_state=identity_state,
+        plugin_update_manager=update_manager,
+        plugin_context=ctx,
+    )
     ctx.register_cli_command(
-        name="loopdy",
-        help="Configure and inspect the Loopdy native channel",
-        description="Manage the Loopdy mobile notification integration.",
+        name=CLI_COMMAND,
+        help="Update and inspect the bighelp plugin",
+        description="Manage the bighelp plugin on this Hermes host.",
         setup_fn=setup_cli,
-        handler_fn=partial(
-            handle_cli,
-            service=active_service,
-            profile=profile,
-            identity_state=identity_state,
-            plugin_update_manager=update_manager,
-            plugin_context=ctx,
-        ),
+        handler_fn=cli_handler,
+    )
+    # Scripts written before 3.0.0 run `hermes loopdy …`; keep them working, unlisted.
+    ctx.register_cli_command(
+        name=LEGACY_CLI_COMMAND,
+        help=argparse.SUPPRESS,
+        description="Old name for `hermes bighelp`.",
+        setup_fn=setup_cli,
+        handler_fn=cli_handler,
     )
     # Independent, public native observers. The optional Link adapter is not
     # constructed to enable these notifications, and no core hook is patched.
@@ -385,7 +397,7 @@ def _register_notification_observer(ctx: Any, hook: str, callback: Any) -> None:
             callback(**payload)
         except Exception:
             # Never reflect notification state, payloads, or exception bodies.
-            logger.warning("Loopdy tool-start notification observation unavailable")
+            logger.warning("bighelp tool-start notification observation unavailable")
         # None preserves the tool name, arguments, result, and policy decisions.
         return None
 
@@ -405,7 +417,7 @@ def _pre_llm_call(
         try:
             voice_observer(**payload)
         except Exception:
-            logger.warning("Loopdy live session binding unavailable")
+            logger.warning("bighelp live session binding unavailable")
     publish_hook_activity(
         "pre_llm_call",
         broker=activity_broker,
@@ -430,17 +442,17 @@ def _pre_llm_call(
         if isinstance(identity, dict) and isinstance(identity.get("context"), str):
             sections.append(identity["context"])
     sections.append(
-        "[Loopdy native presentation]\n"
+        "[bighelp native presentation]\n"
         "When structured presentation is clearer than prose, call exactly one matching "
         "direct renderer such as bighelp_render_weather_forecast, "
         "bighelp_render_stock_quote, bighelp_render_chart, bighelp_render_dashboard, or "
         "bighelp_render_form. Those typed v2 renderers remain preferred for their existing "
         "polished use cases. For a new static layout that does not match a typed renderer, "
         "use bighelp_render_card with embedded values and an empty data_sources array. "
-        "Live Loopdy Card data refresh is unavailable in this release. "
+        "Live bighelp Card data refresh is unavailable in this release. "
         "In interactive chat, a renderer tool call alone does not display a card: include the returned "
         "display_markdown exactly once in the assistant answer so it survives history and exports. "
-        "For scheduler-owned Loopdy Inbox delivery, instead return only the raw JSON object from the "
+        "For scheduler-owned bighelp Inbox delivery, instead return only the raw JSON object from the "
         "wrapper's card field. "
         "For current weather or forecast requests, use "
         "bighelp_render_weather_forecast after obtaining the data when a card is useful; "
@@ -537,7 +549,7 @@ def _publish_generative_ui_result(
         logger.warning("Hermes renderer result was invalid")
         return
     if not broker.publish(event):
-        logger.debug("Loopdy Link generative UI has no attached socket")
+        logger.debug("bighelp Link generative UI has no attached socket")
 
 
 def _deliver_hook(
@@ -594,8 +606,8 @@ def _deliver_hook(
 
 
 def _with_subagent_start_metadata(
-    event: LoopdyEvent, *, service: Any, payload: dict[str, Any]
-) -> LoopdyEvent:
+    event: BighelpEvent, *, service: Any, payload: dict[str, Any]
+) -> BighelpEvent:
     # Hermes stop observers need not repeat child_goal/child_subagent_id.
     # Recover only bounded metadata from the exact plugin-owned start record,
     # not runtime internals or the child's raw final summary.
@@ -658,17 +670,17 @@ def _queue_live_activity_update(service: Any, **update: Any) -> None:
     if not str(update.get("session_id") or "").strip():
         return
     if not service.enqueue_live_activity_update(**update):
-        logger.warning("Loopdy Live Activity update was not queued")
+        logger.warning("bighelp Live Activity update was not queued")
 
 
 def setup_cli(parser: Any) -> None:
-    actions = parser.add_subparsers(dest="loopdy_action", required=True)
+    actions = parser.add_subparsers(dest="bighelp_action", required=True)
     from .wiki_cli import setup_wiki_cli
     setup_wiki_cli(actions)
 
     actions.add_parser("status", help="Show provider health and registered devices")
     direct = actions.add_parser("direct", help="Configure the private loopback transport (no activation)")
-    direct_actions = direct.add_subparsers(dest="loopdy_direct_action", required=True)
+    direct_actions = direct.add_subparsers(dest="bighelp_direct_action", required=True)
     direct_actions.add_parser("status", help="Show direct settings, not a live health probe")
     direct_config = direct_actions.add_parser("configure", help="Save HTTPS origin and fixed loopback port")
     direct_config.add_argument("--origin", required=True)
@@ -680,7 +692,7 @@ def setup_cli(parser: Any) -> None:
         "files",
         help="Manage explicit read-only workspace file grants",
     )
-    file_actions = files.add_subparsers(dest="loopdy_files_action", required=True)
+    file_actions = files.add_subparsers(dest="bighelp_files_action", required=True)
     grant = file_actions.add_parser("grant", help="Grant one host-local workspace root")
     grant.add_argument("workspace_id")
     grant.add_argument("--root", required=True)
@@ -714,7 +726,7 @@ def setup_cli(parser: Any) -> None:
 
     update = actions.add_parser(
         "update",
-        help="Install the latest immutable Loopdy plugin revision",
+        help="Install the latest immutable bighelp plugin revision",
     )
     update.add_argument(
         "--restart",
@@ -752,12 +764,12 @@ def setup_cli(parser: Any) -> None:
     test = actions.add_parser("test", help="Send an opaque test wakeup")
     test.add_argument("--target", default=_home_target())
 
-    link = actions.add_parser("link", help="Inspect retained legacy Loopdy Link settings")
-    link_actions = link.add_subparsers(dest="loopdy_link_action", required=True)
+    link = actions.add_parser("link", help="Inspect retained legacy bighelp Link settings")
+    link_actions = link.add_subparsers(dest="bighelp_link_action", required=True)
     pair = link_actions.add_parser("pair", help="Explain the replacement native connection")
     pair.add_argument("--base-url", default="https://link.loopdy.app")
     pair.add_argument("--timeout", type=int, default=600)
-    link_actions.add_parser("status", help="Show redacted Loopdy Link status")
+    link_actions.add_parser("status", help="Show redacted bighelp Link status")
     unpair = link_actions.add_parser("unpair", help="Remove this host pairing")
     unpair.add_argument("--yes", action="store_true", help="Confirm removal")
 
@@ -771,7 +783,7 @@ def handle_cli(
     plugin_update_manager: PluginUpdateManager | None = None,
     plugin_context: Any | None = None,
 ) -> None:
-    action = str(getattr(args, "loopdy_action", "") or "")
+    action = str(getattr(args, "bighelp_action", "") or "")
     if action == "direct":
         from .direct_runtime import DirectSettings
         import secrets
@@ -779,7 +791,7 @@ def handle_cli(
         set_config = getattr(plugin_context, "set_config", None)
         if not callable(get_config) or not callable(set_config):
             raise ValueError("This Hermes host does not expose plugin settings")
-        direct_action = str(getattr(args, "loopdy_direct_action", ""))
+        direct_action = str(getattr(args, "bighelp_direct_action", ""))
         if direct_action == "status":
             settings = DirectSettings.from_mapping(get_config("direct", {}))
             _print_json({**settings.as_mapping(), "activation": "not_probed",
@@ -897,7 +909,7 @@ def handle_cli(
             raise ValueError(str(verdict))
         _print_json(service.test_notification(target=target, profile=profile))
         return
-    raise ValueError("Unknown Loopdy command")
+    raise ValueError("Unknown bighelp command")
 
 
 def _handle_files_cli(args: Any) -> None:
@@ -905,7 +917,7 @@ def _handle_files_cli(args: Any) -> None:
 
     from .workspace_files import WorkspaceFilesError, WorkspaceFilesService
 
-    action = str(getattr(args, "loopdy_files_action", "") or "")
+    action = str(getattr(args, "bighelp_files_action", "") or "")
     try:
         service = WorkspaceFilesService(
             get_hermes_home() / "plugin-data" / "loopdy" / "workspace-files"
@@ -954,7 +966,7 @@ def _handle_files_cli(args: Any) -> None:
             )
         else:
             raise WorkspaceFilesError(
-                "INVALID_REQUEST", "Unknown Loopdy Files command"
+                "INVALID_REQUEST", "Unknown bighelp Files command"
             )
     except WorkspaceFilesError as error:
         _print_json(error.envelope())
@@ -972,7 +984,7 @@ def _handle_files_cli(args: Any) -> None:
 def _handle_link_cli(args: Any, *, identity_state: Any | None = None) -> None:
     from hermes_cli.config import remove_env_value, save_env_value
 
-    action = str(getattr(args, "loopdy_link_action", "") or "")
+    action = str(getattr(args, "bighelp_link_action", "") or "")
     if action == "pair":
         _print_json({"state": "retired", "chat_transport": "native",
             "detail": "Connect the app to the authenticated Hermes host address. Cloud pairing is no longer used for chat."})
@@ -991,7 +1003,7 @@ def _handle_link_cli(args: Any, *, identity_state: Any | None = None) -> None:
         return
     if action == "unpair":
         if not bool(getattr(args, "yes", False)):
-            raise ValueError("Pass --yes to confirm Loopdy Link unpairing")
+            raise ValueError("Pass --yes to confirm bighelp Link unpairing")
         removed = 0
         for key in LINK_ENV_KEYS:
             removed += int(bool(remove_env_value(key)))
@@ -1001,7 +1013,7 @@ def _handle_link_cli(args: Any, *, identity_state: Any | None = None) -> None:
             identity_state.set("direct.configuration_revision", secrets.token_urlsafe(18))
         _print_json({"configured": False, "state": "unpaired", "removed": removed})
         return
-    raise ValueError("Unknown Loopdy Link command")
+    raise ValueError("Unknown bighelp Link command")
 
 
 def _link_status_value(config: Any | None, identity_state: Any | None) -> dict[str, Any]:

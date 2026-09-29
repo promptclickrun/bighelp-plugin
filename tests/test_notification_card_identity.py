@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, patch
 
 from gateway.config import PlatformConfig
 from gateway.platform_registry import PlatformEntry, platform_registry
-from loopdy_plugin.adapter import LoopdyAdapter, _channel_event, standalone_send
+from loopdy_plugin.adapter import BighelpAdapter, _channel_event, standalone_send
 from loopdy_plugin.generative_ui import render_v2_envelope
 from loopdy_plugin.loopdy_cards import render_card
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 
 
 class NotificationCardIdentityTests(unittest.TestCase):
@@ -37,10 +37,10 @@ class NotificationCardIdentityTests(unittest.TestCase):
                 async def send_payload(self, payload):
                     raise TimeoutError("synthetic acknowledgement timeout")
 
-            store = LoopdyStore(path)
+            store = BighelpStore(path)
             service = SimpleNamespace(store=store)
             with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None):
-                first = LoopdyAdapter(PlatformConfig(enabled=True), service=service,
+                first = BighelpAdapter(PlatformConfig(enabled=True), service=service,
                                       workspace_controller=SimpleNamespace())
             first.link_client = TimeoutLink()
             result = await first.send("all", raw,
@@ -49,9 +49,9 @@ class NotificationCardIdentityTests(unittest.TestCase):
             first_id = store.list_events()[0]["event_id"]
             # The real standalone path drops scheduler metadata and reconstructs
             # the adapter. Reopen storage to prove identity survives that boundary.
-            reopened = LoopdyStore(path)
+            reopened = BighelpStore(path)
             with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None):
-                fallback = LoopdyAdapter(PlatformConfig(enabled=True),
+                fallback = BighelpAdapter(PlatformConfig(enabled=True),
                     service=SimpleNamespace(store=reopened), workspace_controller=SimpleNamespace())
             fallback.link_client = TimeoutLink()
             with (

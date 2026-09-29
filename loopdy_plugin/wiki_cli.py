@@ -1,4 +1,4 @@
-"""Explicit host-local Wiki grant administration, registered by Loopdy's CLI.
+"""Explicit host-local Wiki grant administration, registered by bighelp's CLI.
 
 Run on the profile that owns the paired host, not the target document profile.
 The --profile-id flag is grant policy only; it cannot choose a state directory.
@@ -15,7 +15,7 @@ from .wiki_transport import WikiTransport
 
 def setup_wiki_cli(actions: Any) -> None:
     wiki = actions.add_parser("wiki", help="Manage separate host-authorized Wiki grants")
-    commands = wiki.add_subparsers(dest="loopdy_wiki_action", required=True)
+    commands = wiki.add_subparsers(dest="bighelp_wiki_action", required=True)
     grant = commands.add_parser("grant", help="Authorize an exact Wiki root for explicit devices and profile")
     grant.add_argument("wiki_id")
     grant.add_argument("--root", required=True)
@@ -33,7 +33,7 @@ def setup_wiki_cli(actions: Any) -> None:
 
 def handle_wiki_cli(args: Any, *, transport: WikiTransport) -> None:
     try:
-        action = args.loopdy_wiki_action
+        action = args.bighelp_wiki_action
         if action not in {"grant", "revoke", "list"}:
             raise WikiServiceError("INVALID_REQUEST", "Unknown Wiki administration command")
         if action in {"grant", "revoke"} and args.yes is not True:

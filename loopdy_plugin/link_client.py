@@ -1,4 +1,4 @@
-"""Portable outbound Loopdy Link WebSocket runtime for Hermes."""
+"""Portable outbound bighelp Link WebSocket runtime for Hermes."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ from .link_crypto import (
 from .link_identity import LinkIdentityRegistry
 
 
-logger = logging.getLogger("hermes.plugins.loopdy.link")
+logger = logging.getLogger("hermes.plugins.bighelp.link")
 _SOCKET_PATH = "/v1/socket"
 _CAPABILITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _PROCESS_TRANSPORT_LOCKS: dict[str, threading.Lock] = {}
@@ -211,15 +211,15 @@ class LinkRuntimeConfig:
         )
         missing = [key for key in required if not str(values.get(key) or "").strip()]
         if missing:
-            raise ValueError("Loopdy Link configuration is incomplete")
+            raise ValueError("bighelp Link configuration is incomplete")
         base_url = _validated_origin(str(values["LOOPDY_LINK_BASE_URL"]))
         device_id = _opaque(str(values["LOOPDY_LINK_DEVICE_ID"]), 1, 96)
         try:
             epoch = int(values["LOOPDY_LINK_AUTHORIZATION_EPOCH"])
         except (TypeError, ValueError) as exc:
-            raise ValueError("Loopdy Link authorization epoch is invalid") from exc
+            raise ValueError("bighelp Link authorization epoch is invalid") from exc
         if epoch < 1:
-            raise ValueError("Loopdy Link authorization epoch is invalid")
+            raise ValueError("bighelp Link authorization epoch is invalid")
         key_value = serialization.load_der_private_key(
             decode_base64url(
                 str(values["LOOPDY_LINK_SIGNING_PRIVATE_KEY"]),
@@ -231,7 +231,7 @@ class LinkRuntimeConfig:
         if not isinstance(key_value, ec.EllipticCurvePrivateKey) or not isinstance(
             key_value.curve, ec.SECP256R1
         ):
-            raise ValueError("Loopdy Link signing key is invalid")
+            raise ValueError("bighelp Link signing key is invalid")
         account_key = decode_base64url(
             str(values["LOOPDY_LINK_ACCOUNT_KEY"]), minimum=32, maximum=32
         )
@@ -473,10 +473,10 @@ class LoopdyLinkClient:
             ):
                 if value in negotiated:
                     continue
-                raise ValueError("Loopdy Link capability is invalid")
+                raise ValueError("bighelp Link capability is invalid")
             negotiated.append(value)
         if len(negotiated) > 16:
-            raise ValueError("Loopdy Link capability catalog is too large")
+            raise ValueError("bighelp Link capability catalog is too large")
         self.capabilities = tuple(negotiated)
         self.peer_capabilities: frozenset[str] = frozenset()
         self._accepted: dict[str, asyncio.Future[None]] = {}
@@ -607,12 +607,12 @@ class LoopdyLinkClient:
         target_device_id: str | None = None,
     ) -> str:
         if self._authentication_failed:
-            raise ConnectionError("Loopdy Link authorization requires re-pairing")
+            raise ConnectionError("bighelp Link authorization requires re-pairing")
         if payload.get("type") == "device.tool.request" and target_device_id is None:
-            raise ValueError("Loopdy Link device tool requests require a directed target")
+            raise ValueError("bighelp Link device tool requests require a directed target")
         if target_device_id is not None:
             if DIRECTED_FRAMES_CAPABILITY not in self.peer_capabilities:
-                raise ConnectionError("Loopdy Link directed frames were not negotiated")
+                raise ConnectionError("bighelp Link directed frames were not negotiated")
             target_device_id = _opaque(target_device_id, 1, 96)
         async with self._send_lock:
             await asyncio.wait_for(self._connected.wait(), timeout=20.0)
@@ -723,11 +723,11 @@ class LoopdyLinkClient:
         defer_callbacks: bool = False,
     ) -> bool:
         if not isinstance(encoded, str) or len(encoded) > MAX_ENCRYPTED_FRAME_CHARACTERS:
-            raise ValueError("Loopdy Link socket message is invalid")
+            raise ValueError("bighelp Link socket message is invalid")
         try:
             header = json.loads(encoded)
         except (TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("Loopdy Link socket message is invalid") from exc
+            raise ValueError("bighelp Link socket message is invalid") from exc
         if (
             isinstance(header, dict)
             and header.get("version") == 1
@@ -778,7 +778,7 @@ class LoopdyLinkClient:
                     for character in target_host_id
                 )
             ):
-                raise ValueError("Loopdy Link target host is invalid")
+                raise ValueError("bighelp Link target host is invalid")
             if target_host_id != self.config.device_id:
                 if defer_callbacks:
                     self._enqueue_inbound_callback(callback, frame, None)
@@ -861,7 +861,7 @@ class LoopdyLinkClient:
         except Exception as exc:
             self._last_error = "The websockets dependency is unavailable"
             self._record_runtime_status("configuration_error", self._last_error)
-            logger.error("Loopdy Link cannot start: %s", self._last_error)
+            logger.error("bighelp Link cannot start: %s", self._last_error)
             return
         delays = (1, 2, 5, 10, 20, 30)
         while not self._stopping.is_set():
@@ -892,7 +892,7 @@ class LoopdyLinkClient:
                             socket.recv(), timeout=self._readiness_timeout
                         )
                         if not isinstance(encoded, str):
-                            raise ValueError("Loopdy Link requires text frames")
+                            raise ValueError("bighelp Link requires text frames")
                         ready = await self.handle_wire_message(
                             encoded, callback, defer_callbacks=True
                         )
@@ -905,7 +905,7 @@ class LoopdyLinkClient:
                         await self._send_wire(pending)
                     async for encoded in socket:
                         if not isinstance(encoded, str):
-                            raise ValueError("Loopdy Link requires text frames")
+                            raise ValueError("bighelp Link requires text frames")
                         await self.handle_wire_message(
                             encoded, callback, defer_callbacks=True
                         )
@@ -918,15 +918,15 @@ class LoopdyLinkClient:
                     for future in tuple(self._accepted.values()):
                         if not future.done():
                             future.set_exception(ConnectionError(self._last_error))
-                    logger.warning("Loopdy Link authorization denied; automatic reconnect stopped")
+                    logger.warning("bighelp Link authorization denied; automatic reconnect stopped")
                 elif _connection_was_replaced(exc):
                     superseded = True
                     self._superseded = True
                     self._last_error = "connection replaced by newer runtime"
-                    logger.info("Loopdy Link connection superseded by newer runtime")
+                    logger.info("bighelp Link connection superseded by newer runtime")
                 else:
                     self._last_error = _connection_error_detail(exc)
-                    logger.warning("Loopdy Link connection interrupted (%s)", self._last_error)
+                    logger.warning("bighelp Link connection interrupted (%s)", self._last_error)
             finally:
                 self._connected.clear()
                 await self._stop_backpressure_retry()
@@ -984,7 +984,7 @@ class LoopdyLinkClient:
             self.state.set("link.runtime_status", value)
         except Exception as exc:
             logger.warning(
-                "Loopdy Link could not persist runtime status (%s)",
+                "bighelp Link could not persist runtime status (%s)",
                 _connection_error_detail(exc),
             )
 
@@ -996,11 +996,11 @@ class LoopdyLinkClient:
             result = callback(state, detail)
             if inspect.isawaitable(result):
                 logger.warning(
-                    "Loopdy Link status callback must be synchronous; ignoring awaitable"
+                    "bighelp Link status callback must be synchronous; ignoring awaitable"
                 )
         except Exception as exc:
             logger.warning(
-                "Loopdy Link status callback failed (%s)",
+                "bighelp Link status callback failed (%s)",
                 _connection_error_detail(exc),
             )
 
@@ -1019,7 +1019,7 @@ class LoopdyLinkClient:
             frame.sender_device_id != self.config.device_id
             or frame.sender_epoch != self.config.authorization_epoch
         ):
-            raise ValueError("Loopdy Link backpressure pending owner is invalid")
+            raise ValueError("bighelp Link backpressure pending owner is invalid")
         socket = self._socket
         if socket is None or self._stopping.is_set():
             return
@@ -1089,7 +1089,7 @@ class LoopdyLinkClient:
     async def _send_wire(self, value: dict[str, Any]) -> None:
         socket = self._socket
         if socket is None:
-            raise ConnectionError("Loopdy Link is disconnected")
+            raise ConnectionError("bighelp Link is disconnected")
         await socket.send(json.dumps(value, separators=(",", ":"), sort_keys=True))
 
     async def _send_receipt(self, frame: EncryptedFrame) -> None:
@@ -1132,7 +1132,7 @@ class LoopdyLinkClient:
         except asyncio.QueueFull:
             # Quarantine/receipt has already completed in receive order. Do not
             # turn a peer's invalid-request flood into unbounded response work.
-            logger.warning("Loopdy Link rejection response queue is full")
+            logger.warning("bighelp Link rejection response queue is full")
             return
         if self._rejection_task is None or self._rejection_task.done():
             self._rejection_task = asyncio.create_task(
@@ -1153,7 +1153,7 @@ class LoopdyLinkClient:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    logger.warning("Loopdy Link rejection response delivery failed")
+                    logger.warning("bighelp Link rejection response delivery failed")
                 finally:
                     self._rejection_queue.task_done()
         except asyncio.QueueEmpty:
@@ -1224,7 +1224,7 @@ class LoopdyLinkClient:
                         await self._accept_inbound_frame(frame)
                     except Exception as delivery_error:
                         logger.warning(
-                            "Loopdy Link could not deliver the correlated inbound failure (%s)",
+                            "bighelp Link could not deliver the correlated inbound failure (%s)",
                             _connection_error_detail(delivery_error),
                         )
                         await self._close_for_reconnect(
@@ -1236,7 +1236,7 @@ class LoopdyLinkClient:
                 # lease to expire. Link-wake readiness is deliberately unchanged.
                 if isinstance(inbound, InboundLinkRelayReady) and _expired_host_relay(inbound.registration):
                     await self._quarantine_inbound_payload(
-                        frame, ExpiredHostRelayEnrollment("Loopdy Link host-relay enrollment has expired")
+                        frame, ExpiredHostRelayEnrollment("bighelp Link host-relay enrollment has expired")
                     )
                     continue
                 callback_error: Exception | None = None
@@ -1260,7 +1260,7 @@ class LoopdyLinkClient:
                     if isinstance(inbound, InboundLinkRelayReady):
                         detail = _connection_error_detail(callback_error)
                         logger.warning(
-                            "Loopdy Link relay.ready callback failed; reconnecting (%s)",
+                            "bighelp Link relay.ready callback failed; reconnecting (%s)",
                             detail,
                         )
                         self._last_error = detail
@@ -1279,7 +1279,7 @@ class LoopdyLinkClient:
                         return
                     if isinstance(inbound, InboundLinkTurn):
                         logger.warning(
-                            "Loopdy Link inbound user message failed (%s)",
+                            "bighelp Link inbound user message failed (%s)",
                             _connection_error_detail(callback_error),
                         )
                         try:
@@ -1292,7 +1292,7 @@ class LoopdyLinkClient:
                             await self._accept_inbound_frame(frame)
                         except Exception as delivery_error:
                             logger.warning(
-                                "Loopdy Link could not deliver the correlated request failure (%s)",
+                                "bighelp Link could not deliver the correlated request failure (%s)",
                                 _connection_error_detail(delivery_error),
                             )
                             await self._close_for_reconnect(
@@ -1301,7 +1301,7 @@ class LoopdyLinkClient:
                             return
                         continue
                     logger.warning(
-                        "Loopdy Link inbound callback failed; quarantining request (%s)",
+                        "bighelp Link inbound callback failed; quarantining request (%s)",
                         _connection_error_detail(callback_error),
                     )
                     await self._accept_inbound_frame(frame)
@@ -1324,7 +1324,7 @@ class LoopdyLinkClient:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "Loopdy Link inbound transport or protocol handling failed; reconnecting (%s)",
+                    "bighelp Link inbound transport or protocol handling failed; reconnecting (%s)",
                     _connection_error_detail(exc),
                 )
                 await self._close_for_reconnect(
@@ -1391,7 +1391,7 @@ class LoopdyLinkClient:
         # instead creates a permanent reconnect loop. Consume only that frame so
         # later requests remain usable; transport/protocol failures still escape.
         logger.warning(
-            "Loopdy Link quarantined inbound payload (%s)",
+            "bighelp Link quarantined inbound payload (%s)",
             _connection_error_detail(error),
         )
         await self._accept_inbound_frame(frame)
@@ -1419,7 +1419,7 @@ class LoopdyLinkClient:
         deadline = asyncio.get_running_loop().time() + 20.0
         while isinstance(self._transport_get("pending_frame"), dict):
             if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError("Loopdy Link is waiting for relay acknowledgement")
+                raise TimeoutError("bighelp Link is waiting for relay acknowledgement")
             await asyncio.sleep(0.05)
 
     def _accept_outbound(self, value: dict[str, Any]) -> None:
@@ -1429,12 +1429,12 @@ class LoopdyLinkClient:
             not isinstance(frame_id, str) or not isinstance(sequence, int)
             or isinstance(sequence, bool) or sequence < 1
         ):
-            raise ValueError("Loopdy Link acknowledgement is invalid")
+            raise ValueError("bighelp Link acknowledgement is invalid")
         pending = self._transport_get("pending_frame")
         if not isinstance(pending, dict):
             return
         if pending.get("id") != frame_id or pending.get("sequence") != sequence:
-            raise ValueError("Loopdy Link acknowledgement does not match pending state")
+            raise ValueError("bighelp Link acknowledgement does not match pending state")
         self._cancel_backpressure_retry()
         self._backpressured_frame_id = None
         self._transport_set("outbound_sequence", sequence)
@@ -1460,7 +1460,7 @@ class LoopdyLinkClient:
             or type(value.get("version")) is not int
             or value.get("version") != 1 or value.get("type") != "socket.ready"
         ):
-            raise ValueError("Loopdy Link socket readiness is invalid")
+            raise ValueError("bighelp Link socket readiness is invalid")
         if "capabilities" in value:
             capabilities = value["capabilities"]
             if (
@@ -1471,14 +1471,14 @@ class LoopdyLinkClient:
                     for item in capabilities
                 )
             ):
-                raise ValueError("Loopdy Link socket capabilities are invalid")
+                raise ValueError("bighelp Link socket capabilities are invalid")
             self.peer_capabilities = frozenset(value["capabilities"])
         else:
             self.peer_capabilities = frozenset()
         if value.get("deviceId") != self.config.device_id:
-            raise ValueError("Loopdy Link socket readiness device is invalid")
+            raise ValueError("bighelp Link socket readiness device is invalid")
         if value.get("authorizationEpoch") != self.config.authorization_epoch:
-            raise ValueError("Loopdy Link socket readiness epoch is invalid")
+            raise ValueError("bighelp Link socket readiness epoch is invalid")
         server_sequence = value.get("lastInboundSequence")
         server_ack = value.get("lastAcknowledgedSequence")
         server_frame_id = value.get("lastInboundFrameId")
@@ -1502,7 +1502,7 @@ class LoopdyLinkClient:
             )
             or (server_sequence == 0 and server_frame_id is not None)
         ):
-            raise ValueError("Loopdy Link socket readiness state is invalid")
+            raise ValueError("bighelp Link socket readiness state is invalid")
 
         self._cancel_backpressure_retry()
         state = self._transport_get("pending_frame")
@@ -1519,7 +1519,7 @@ class LoopdyLinkClient:
             pending.sender_device_id != self.config.device_id
             or pending.sender_epoch != self.config.authorization_epoch
         ):
-            raise ValueError("Loopdy Link pending frame owner is invalid")
+            raise ValueError("bighelp Link pending frame owner is invalid")
         if pending.sequence == server_sequence and pending.frame_id == server_frame_id:
             self._backpressured_frame_id = None
             self._transport_set("outbound_sequence", max(outbound, server_sequence))
@@ -1544,7 +1544,7 @@ class LoopdyLinkClient:
             self._transport_set("failed_pending_frame_id", None)
             future = self._accepted.pop(pending.frame_id, None)
             if future is not None and not future.done():
-                future.set_exception(TimeoutError("Loopdy Link delivery failed"))
+                future.set_exception(TimeoutError("bighelp Link delivery failed"))
             return
         if (
             pending.target_device_id is not None
@@ -1561,7 +1561,7 @@ class LoopdyLinkClient:
             if future is not None and not future.done():
                 future.set_exception(
                     ConnectionError(
-                        "Loopdy Link directed delivery was retired because the relay lacks directed frames"
+                        "bighelp Link directed delivery was retired because the relay lacks directed frames"
                     )
                 )
             return
@@ -1601,7 +1601,7 @@ class LoopdyLinkClient:
             or not 0 <= count <= 32
             or set(value) != {"version", "type", "updateId", "activityCount"}
         ):
-            raise ValueError("Loopdy Link Live Activity acknowledgement is invalid")
+            raise ValueError("bighelp Link Live Activity acknowledgement is invalid")
         future = self._live_activity_accepted.get(update_id)
         if future is not None and not future.done():
             future.set_result(None)
@@ -1713,7 +1713,7 @@ def _validated_origin(value: str) -> str:
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError("Loopdy Link base URL must be an HTTPS origin")
+        raise ValueError("bighelp Link base URL must be an HTTPS origin")
     return f"https://{parsed.netloc}"
 
 
@@ -1723,7 +1723,7 @@ def _opaque(value: str, minimum: int, maximum: int) -> str:
         or len(value) > maximum
         or any(not (character.isalnum() or character in "_-") for character in value)
     ):
-        raise ValueError("Loopdy Link coordinate is invalid")
+        raise ValueError("bighelp Link coordinate is invalid")
     return value
 
 
@@ -1788,7 +1788,7 @@ def _validated_live_activity_update(payload: dict[str, Any]) -> dict[str, Any]:
         and int(expires) - int(timestamp) <= 120
     )
     if not valid:
-        raise ValueError("Loopdy Link Live Activity update is invalid")
+        raise ValueError("bighelp Link Live Activity update is invalid")
     return dict(payload)
 
 

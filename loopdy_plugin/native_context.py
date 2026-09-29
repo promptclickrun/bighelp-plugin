@@ -15,7 +15,7 @@ from fastapi import Request
 from .link_contracts import PLUGIN_VERSION
 
 
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 RUNTIME_ID = uuid.uuid4().hex
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -81,7 +81,7 @@ def log_native_feature_startup(profile: str | None = None) -> None:
         return
     _startup_advertisement_logged = True
     logger.info(
-        "Loopdy request-dependent features excluded from the startup inventory: "
+        "bighelp request-dependent features excluded from the startup inventory: "
         "native-wiki-v1, native-wiki-disconnect-v1 (require a verified request "
         "principal, profile helpers, and available wiki operations).")
     skipped: list[tuple[str, str]] = []
@@ -89,25 +89,25 @@ def log_native_feature_startup(profile: str | None = None) -> None:
         serving_profile, advertised = _native_features(None, skipped=skipped)
     except NativeAPIError as exc:
         logger.warning(
-            "Loopdy native startup inventory unavailable: %s; "
+            "bighelp native startup inventory unavailable: %s; "
             "the context API cannot advertise features.", exc.code)
         return
     except Exception as exc:
         # Diagnostics must not turn a failing capability probe into a plugin
         # registration failure. The request path retains its original errors.
         logger.warning(
-            "Loopdy native startup inventory unavailable: capability probe "
+            "bighelp native startup inventory unavailable: capability probe "
             "failed (%s); no advertisement claimed.", type(exc).__name__)
         return
     if profile is not None and profile != serving_profile:
         logger.warning(
-            "Loopdy registration profile %r differs from verified serving "
+            "bighelp registration profile %r differs from verified serving "
             "profile %r; startup inventory uses the serving profile.",
             profile, serving_profile)
     for feature, reason in skipped:
-        logger.warning("Loopdy native feature %r NOT advertised: %s", feature, reason)
+        logger.warning("bighelp native feature %r NOT advertised: %s", feature, reason)
     logger.info(
-        "Loopdy native features advertised at startup: %s",
+        "bighelp native features advertised at startup: %s",
         ", ".join(advertised))
 
 

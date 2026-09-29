@@ -1,4 +1,4 @@
-"""Native agent-attachment resolution for Direct Loopdy clients.
+"""Native agent-attachment resolution for Direct bighelp clients.
 
 Agents deliver files with ``MEDIA:<path>`` directives. Stock Hermes only lets a
 phone read images below its media cache and files below ``terminal.cwd``, so a

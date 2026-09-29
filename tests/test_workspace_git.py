@@ -24,7 +24,7 @@ def git(root: Path, *args: str) -> str:
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, "GIT_AUTHOR_NAME": "Loopdy Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.test", "GIT_COMMITTER_NAME": "Loopdy Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.test"},
+        env={**os.environ, "GIT_AUTHOR_NAME": "bighelp Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.test", "GIT_COMMITTER_NAME": "bighelp Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.test"},
     )
     return result.stdout.strip()
 
@@ -200,7 +200,7 @@ class WorkspaceGitTests(unittest.TestCase):
         git(root, "init", "-b", "main")
         # Production intentionally ignores global Git config and author env.
         # Give each disposable repository its own synthetic commit identity.
-        git(root, "config", "user.name", "Loopdy Fixture")
+        git(root, "config", "user.name", "bighelp Fixture")
         git(root, "config", "user.email", "fixture@example.test")
         (root / "tracked.txt").write_text("one\n", encoding="utf-8")
         git(root, "add", "--", "tracked.txt")

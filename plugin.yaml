@@ -1,14 +1,15 @@
 manifest_version: 1
 name: loopdy
-label: Loopdy
+label: bighelp
 kind: platform
-version: "2.20.0"
+version: "3.0.0"
 license: Apache-2.0
 description: >
-  Native authenticated Hermes workspace controls, media voice, approvals, and
-  Generative UI. Hermes owns chat routing and session state. Optional notifications
-  and Live Activities can use cloud delivery independently of native chat.
-author: Loopdy contributors
+  The bighelp app's plugin for Hermes: native cards, Feed, Ideas and Goals,
+  iPhone tools, live voice, files, provider usage, secure input and optional
+  end-to-end encrypted notifications. Hermes keeps owning chats, tools and
+  approvals.
+author: bighelp contributors
 config_schema:
   direct:
     type: dict
@@ -19,7 +20,7 @@ config_schema:
       Tailscale address instead; no cloud pairing or public URL is required.
 optional_env:
   - LOOPDY_HOME_TARGET
-  - LOOPDY_WORKSPACE_GIT_CONFIG
+  - BIGHELP_WORKSPACE_GIT_CONFIG
   - LOOPDY_APNS_TEAM_ID
   - LOOPDY_APNS_KEY_ID
   - LOOPDY_APNS_TOPIC
@@ -31,7 +32,7 @@ optional_env:
   - LOOPDY_LINK_SIGNING_PRIVATE_KEY
   - LOOPDY_LINK_AGREEMENT_PRIVATE_KEY
   - LOOPDY_LINK_ACCOUNT_KEY
-  - LOOPDY_MARKETPLACE_TRUSTED_ED25519_KEYS
+  - BIGHELP_MARKETPLACE_TRUSTED_ED25519_KEYS
 provides_hooks:
   # Only baseline hooks belong here: older Hermes validates these names before use.
   # on_room_member_activity is registered when the runtime advertises it.

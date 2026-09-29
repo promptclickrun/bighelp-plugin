@@ -23,7 +23,7 @@ def git(root: Path, *args: str) -> None:
         cwd=root,
         check=True,
         capture_output=True,
-        env={**os.environ, "GIT_AUTHOR_NAME": "Loopdy Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.test", "GIT_COMMITTER_NAME": "Loopdy Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.test"},
+        env={**os.environ, "GIT_AUTHOR_NAME": "bighelp Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.test", "GIT_COMMITTER_NAME": "bighelp Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.test"},
     )
 
 

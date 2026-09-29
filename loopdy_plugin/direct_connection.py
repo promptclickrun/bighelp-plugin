@@ -1,4 +1,4 @@
-"""Direct Loopdy-to-Hermes identity and admission authority.
+"""Direct bighelp-to-Hermes identity and admission authority.
 
 One authority instance and its lock belong to one immutable runtime owner. The
 caller must not create competing instances for the same owner context. Link

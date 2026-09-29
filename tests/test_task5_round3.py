@@ -11,8 +11,8 @@ from loopdy_plugin.events import build_event
 from loopdy_plugin.presentation import shape_notification
 from loopdy_plugin.provider import DeliveryError, DeliveryReceipt, LiveActivityState
 from loopdy_plugin.relay_client import RelayOutcomeUnknown, RelayPushProvider
-from loopdy_plugin.service import LoopdyService, _session_reference
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.service import BighelpService, _session_reference
+from loopdy_plugin.store import BighelpStore
 
 
 CONFIG = {
@@ -24,7 +24,7 @@ CONFIG = {
 }
 
 
-def _seed_relay(store: LoopdyStore, *, device_id: str = "relay-phone") -> None:
+def _seed_relay(store: BighelpStore, *, device_id: str = "relay-phone") -> None:
     now = int(time.time())
     store.save_relay_config(CONFIG)
     store.register_relay_device(
@@ -49,7 +49,7 @@ def _seed_relay(store: LoopdyStore, *, device_id: str = "relay-phone") -> None:
 class Task5Round3Tests(unittest.TestCase):
     def test_operation_journal_rejects_different_request_for_same_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             first = {
                 "version": 1,
                 "device_id": "relay-phone",
@@ -97,7 +97,7 @@ class Task5Round3Tests(unittest.TestCase):
 
     def test_closing_service_rejects_provider_creation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            service = LoopdyService(LoopdyStore(Path(directory) / "loopdy.sqlite3"))
+            service = BighelpService(BighelpStore(Path(directory) / "loopdy.sqlite3"))
             service._closing = True
             with self.assertRaisesRegex(DeliveryError, "service_closing"):
                 service._provider("managed")
@@ -116,7 +116,7 @@ class Task5Round3Tests(unittest.TestCase):
 
 
     def test_startup_pending_existence_checks_are_bounded(self) -> None:
-        class BoundedStore(LoopdyStore):
+        class BoundedStore(BighelpStore):
             def __init__(self, path):
                 self.calls = []
                 super().__init__(path)
@@ -135,7 +135,7 @@ class Task5Round3Tests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             store = BoundedStore(Path(directory) / "loopdy.sqlite3")
-            service = LoopdyService(store)
+            service = BighelpService(store)
             self.assertEqual(
                 store.calls,
                 [("direct", 1)],
@@ -146,7 +146,7 @@ class Task5Round3Tests(unittest.TestCase):
 
     def test_operation_journal_rejects_nonfinite_request_before_persistence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = LoopdyStore(Path(directory) / "loopdy.sqlite3")
+            store = BighelpStore(Path(directory) / "loopdy.sqlite3")
             with self.assertRaisesRegex(ValueError, "canonical|finite"):
                 store.save_pending_relay_operation(
                     operation="device_revoke",

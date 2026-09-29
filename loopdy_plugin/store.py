@@ -1,4 +1,4 @@
-"""SQLite-backed Loopdy device, event, and approval state."""
+"""SQLite-backed bighelp device, event, and approval state."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .events import LoopdyEvent
+from .events import BighelpEvent
 from .loopdy_cards import canonical_json as canonical_card_json
 from .loopdy_cards import validate_card_input
 
@@ -49,7 +49,7 @@ class CardTemplateLimit(ValueError):
     """A bounded template catalog cannot represent all stored rows."""
 
 
-class LoopdyStore:
+class BighelpStore:
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self._init_lock = threading.Lock()
@@ -503,7 +503,7 @@ class LoopdyStore:
             device_id = ""
             group = _identifier(value.split(":", 1)[1], "group_id")
         else:
-            raise ValueError("Loopdy target must be all, device:<id>, or group:<id>")
+            raise ValueError("bighelp target must be all, device:<id>, or group:<id>")
         devices = [
             item
             for item in self.list_devices()
@@ -766,7 +766,7 @@ class LoopdyStore:
     def set_provider_mode(self, mode: str) -> None:
         requested = str(mode or "").strip().lower()
         if requested not in {"managed", "direct"}:
-            raise ValueError("Loopdy provider mode must be managed or direct")
+            raise ValueError("bighelp provider mode must be managed or direct")
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO metadata(key, value) VALUES ('provider_mode', ?) "
@@ -2801,7 +2801,7 @@ class LoopdyStore:
             or len(set(choices)) != len(choices)
             or not set(choices).issubset({"once", "session", "always", "deny"})
         ):
-            raise ValueError("Loopdy approval choices are invalid")
+            raise ValueError("bighelp approval choices are invalid")
         with self._connect() as connection:
             connection.execute(
                 """
@@ -2824,7 +2824,7 @@ class LoopdyStore:
     def respond_approval(self, approval_id: str, choice: str) -> bool:
         normalized = str(choice or "").strip().lower()
         if normalized not in {"once", "session", "always", "deny"}:
-            raise ValueError("Loopdy approval response is invalid")
+            raise ValueError("bighelp approval response is invalid")
         now = int(time.time())
         with self._connect() as connection:
             row = connection.execute(
@@ -3070,7 +3070,7 @@ class LoopdyStore:
             state = "pending" if row["state"] == "pending" else ("success" if row["state"] == "submitted" else "error")
             return _form_response(request, str(row["idempotency_key"] or ""), state, code)
 
-    def record_event(self, event: LoopdyEvent, *, target: str = "all") -> bool:
+    def record_event(self, event: BighelpEvent, *, target: str = "all") -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -4212,14 +4212,14 @@ def _provider_mode(value: Any) -> str:
     if normalized == "relay":
         return "managed"
     if normalized not in {"managed", "direct"}:
-        raise ValueError("Loopdy provider mode must be managed or direct")
+        raise ValueError("bighelp provider mode must be managed or direct")
     return normalized
 
 
 def _device_provider(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     if normalized not in {"managed", "direct", "relay", "legacy_relay"}:
-        raise ValueError("Loopdy device provider must be managed, direct, or relay")
+        raise ValueError("bighelp device provider must be managed, direct, or relay")
     return normalized
 
 

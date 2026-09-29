@@ -1,4 +1,4 @@
-"""Profile-derived, workspace-local agent templates for native Loopdy."""
+"""Profile-derived, workspace-local agent templates for native bighelp."""
 from __future__ import annotations
 
 import hashlib
@@ -63,7 +63,7 @@ class _TemplateRoute(APIRoute):
             try:
                 return await handler(request)
             except (NativeAPIError, AgentTemplateError) as error:
-                logger.warning("Loopdy agent-template request rejected: %s", error.code)
+                logger.warning("bighelp agent-template request rejected: %s", error.code)
                 return _error_response(error, request)
             except ClientDisconnect:
                 return _error_response(
@@ -73,7 +73,7 @@ class _TemplateRoute(APIRoute):
             except Exception:
                 # Profile configuration, skill readers, and filesystem exceptions can
                 # carry private paths or values. Never reflect or log their details.
-                logger.error("Loopdy agent-template request failed: template_service_unavailable")
+                logger.error("bighelp agent-template request failed: template_service_unavailable")
                 return _error_response(
                     AgentTemplateError(
                         503,

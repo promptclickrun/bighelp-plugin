@@ -90,7 +90,7 @@ class HostRuntimeDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_discovery_still_negotiates_diagnostics_and_legacy_stays_exact(self):
         from gateway.config import PlatformConfig
-        from loopdy_plugin.adapter import LoopdyAdapter
+        from loopdy_plugin.adapter import BighelpAdapter
         from loopdy_plugin.link_client import InboundLinkWorkspaceRequest
         if __package__:
             from .test_adapter import _LinkClient, _Service
@@ -102,7 +102,7 @@ class HostRuntimeDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                                                 adapter_factory=lambda config: None, check_fn=lambda: True))
         link = _LinkClient()
         with patch('loopdy_plugin.adapter.load_runtime_config', return_value=None):
-            adapter = LoopdyAdapter(PlatformConfig(enabled=True), service=_Service(),
+            adapter = BighelpAdapter(PlatformConfig(enabled=True), service=_Service(),
                                     link_client=link, workspace_controller=WorkspaceController(backend=self.backend))
         with patch.dict(sys.modules, {'hermes_cli.profiles': legacy_profiles()}):
             for device, payload in [('modern-fixture', {'linkProtocol': 1}), ('legacy-fixture', {})]:

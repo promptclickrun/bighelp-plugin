@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from loopdy_plugin.events import build_event
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.targets import validate_target
 
 
@@ -110,7 +110,7 @@ class DashboardApiTests(unittest.TestCase):
                 else:
                     os.environ["HERMES_HOME"] = previous_home
 
-            store = LoopdyStore(Path(directory) / "api.sqlite3")
+            store = BighelpStore(Path(directory) / "api.sqlite3")
             transient = build_event(
                 "job.failed",
                 correlation=("job", "transient-job", "turn-1"),
@@ -206,7 +206,7 @@ class DashboardApiTests(unittest.TestCase):
                 else:
                     os.environ["HERMES_HOME"] = previous_home
 
-            store = LoopdyStore(Path(directory) / "api.sqlite3")
+            store = BighelpStore(Path(directory) / "api.sqlite3")
             completion = build_event(
                 "job.completed",
                 correlation=("job", "job-123", "turn-456"),
@@ -290,7 +290,7 @@ class DashboardApiTests(unittest.TestCase):
                 else:
                     os.environ["HERMES_HOME"] = previous_home
 
-            store = LoopdyStore(Path(directory) / "api.sqlite3")
+            store = BighelpStore(Path(directory) / "api.sqlite3")
             module._service = _Service(store)
             app = FastAPI()
             app.include_router(module.router)

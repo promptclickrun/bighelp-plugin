@@ -88,7 +88,7 @@ def control(agent_id: str, kind: str, item: dict[str, Any]) -> dict[str, Any]:
         activation = "Saved toolset policy applies to new sessions on this platform, not existing chats. Enabling may run Hermes provider setup."
     # Never permit a remote UI to cut the channel which carries its receipt.
     if "loopdy" in item_id.lower().replace("_", "-").split("/") or item_id.lower().startswith("loopdy"):
-        reason = "Loopdy is locked because it carries this control connection. Manage it locally on the host."
+        reason = "bighelp is locked because it carries this control connection. Manage it locally on the host."
     if not supported and not reason:
         reason = "This Hermes version does not expose the supported enable/disable API. Update the host to manage this item."
     return {

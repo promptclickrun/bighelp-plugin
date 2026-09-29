@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loopdy_plugin.generative_ui import canonical_json, validate_submission_values
-from loopdy_plugin.store import LoopdyStore
+from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.tools import register
 
 
@@ -40,7 +40,7 @@ class GenerativeUiActionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.store = LoopdyStore(Path(self.temporary.name) / "loopdy.sqlite3")
+        self.store = BighelpStore(Path(self.temporary.name) / "loopdy.sqlite3")
         self.context = _Context()
         register(
             self.context,
@@ -153,7 +153,7 @@ class GenerativeUiActionTests(unittest.TestCase):
         )
         self.assertEqual(expired["code"], "request_expired")
 
-        self.store = LoopdyStore(Path(self.temporary.name) / "concurrent.sqlite3")
+        self.store = BighelpStore(Path(self.temporary.name) / "concurrent.sqlite3")
         self.context = _Context()
         register(self.context, store=self.store, profile="personal", now=lambda: NOW, request_id_factory=lambda: REQUEST_ID)
         self.render_form()

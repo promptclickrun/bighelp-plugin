@@ -41,7 +41,7 @@ def _provider_rejection(error: LiveProviderError) -> NativeAPIError:
     code = error.code if isinstance(error.code, str) and _FIXED_NAME.fullmatch(error.code) else "failed"
     stage = error.stage if isinstance(error.stage, str) and _FIXED_NAME.fullmatch(error.stage) else "unknown"
     status = error.http_status if type(error.http_status) is int else None
-    logger.warning("Loopdy native voice provider failed: code=%s stage=%s http_status=%s", code, stage, status)
+    logger.warning("bighelp native voice provider failed: code=%s stage=%s http_status=%s", code, stage, status)
     return NativeAPIError(409, "voice_provider_" + code, "The live voice provider could not complete this call.")
 
 

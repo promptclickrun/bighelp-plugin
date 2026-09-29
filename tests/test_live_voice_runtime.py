@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from cryptography.hazmat.primitives.asymmetric import ec
 from gateway.config import PlatformConfig
 from gateway.platform_registry import PlatformEntry, platform_registry
-from loopdy_plugin.adapter import LoopdyAdapter
+from loopdy_plugin.adapter import BighelpAdapter
 from loopdy_plugin.link_client import LinkRuntimeConfig
 from test_adapter import _LinkClient, _Service
 
@@ -43,7 +43,7 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
         gates={"First task":asyncio.Event(),"Second task":asyncio.Event()}
         seen=[]
         with tempfile.TemporaryDirectory() as directory:
-            adapter=LoopdyAdapter(PlatformConfig(enabled=True),service=_Service(),link_client=link,
+            adapter=BighelpAdapter(PlatformConfig(enabled=True),service=_Service(),link_client=link,
                 workspace_controller=Workspace(),live_voice_provider_factory=factory,live_voice_storage_root=Path(directory))
             async def handler(event):
                 seen.append((event.source.chat_id,event.text))
@@ -104,7 +104,7 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
         gates={"First task":asyncio.Event(),"Second task":asyncio.Event()}
         seen=[]
         with tempfile.TemporaryDirectory() as directory:
-            adapter=LoopdyAdapter(PlatformConfig(enabled=True),service=_Service(),link_client=link,
+            adapter=BighelpAdapter(PlatformConfig(enabled=True),service=_Service(),link_client=link,
                 workspace_controller=Workspace(),live_voice_provider_factory=factory,live_voice_storage_root=Path(directory))
             async def handler(event):
                 seen.append((event.source.chat_id,event.text))

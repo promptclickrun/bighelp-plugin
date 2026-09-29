@@ -479,10 +479,10 @@ class LiveVoiceRuntime:
         token = current_reply_route.set(route)
         try:
             message = UserMessage(message_id, job.session_id, job.owner.agent_id,
-                                  job.owner.device_id, "Loopdy", "Loopdy", text, int(time.time()), behavior=behavior)
+                                  job.owner.device_id, "bighelp", "bighelp", text, int(time.time()), behavior=behavior)
             sender_id = self.adapter.link_client.identity_registry.remember(
                 sender_device_id=job.owner.device_id, actor_id=job.owner.device_id,
-                actor_name="Loopdy", device_name="Loopdy")
+                actor_name="bighelp", device_name="bighelp")
             turn = InboundLinkTurn(message, sender_id, job.owner.device_id,
                                    sender_epoch=job.owner.device_epoch, target_host_id=job.owner.host_id,
                                    authority_origin=self._authority)

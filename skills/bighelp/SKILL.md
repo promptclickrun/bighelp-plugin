@@ -10,10 +10,10 @@ talks straight to Hermes, so chats, tools, approvals and scheduled jobs are
 Hermes' own. Chats started in the app have session source `bighelp`. It's a
 chat app, not a terminal and not Hermes Desktop.
 
-All the bighelp tools below are in the `loopdy` toolset (the plugin's original
-name). If a tool isn't in your current tool list, Hermes has hidden it behind
-progressive disclosure: find and run that exact tool with `tool_search`,
-`tool_describe` and `tool_call`. Never swap in a different tool.
+All the bighelp tools below are in the `bighelp` toolset. If a tool isn't in
+your current tool list, Hermes has hidden it behind progressive disclosure:
+find and run that exact tool with `tool_search`, `tool_describe` and
+`tool_call`. Never swap in a different tool.
 
 ## What the chat shows
 
@@ -85,7 +85,7 @@ they turned on notifications for this agent (Settings, Notifications). So:
    - To skip a run with nothing worth saying, reply `[SILENT]`.
    - For a card, start with one plain sentence, then the card's `display_markdown`.
 4. If the job needs bighelp tools (for example `bighelp_board` for a Feed
-   post), and you give it its own `enabled_toolsets`, include `loopdy`.
+   post), and you give it its own `enabled_toolsets`, include `bighelp`.
 5. Show the job with `bighelp_render_automation` if it helps: the user can pause,
    resume or run it from the chat.
 6. Name the job so the user recognises it. Then tell them in one sentence what
@@ -114,7 +114,7 @@ anything uncertain.
 
 - Color themes the app can import: `skill_view("loopdy:custom-theme-authoring")`.
 - Publishing a theme, card template or skill for review:
-  `skill_view("loopdy:loopdy-marketplace-publish")`.
+  `skill_view("loopdy:bighelp-marketplace-publish")`.
 
 ## Ground rules
 

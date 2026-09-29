@@ -1,4 +1,4 @@
-"""End-to-end cryptography for Loopdy Link.
+"""End-to-end cryptography for bighelp Link.
 
 Private keys and the account key stay on paired devices. The relay sees only
 public keys, hashes, and authenticated ciphertext.
@@ -88,7 +88,7 @@ class AccountCipher:
 
     def __init__(self, account_key: bytes):
         if len(account_key) != 32:
-            raise ValueError("Loopdy Link account key must be 32 bytes")
+            raise ValueError("bighelp Link account key must be 32 bytes")
         self._cipher = AESGCM(bytes(account_key))
 
     def seal(self, value: dict[str, Any]) -> str:
@@ -100,9 +100,9 @@ class AccountCipher:
                 sort_keys=True,
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
-            raise ValueError("Loopdy Link payload is not JSON serializable") from exc
+            raise ValueError("bighelp Link payload is not JSON serializable") from exc
         if len(plaintext) > _plaintext_limit(value):
-            raise ValueError("Loopdy Link payload is too large")
+            raise ValueError("bighelp Link payload is too large")
         nonce = os.urandom(12)
         return encode_base64url(
             nonce + self._cipher.encrypt(nonce, plaintext, self._AAD)
@@ -119,11 +119,11 @@ class AccountCipher:
             plaintext = self._cipher.decrypt(nonce, ciphertext, self._AAD)
             value = json.loads(plaintext)
         except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("Loopdy Link ciphertext is invalid") from exc
+            raise ValueError("bighelp Link ciphertext is invalid") from exc
         if not isinstance(value, dict):
-            raise ValueError("Loopdy Link plaintext must be an object")
+            raise ValueError("bighelp Link plaintext must be an object")
         if len(plaintext) > _plaintext_limit(value):
-            raise ValueError("Loopdy Link payload is too large")
+            raise ValueError("bighelp Link payload is too large")
         return value
 
 
@@ -159,14 +159,14 @@ def decrypt_host_grant(
         )
         value = json.loads(plaintext)
     except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Loopdy Link host grant is invalid") from exc
+        raise ValueError("bighelp Link host grant is invalid") from exc
     if (
         not isinstance(value, dict)
         or value.get("version") != 1
         or value.get("deviceId") != device_id
         or not isinstance(value.get("accountKey"), str)
     ):
-        raise ValueError("Loopdy Link host grant is invalid")
+        raise ValueError("bighelp Link host grant is invalid")
     account_key = decode_base64url(value["accountKey"], minimum=32, maximum=32)
     return HostGrant(account_key=account_key)
 

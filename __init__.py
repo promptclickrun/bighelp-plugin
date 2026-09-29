@@ -1,4 +1,4 @@
-"""Loopdy native Hermes plugin entry point."""
+"""bighelp native Hermes plugin entry point."""
 
 from .loopdy_plugin.registration import register
 

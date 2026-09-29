@@ -1,4 +1,4 @@
-"""Request-bound Loopdy approval transport."""
+"""Request-bound bighelp approval transport."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ import time
 from typing import Any
 
 from .events import build_event
-from .store import LoopdyStore
+from .store import BighelpStore
 
 
-class LoopdyApprovalTransport:
+class BighelpApprovalTransport:
     def __init__(
         self,
-        store: LoopdyStore,
+        store: BighelpStore,
         service: Any,
         *,
         target: str = "all",

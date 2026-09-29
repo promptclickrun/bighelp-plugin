@@ -382,7 +382,7 @@ class LinkContractTests(unittest.TestCase):
             agent_name="Gordie",
             session_id="",
             title="Morning briefing",
-            body="Open Loopdy to view the briefing.",
+            body="Open bighelp to view the briefing.",
             card=card,
             sent_at=1_788_000_011,
         )
@@ -396,7 +396,7 @@ class LinkContractTests(unittest.TestCase):
                 agent_name="Gordie",
                 session_id="",
                 title="Unsafe",
-                body="Open Loopdy.",
+                body="Open bighelp.",
                 card={**card, "url": "https://unsafe.example"},
                 sent_at=1_788_000_011,
             )

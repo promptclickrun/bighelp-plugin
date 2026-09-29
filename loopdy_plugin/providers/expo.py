@@ -56,7 +56,7 @@ class ExpoPushProvider:
             payload["badge"] = 1
         if message.event_type in _REVIEW_EVENTS:
             # Managed delivery keeps the established category for installed-client compatibility.
-            # Current Loopdy builds register this alias with the authenticated Review action.
+            # Current bighelp builds register this alias with the authenticated Review action.
             payload["categoryId"] = "LOOPDY_APPROVAL"
         result = self._request_json(_SEND_URL, payload)
         ticket = result.get("data")

@@ -21,7 +21,7 @@ class MarketplacePublishSkillTests(unittest.TestCase):
         manifest = PluginManifest(
             name="loopdy",
             version="2.3.0",
-            description="Loopdy plugin test",
+            description="bighelp plugin test",
             source="user",
             portable=True,
         )
@@ -36,16 +36,16 @@ class MarketplacePublishSkillTests(unittest.TestCase):
         with mock.patch.object(plugins_module, "_plugin_manager", manager):
             register_marketplace_publish_skill(context)
             registered = manager.find_plugin_skill(
-                "loopdy:loopdy-marketplace-publish"
+                "loopdy:bighelp-marketplace-publish"
             )
             self.assertEqual(
                 registered,
                 PLUGIN_ROOT
                 / "skills"
-                / "loopdy-marketplace-publish"
+                / "bighelp-marketplace-publish"
                 / "SKILL.md",
             )
-            viewed = json.loads(skill_view("loopdy:loopdy-marketplace-publish"))
+            viewed = json.loads(skill_view("loopdy:bighelp-marketplace-publish"))
 
         self.assertTrue(viewed["success"])
         self.assertIn("validateOnly: true", viewed["content"])
@@ -57,7 +57,7 @@ class MarketplacePublishSkillTests(unittest.TestCase):
             else set()
         )
         self.assertEqual(after, before)
-        self.assertFalse((flat_skills / "loopdy-marketplace-publish").exists())
+        self.assertFalse((flat_skills / "bighelp-marketplace-publish").exists())
 
 
 if __name__ == "__main__":

@@ -9,9 +9,9 @@ Use a bighelp renderer when the user asks for a card, dashboard-like result, met
 
 ## bighelp Cards
 
-Use the generic `bighelp_render_card` tool, documented in `references/loopdy-cards.md`, for new static compositions that do not match a typed renderer. These are called **bighelp Cards**. Use typed v2 for existing polished use cases until generic rendering reaches visual parity. In this release, `data_sources` must be empty and all displayed values must be embedded in the card payload; live device refresh is not available. Cards allow no downloaded code, HTML, WebViews, authenticated requests, or secrets.
+Use the generic `bighelp_render_card` tool, documented in `references/bighelp-cards.md`, for new static compositions that do not match a typed renderer. These are called **bighelp Cards**. Use typed v2 for existing polished use cases until generic rendering reaches visual parity. In this release, `data_sources` must be empty and all displayed values must be embedded in the card payload; live device refresh is not available. Cards allow no downloaded code, HTML, WebViews, authenticated requests, or secrets.
 
-The renderers are first-class model tools in the `loopdy` toolset. If the exact
+The renderers are first-class model tools in the `bighelp` toolset. If the exact
 renderer is visible in the current tool list, call it directly. If Hermes has
 progressively disclosed plugin tools and that renderer is absent, use the
 official `tool_search`, `tool_describe`, and `tool_call` bridge to find and
@@ -84,7 +84,7 @@ Use v2 for typed current-data and interactive cards:
 - `bighelp_render_automation`: one real scheduled job with Pause, Resume or Run
   buttons that act on it directly. Use the job's actual ID, profile and state.
 
-V2 calls use `schema: "loopdy.generative_ui"`, `version: 2`, the matching
+V2 calls use `schema: "bighelp.generative_ui"`, `version: 2`, the matching
 component, and the exact strict tool schema. Current-data cards require source
 timestamps and freshness provenance. The renderer derives `age_seconds` from
 those timestamp facts, so it may be omitted (or supplied as stale model

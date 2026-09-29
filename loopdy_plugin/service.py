@@ -1,4 +1,4 @@
-"""Application service for local Loopdy devices and push providers."""
+"""Application service for local bighelp devices and push providers."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .events import LoopdyEvent
+from .events import BighelpEvent
 from .link_contracts import ExpiredHostRelayEnrollment, RelayReady
 from .presentation import shape_notification
 from .provider import DeliveryError, LiveActivityState, PushProvider
@@ -34,11 +34,11 @@ from .relay_client import (
     normalize_relay_operation,
     validate_registration_response,
 )
-from .store import LoopdyStore
+from .store import BighelpStore
 from .targets import validate_target
 
 
-logger = logging.getLogger("hermes.plugins.loopdy")
+logger = logging.getLogger("hermes.plugins.bighelp")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _RELAY_REGISTRATION_SCOPE_FIELDS = (
     "version",
@@ -55,7 +55,7 @@ _RELAY_REGISTRATION_SCOPE_FIELDS = (
 
 
 class _ProviderLease:
-    def __init__(self, service: "LoopdyService", provider: Any) -> None:
+    def __init__(self, service: "BighelpService", provider: Any) -> None:
         self._service = service
         self.provider = provider
         self._released = False
@@ -72,10 +72,10 @@ class _ProviderLease:
             self._service._release_provider(self.provider)
 
 
-class LoopdyService:
+class BighelpService:
     def __init__(
         self,
-        store: LoopdyStore,
+        store: BighelpStore,
         *,
         providers: Mapping[str, Any] | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
@@ -87,7 +87,7 @@ class LoopdyService:
     ):
         self.store = store
         self.store.retire_legacy_relay()
-        self.managed_alert_owner: Callable[[LoopdyEvent, str], bool] | None = None
+        self.managed_alert_owner: Callable[[BighelpEvent, str], bool] | None = None
         self._providers = {
             key: value for key, value in dict(providers or {}).items()
             if key in {"managed", "direct"}
@@ -97,7 +97,7 @@ class LoopdyService:
         self._now = now_fn
         self._timestamp = timestamp_fn
         self._max_attempts = min(5, max(1, int(max_attempts)))
-        self._queue: queue.Queue[tuple[LoopdyEvent, str] | None] = queue.Queue(
+        self._queue: queue.Queue[tuple[BighelpEvent, str] | None] = queue.Queue(
             maxsize=min(4096, max(1, int(queue_size)))
         )
         self._live_activity_queue: queue.Queue[dict[str, Any] | None] = queue.Queue(
@@ -139,7 +139,7 @@ class LoopdyService:
         if not configured:
             detail = configuration_error
         elif compatible_devices == 0:
-            detail = f"No {mode} Loopdy devices are registered"
+            detail = f"No {mode} bighelp devices are registered"
         else:
             detail = f"{mode.capitalize()} provider ready"
         return {
@@ -164,7 +164,7 @@ class LoopdyService:
         self._assert_open()
         normalized = str(mode or "").strip().lower()
         if normalized not in {"managed", "direct"}:
-            raise ValueError("Loopdy provider mode must be managed or direct")
+            raise ValueError("bighelp provider mode must be managed or direct")
         retire: Any | None = None
         with self._provider_lock:
             if normalized == "direct":
@@ -208,7 +208,7 @@ class LoopdyService:
         self._ensure_worker()
         for row in self.store.queued_relay_events(limit=100):
             try:
-                event = LoopdyEvent(
+                event = BighelpEvent(
                     event_id=str(row["event_id"]),
                     type=str(row["type"]),
                     profile=str(row.get("profile") or "default"),
@@ -222,7 +222,7 @@ class LoopdyService:
                 self._queue.put_nowait((event, str(row.get("target") or "all")))
             except (queue.Full, ValueError, TypeError) as error:
                 logger.warning(
-                    "Loopdy queued relay event could not be resumed: %s",
+                    "bighelp queued relay event could not be resumed: %s",
                     _safe_error(error),
                 )
 
@@ -617,7 +617,7 @@ class LoopdyService:
                     request_digest=str(pending.get("request_digest") or ""),
                     relay_generation=int(pending.get("relay_generation") or 0),
                 )
-                logger.warning("Loopdy relay operation recovery failed: %s", _safe_error(error))
+                logger.warning("bighelp relay operation recovery failed: %s", _safe_error(error))
         return recovered
 
     def recover_terminal_relay_registrations(self) -> dict[str, int]:
@@ -688,7 +688,7 @@ class LoopdyService:
                 self._live_activity_queue.put_nowait(dict(update))
                 return True
             except queue.Full:
-                logger.warning("Loopdy Live Activity update queue is full")
+                logger.warning("bighelp Live Activity update queue is full")
                 return False
 
     def update_live_activities(
@@ -856,7 +856,7 @@ class LoopdyService:
                     except Exception as error:
                         failed += 1
                         logger.warning(
-                            "Loopdy Live Activity update failed for %s: %s",
+                            "bighelp Live Activity update failed for %s: %s",
                             activity_id,
                             _safe_error(error),
                         )
@@ -939,7 +939,7 @@ class LoopdyService:
             except Exception as error:
                 failed += 1
                 logger.warning(
-                    "Loopdy Live Activity serialization failed for %s: %s",
+                    "bighelp Live Activity serialization failed for %s: %s",
                     activity_id,
                     _safe_error(error),
                 )
@@ -951,7 +951,7 @@ class LoopdyService:
         preferences: Mapping[str, Any],
     ) -> dict[str, Any]:
         if not self.store.update_preferences(device_id, preferences):
-            raise ValueError("Unknown or revoked Loopdy device")
+            raise ValueError("Unknown or revoked bighelp device")
         return {"updated": True, "device_id": device_id}
 
     def revoke_device(self, device_id: str) -> dict[str, Any]:
@@ -985,7 +985,7 @@ class LoopdyService:
             )
             return {"revoked": True, "device_id": device_id, "relay": response}
         if not self.store.revoke_device(device_id):
-            raise ValueError("Unknown or already revoked Loopdy device")
+            raise ValueError("Unknown or already revoked bighelp device")
         return {"revoked": True, "device_id": device_id}
 
     def test_notification(self, target: str = "all", *, profile: str = "default") -> dict[str, Any]:
@@ -995,19 +995,19 @@ class LoopdyService:
             build_event(
                 "attention.required",
                 profile=profile,
-                detail={"message": "Loopdy test notification"},
+                detail={"message": "bighelp test notification"},
             ),
             target=target,
         )
 
-    def managed_notification_policy(self, event: LoopdyEvent, device_id: str) -> dict[str, Any]:
+    def managed_notification_policy(self, event: BighelpEvent, device_id: str) -> dict[str, Any]:
         """Reuse existing explicit device preferences without provisioning a legacy sender."""
         device = self.store.get_device(device_id)
         preferences = (device or {}).get("preferences") or {}
         return {"suppression": _suppression_reason(event, preferences, self._now()),
                 "sound": preferences.get("priority_sound") is not False}
 
-    def enqueue(self, event: LoopdyEvent, *, target: str) -> bool:
+    def enqueue(self, event: BighelpEvent, *, target: str) -> bool:
         if self._closed or self._closing:
             return False
         self.store.record_event(event, target=target)
@@ -1016,11 +1016,11 @@ class LoopdyService:
             self._queue.put_nowait((event, target))
             return True
         except queue.Full:
-            self.store.mark_event_failed(event.event_id, "Loopdy delivery queue is full")
-            logger.warning("Loopdy delivery queue is full; dropped %s", event.event_id)
+            self.store.mark_event_failed(event.event_id, "bighelp delivery queue is full")
+            logger.warning("bighelp delivery queue is full; dropped %s", event.event_id)
             return False
 
-    def deliver(self, event: LoopdyEvent, *, target: str) -> dict[str, Any]:
+    def deliver(self, event: BighelpEvent, *, target: str) -> dict[str, Any]:
         self._assert_open()
         verdict = validate_target(target)
         if verdict is not True:
@@ -1028,7 +1028,7 @@ class LoopdyService:
         self.store.record_event(event, target=target)
         devices = self.store.resolve_devices(target)
         if not devices:
-            message = f"No compatible Loopdy devices match {target}"
+            message = f"No compatible bighelp devices match {target}"
             self.store.mark_event_failed(event.event_id, message)
             return {"error": message, "event_id": event.event_id}
 
@@ -1354,7 +1354,7 @@ class LoopdyService:
                 if isinstance(error, DeliveryError) and error.invalid_token:
                     self.store.revoke_device(device["device_id"])
                 logger.warning(
-                    "Loopdy %s delivery failed for event %s device %s: %s",
+                    "bighelp %s delivery failed for event %s device %s: %s",
                     mode,
                     event.event_id,
                     device["device_id"],
@@ -1408,7 +1408,7 @@ class LoopdyService:
                 delivery_ids[0] if delivery_ids else event.event_id,
             )
         elif not success and queued == 0:
-            self.store.mark_event_failed(event.event_id, "All Loopdy device deliveries failed")
+            self.store.mark_event_failed(event.event_id, "All bighelp device deliveries failed")
         result: dict[str, Any] = {
             "success": success,
             "event_id": event.event_id,
@@ -1419,7 +1419,7 @@ class LoopdyService:
             "queued": queued,
         }
         if not success:
-            result["error"] = "All Loopdy device deliveries failed"
+            result["error"] = "All bighelp device deliveries failed"
         return result
 
     def reconcile_receipts(self) -> dict[str, int]:
@@ -1433,7 +1433,7 @@ class LoopdyService:
                 pending = self.store.pending_provider_receipts(mode, limit=1000)
             except Exception as error:
                 logger.warning(
-                    "Loopdy %s receipt ledger read failed: %s", mode, _safe_error(error)
+                    "bighelp %s receipt ledger read failed: %s", mode, _safe_error(error)
                 )
                 continue
             if not pending:
@@ -1446,7 +1446,7 @@ class LoopdyService:
                 with lease:
                     results = receipts_fn([item["receipt_id"] for item in pending])
             except Exception as error:
-                logger.warning("Loopdy %s receipt reconciliation failed: %s", mode, _safe_error(error))
+                logger.warning("bighelp %s receipt reconciliation failed: %s", mode, _safe_error(error))
                 continue
             by_id = {item["receipt_id"]: item for item in pending}
             for receipt_id, receipt in results.items():
@@ -1517,11 +1517,11 @@ class LoopdyService:
             if provider is not None:
                 return provider
             if mode == "managed":
-                raise ValueError("Complete BuzzKit notification setup in Loopdy before sending alerts")
+                raise ValueError("Complete BuzzKit notification setup in bighelp before sending alerts")
             elif mode == "direct":
                 provider = ApnsPushProvider(load_apns_config(self.store.load_apns_config() or {}))
             else:
-                raise ValueError("Loopdy provider mode must be managed or direct")
+                raise ValueError("bighelp provider mode must be managed or direct")
             self._reset_provider_bookkeeping_locked(provider)
             self._providers[mode] = provider
             return provider
@@ -1962,7 +1962,7 @@ class LoopdyService:
                     last_recovery_scan = now
                 except Exception as error:
                     if not self._closing:
-                        logger.warning("Loopdy background reconciliation failed: %s", _safe_error(error))
+                        logger.warning("bighelp background reconciliation failed: %s", _safe_error(error))
                 continue
             try:
                 if item is None:
@@ -1976,7 +1976,7 @@ class LoopdyService:
                     # are persisted by deliver where possible; this catch is
                     # the final containment boundary for worker continuity.
                     logger.warning(
-                        "Loopdy queued delivery failed: %s", _safe_error(error)
+                        "bighelp queued delivery failed: %s", _safe_error(error)
                     )
             finally:
                 self._queue.task_done()
@@ -2062,7 +2062,7 @@ class LoopdyService:
                             )
             except Exception as error:
                 logger.warning(
-                    "Loopdy deferred Live Activity serialization failed for %s: %s",
+                    "bighelp deferred Live Activity serialization failed for %s: %s",
                     activity_id,
                     _safe_error(error),
                 )
@@ -2185,7 +2185,7 @@ class LoopdyService:
                         else:
                             self._clear_relay_pending(activity, item)
                             logger.warning(
-                                "Loopdy relay Live Activity update failed for %s: %s",
+                                "bighelp relay Live Activity update failed for %s: %s",
                                 activity_id,
                                 _safe_error(error),
                             )
@@ -2193,7 +2193,7 @@ class LoopdyService:
                 if isinstance(error, ValueError):
                     self._clear_relay_pending(item, item)
                 logger.warning(
-                    "Loopdy deferred relay Live Activity serialization failed for %s: %s",
+                    "bighelp deferred relay Live Activity serialization failed for %s: %s",
                     activity_id,
                     _safe_error(error),
                 )
@@ -2214,7 +2214,7 @@ class LoopdyService:
                     self.update_live_activities(**item)
                 except Exception as error:
                     logger.warning(
-                        "Loopdy Live Activity update skipped: %s",
+                        "bighelp Live Activity update skipped: %s",
                         _safe_error(error),
                     )
             finally:
@@ -2226,7 +2226,7 @@ def _safe_error(error: Exception) -> str:
         return f"Push provider error {error.status}: {error.code}"
     if isinstance(error, ValueError):
         return str(error)[:500]
-    return f"Loopdy delivery failed: {type(error).__name__}"
+    return f"bighelp delivery failed: {type(error).__name__}"
 
 
 def _relay_operation_name(value: Any) -> str:
@@ -2299,7 +2299,7 @@ def _session_reference(value: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def _suppression_reason(event: LoopdyEvent, preferences: Mapping[str, Any], now: Any) -> str:
+def _suppression_reason(event: BighelpEvent, preferences: Mapping[str, Any], now: Any) -> str:
     if preferences.get("notifications_enabled") is False:
         return "notifications_disabled"
     enabled_types = preferences.get("enabled_types")
@@ -2368,14 +2368,14 @@ def _validate_endpoint(provider: str, endpoint_id: str) -> None:
         if len(value) < 64 or len(value) > 200 or any(character not in "0123456789abcdefABCDEF" for character in value):
             raise ValueError("Direct devices require a native APNs token")
     else:
-        raise ValueError("Loopdy device provider must be managed or direct")
+        raise ValueError("bighelp device provider must be managed or direct")
 
 
 def _validate_device_routing(device_id: str, groups: list[str]) -> None:
     verdict = validate_target(f"device:{device_id}")
     if verdict is not True:
-        raise ValueError(f"Invalid Loopdy device ID: {verdict}")
+        raise ValueError(f"Invalid bighelp device ID: {verdict}")
     for group in groups:
         verdict = validate_target(f"group:{group}")
         if verdict is not True:
-            raise ValueError(f"Invalid Loopdy group ID: {verdict}")
+            raise ValueError(f"Invalid bighelp group ID: {verdict}")

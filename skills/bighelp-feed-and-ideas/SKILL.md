@@ -37,7 +37,7 @@ The bighelp app shows three boards next to the chat. You write to them with the
    > `source: "Evening AI news"`. Do not post duplicates of items already in the feed
    > (check with `action: list`, `kind: feed`).
 3. Name the job after what the user will recognise ("Evening AI news").
-4. If you give the job its own `enabled_toolsets`, include `loopdy` so the run can
+4. If you give the job its own `enabled_toolsets`, include `bighelp` so the run can
    call `bighelp_board`.
 
 ## Writing good items

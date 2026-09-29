@@ -17,8 +17,8 @@ class PluginUpdateCLITests(unittest.TestCase):
             try:
                 args = parser.parse_args(["update", "--restart"])
             except SystemExit:
-                self.fail("Loopdy CLI must expose update --restart")
-        self.assertEqual(args.loopdy_action, "update")
+                self.fail("bighelp CLI must expose update --restart")
+        self.assertEqual(args.bighelp_action, "update")
         self.assertTrue(args.restart)
 
     def test_update_status_is_read_only_command(self):
@@ -28,8 +28,8 @@ class PluginUpdateCLITests(unittest.TestCase):
             try:
                 args = parser.parse_args(["update-status"])
             except SystemExit:
-                self.fail("Loopdy CLI must expose update-status")
-        self.assertEqual(args.loopdy_action, "update-status")
+                self.fail("bighelp CLI must expose update-status")
+        self.assertEqual(args.bighelp_action, "update-status")
 
 
 class PluginUpdateJournalTests(unittest.TestCase):

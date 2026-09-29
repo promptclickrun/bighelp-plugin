@@ -1,4 +1,4 @@
-"""Exact-coordinate generated media projection for Loopdy Link.
+"""Exact-coordinate generated media projection for bighelp Link.
 
 The client never supplies a path or URL. Resolution starts from a real stored
 Hermes tool result, then reuses the existing platform delivery policy and

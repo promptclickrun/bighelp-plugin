@@ -28,6 +28,7 @@ class _Context:
         self.approval = None
         self.hooks = {}
         self.cli = None
+        self.clis = {}
         self.unload = None
         self.tools = {}
         self.skills = {}
@@ -65,7 +66,8 @@ class _Context:
         self.hooks[name] = dispatch
 
     def register_cli_command(self, **kwargs):
-        self.cli = kwargs
+        self.cli = self.cli or kwargs
+        self.clis[kwargs["name"]] = kwargs
 
     def on_unload(self, callback):
         previous = self.unload
@@ -275,7 +277,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertIsNotNone(result)
         prompt = result["context"]
         self.assertIn("embedded values and an empty data_sources array", prompt)
-        self.assertIn("Live Loopdy Card data refresh is unavailable", prompt)
+        self.assertIn("Live bighelp Card data refresh is unavailable", prompt)
         self.assertNotIn("public-GET live-data", prompt)
 
     def test_link_chat_hooks_publish_safe_exact_activity_lifecycle(self) -> None:
@@ -723,9 +725,9 @@ class RegistrationTests(unittest.TestCase):
         )
         unpair = parser.parse_args(["link", "unpair", "--yes"])
         status = parser.parse_args(["link", "status"])
-        self.assertEqual(pair.loopdy_link_action, "pair")
-        self.assertEqual(unpair.loopdy_link_action, "unpair")
-        self.assertEqual(status.loopdy_link_action, "status")
+        self.assertEqual(pair.bighelp_link_action, "pair")
+        self.assertEqual(unpair.bighelp_link_action, "unpair")
+        self.assertEqual(status.bighelp_link_action, "status")
 
     def test_retired_link_pairing_never_pairs_or_activates_gateway(self) -> None:
         from loopdy_plugin import registration
@@ -749,7 +751,7 @@ class RegistrationTests(unittest.TestCase):
         ):
             _handle_link_cli(
                 SimpleNamespace(
-                    loopdy_link_action="pair",
+                    bighelp_link_action="pair",
                     timeout=600,
                     base_url="https://link.loopdy.example",
                 ),
@@ -790,7 +792,7 @@ class RegistrationTests(unittest.TestCase):
             contextlib.redirect_stdout(output),
         ):
             _handle_link_cli(
-                SimpleNamespace(loopdy_link_action="status"),
+                SimpleNamespace(bighelp_link_action="status"),
                 identity_state=state,
             )
 
@@ -829,7 +831,7 @@ class RegistrationTests(unittest.TestCase):
             contextlib.redirect_stdout(output),
         ):
             _handle_link_cli(
-                SimpleNamespace(loopdy_link_action="status"),
+                SimpleNamespace(bighelp_link_action="status"),
                 identity_state=state,
             )
 
@@ -866,7 +868,7 @@ class RegistrationTests(unittest.TestCase):
             contextlib.redirect_stdout(output),
         ):
             _handle_link_cli(
-                SimpleNamespace(loopdy_link_action="status"),
+                SimpleNamespace(bighelp_link_action="status"),
                 identity_state=state,
             )
 
@@ -931,7 +933,12 @@ class RegistrationTests(unittest.TestCase):
             ("device:phone", None),
         )
         self.assertEqual(context.approval[0], "loopdy")
-        self.assertEqual(context.cli["name"], "loopdy")
+        self.assertEqual(context.cli["name"], "bighelp")
+        # `hermes loopdy …` from before 3.0.0 still runs the same handler, unlisted.
+        import argparse
+        self.assertEqual(set(context.clis), {"bighelp", "loopdy"})
+        self.assertIs(context.clis["loopdy"]["help"], argparse.SUPPRESS)
+        self.assertIs(context.clis["loopdy"]["handler_fn"], context.clis["bighelp"]["handler_fn"])
         from hermes_cli.plugins import VALID_HOOKS
         self.assertEqual(
             set(context.hooks),
@@ -952,10 +959,10 @@ class RegistrationTests(unittest.TestCase):
                 "kanban_task_blocked",
             } | ({"on_room_member_activity"} if "on_room_member_activity" in VALID_HOOKS else set()),
         )
-        self.assertEqual(set(context.skills), {"loopdy-marketplace-publish", "bighelp-feed-and-ideas", "bighelp",
+        self.assertEqual(set(context.skills), {"bighelp-marketplace-publish", "bighelp-feed-and-ideas", "bighelp",
                                                "generative-ui", "custom-theme-authoring"})
         self.assertTrue(context.skills["bighelp-feed-and-ideas"]["path"].is_file())
-        self.assertTrue(context.skills["loopdy-marketplace-publish"]["path"].is_file())
+        self.assertTrue(context.skills["bighelp-marketplace-publish"]["path"].is_file())
 
         self.assertIsNone(
             context.hooks["pre_llm_call"](

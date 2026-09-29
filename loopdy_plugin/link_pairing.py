@@ -1,4 +1,4 @@
-"""Interactive, proof-of-possession pairing for a Loopdy Link Hermes host."""
+"""Interactive, proof-of-possession pairing for a bighelp Link Hermes host."""
 
 from __future__ import annotations
 
@@ -83,9 +83,9 @@ def key_fingerprint(commitment: str) -> str:
     try:
         digest = base64.urlsafe_b64decode(commitment + padding)
     except Exception as exc:
-        raise ValueError("Loopdy Link host key commitment is invalid") from exc
+        raise ValueError("bighelp Link host key commitment is invalid") from exc
     if len(digest) != 32:
-        raise ValueError("Loopdy Link host key commitment is invalid")
+        raise ValueError("bighelp Link host key commitment is invalid")
     return digest[:8].hex().upper()
 
 
@@ -145,7 +145,7 @@ def pair_host(
         },
     )
     if response.status_code != 201:
-        raise ValueError(_public_error(response, "Loopdy Link pairing could not start"))
+        raise ValueError(_public_error(response, "bighelp Link pairing could not start"))
     challenge = _object_response(response)
     flow_id = _required_text(challenge, "flowId")
     code = _required_text(challenge, "code")
@@ -198,10 +198,10 @@ def pair_host(
             time.sleep(2)
             continue
         if claimed.status_code != 200:
-            raise ValueError(_public_error(claimed, "Loopdy Link pairing failed"))
+            raise ValueError(_public_error(claimed, "bighelp Link pairing failed"))
         grant_value = _object_response(claimed)
         if grant_value.get("deviceId") != device_id:
-            raise ValueError("Loopdy Link pairing returned the wrong host")
+            raise ValueError("bighelp Link pairing returned the wrong host")
         grant = decrypt_host_grant(
             _required_text(grant_value, "grantEnvelope"),
             flow_id=flow_id,
@@ -210,7 +210,7 @@ def pair_host(
         )
         epoch = int(grant_value.get("authorizationEpoch") or 0)
         if epoch < 1:
-            raise ValueError("Loopdy Link pairing returned an invalid authorization epoch")
+            raise ValueError("bighelp Link pairing returned an invalid authorization epoch")
         values = {
             "LOOPDY_LINK_BASE_URL": origin,
             "LOOPDY_LINK_DEVICE_ID": device_id,
@@ -239,7 +239,7 @@ def pair_host(
             "base_url": origin,
             "authorization_epoch": epoch,
         }
-    raise TimeoutError("Loopdy Link pairing approval expired")
+    raise TimeoutError("bighelp Link pairing approval expired")
 
 
 def _post(url: str, body: dict[str, Any]) -> httpx.Response:
@@ -263,21 +263,21 @@ def _validated_origin(value: str) -> str:
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError("Loopdy Link base URL must be an HTTPS origin")
+        raise ValueError("bighelp Link base URL must be an HTTPS origin")
     return f"https://{parsed.netloc}"
 
 
 def _object_response(response: Any) -> dict[str, Any]:
     value = response.json()
     if not isinstance(value, dict) or value.get("version") != 1:
-        raise ValueError("Loopdy Link returned an invalid response")
+        raise ValueError("bighelp Link returned an invalid response")
     return value
 
 
 def _required_text(value: dict[str, Any], key: str) -> str:
     field = value.get(key)
     if not isinstance(field, str) or not field:
-        raise ValueError("Loopdy Link returned an invalid response")
+        raise ValueError("bighelp Link returned an invalid response")
     return field
 
 
