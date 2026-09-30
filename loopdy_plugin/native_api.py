@@ -459,6 +459,36 @@ async def board_identity(request: Request) -> Response:
     return await _board_request(request, _Body, "identity", _BOARD_LIST_BYTES)
 
 
+class _Speaking(_Body):
+    sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    personId: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    name: str = Field(default="", max_length=400)
+
+
+def _speaking(agent_id: str, body: _Speaking) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from .people import clean_name, store_for_profile
+    if not profile_exists(agent_id):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    store_for_profile(agent_id).note(body.sessionId, body.personId, body.name)
+    return {"agentId": agent_id, "sessionId": body.sessionId, "name": clean_name(body.name)}
+
+
+@router.post("/people/speaking")
+async def people_speaking(request: Request) -> Response:
+    """The bighelp app is about to send a message in this chat for this person."""
+    from .people import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "people_unavailable", "Names aren't available on this host.")
+    body = await _body(request, _Speaking)
+    value = await run_in_threadpool(_speaking, body.agentId, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
 class _Usage(_Body):
     refresh: StrictBool = False
 

@@ -221,6 +221,9 @@ def register(
         register_agent_board(ctx)
     except (OSError, ImportError, sqlite3.Error):
         logger.warning("bighelp agent board unavailable")
+    # Who is writing in each bighelp chat, as the app reports it.
+    from .people import register as register_people
+    register_people(ctx)
     register_legacy_toolset_alias()
 
     ctx.register_platform(

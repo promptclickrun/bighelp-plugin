@@ -62,6 +62,7 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
 | Apps tab | Files the agent recently made or changed, and the pictures and videos it delivered. | [Artifacts and media](docs/APPS_ARTIFACTS_AND_MEDIA.md) |
 | Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, via the `bighelp_render_*` tools. Card templates can be saved and reused. | [Cards guide](docs/CARDS.md) |
 | Reactions | Agents can react to your messages with an emoji (`bighelp_react_to_message`). | |
+| Who's talking | When several people use bighelp with one host, agents see the name each person saved in the app, and can ask with `bighelp_people`. Names are labels, not logins. | [Who's talking](docs/PEOPLE.md) |
 | Secure input | An agent can ask for a password, API key or other secret with `bighelp_request_secure_input`. bighelp shows a masked pop-up; Hermes saves what you type to the agent's `.env` and the agent can use it only as `$NAME` in commands. The AI never sees the value. Hermes' own AI provider keys are excluded. | |
 | Agent templates | Save an agent's setup as a template and start new agents from it. | |
 | iPhone tools | `iphone_health` (read-only), `iphone_calendar` and `iphone_reminders`. Each is off until you allow it for a host on your phone. They only work while bighelp is open and in the foreground. | [iPhone tools](docs/IPHONE_DEVICE_TOOLS.md) |

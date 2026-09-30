@@ -151,6 +151,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.host_restart import available as restart_available
         if restart_available():
             expected.append("native-host-restart-v1")
+        from loopdy_plugin.people import available as people_available
+        if people_available():
+            expected.append("native-people-v1")
         expected.append("native-provider-usage-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
@@ -217,6 +220,34 @@ class NativeAPITests(unittest.TestCase):
             self.assertEqual(self.client.get(PREFIX + path, headers=self.headers()).status_code, 422)
         self.assertEqual(self.client.request("GET", PREFIX + "/context", headers=self.headers(),
                                             content=b"x" * 200_000).status_code, 422)
+
+    def test_people_speaking_records_who_writes_in_a_chat(self):
+        from loopdy_plugin.people import available, store_for_profile
+        if not available():
+            self.skipTest("Hermes profile helpers unavailable")
+        person = "11111111-1111-4111-8111-111111111111"
+
+        def speaking(payload, headers=None):
+            return self.client.post(PREFIX + "/people/speaking",
+                                    headers=self.headers() if headers is None else headers, json=payload)
+
+        noted = speaking({"agentId": "default", "sessionId": "20260930_101500_abc123",
+                          "personId": person, "name": " Colt\nCoan "})
+        self.assertEqual(noted.status_code, 200, noted.text)
+        self.assertEqual(noted.json(), {"agentId": "default", "sessionId": "20260930_101500_abc123",
+                                        "name": "Colt Coan"})
+        self.assertEqual(store_for_profile("default").brief_owner("20260930_101500_abc123"), (True, "Colt Coan"))
+        for bad in ({"agentId": "default", "sessionId": "../x", "personId": person},
+                    {"agentId": "default", "sessionId": "s1", "personId": "not-a-uuid"},
+                    {"agentId": "default", "sessionId": "s1", "personId": person, "name": "x" * 401},
+                    {"agentId": "default", "sessionId": "s1", "personId": person, "extra": 1}):
+            with self.subTest(bad=bad):
+                self.assertEqual(speaking(bad).status_code, 422)
+        self.assertEqual(speaking({"agentId": "missing", "sessionId": "s1", "personId": person}).status_code, 404)
+        headers = self.headers()
+        headers["If-Match"] = '"stale"'
+        self.assertEqual(speaking({"agentId": "default", "sessionId": "s1", "personId": person},
+                                  headers).status_code, 412)
 
     def test_agent_board_routes_list_update_media_and_logs(self):
         from loopdy_plugin.agent_board import store_for_profile

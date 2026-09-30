@@ -36,9 +36,9 @@ for you); "local" stops Hermes also posting it to another channel. Write the job
 message, most important words first. Don't deliver to "loopdy"; that's the retired Link inbox.
 - iphone_calendar, iphone_reminders and iphone_health work only after the user turns them on, while the app \
 is open.
-- Never schedule jobs or posts the user didn't ask for; runs spend their AI budget.
-Full guide: skill_view("loopdy:bighelp").\
+- Never schedule jobs or posts the user didn't ask for; runs spend their AI budget.\
 """
+CHAT_BRIEF_GUIDE = 'Full guide: skill_view("loopdy:bighelp").'
 
 ELSEWHERE_NOTE = """\
 The user also has the bighelp app for this agent. To reach them there later (a reminder, a check-in, a \
@@ -63,7 +63,8 @@ SKILLS = (
 def prompt_section(session: Mapping[str, Any]) -> str:
     platform = str(session.get("platform") or "").strip().lower()
     if platform == SESSION_SOURCE:
-        return CHAT_BRIEF
+        from .people import brief_line
+        return "\n".join((CHAT_BRIEF, brief_line(session), CHAT_BRIEF_GUIDE))
     if not platform or platform in _UNATTENDED:
         return ""
     return ELSEWHERE_NOTE
