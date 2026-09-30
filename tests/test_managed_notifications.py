@@ -265,6 +265,26 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.drain_pending()
         self.assertEqual([e["eventType"] for e in self.events_sent()],["scheduled.completed","scheduled.failed"])
 
+    def test_silent_scheduled_run_with_verifier_footer_sends_no_alert(self):
+        # Regression: a personal-assistant cron run reasoned aloud, ended on NO_REPLY, and Hermes
+        # appended its file-mutation verifier footer after the marker; the phone got the whole dump.
+        self.grant["eventTypes"]=["scheduled.completed","scheduled.failed","session.completed","session.failed"]
+        grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
+        self.service.enroll(grant_id,str(uuid.uuid4())); self.calls.clear()
+        cron="cron_5f1e2d3c4b6a_20260930_180333"
+        footer=("\n\n⚠️ File-mutation verifier: 1 file edit(s) FAILED this turn despite any wording above.\n"
+                "  • `/tmp/x.json` — [write_file] Refusing to overwrite `/tmp/x.json`")
+        for turn,marker in (("turn-n","NO_REPLY"),("turn-s","[SILENT]")):
+            reply="Reviewed the packet; nothing new earns an interruption.\n\n"+marker+footer
+            self.service.observe("post_llm_call",profile="default",session_id=cron,turn_id=turn,assistant_response=reply,platform="cron")
+            self.service.observe("on_session_end",profile="default",session_id=cron,turn_id=turn,completed=True,platform="cron")
+        self.service.drain_pending()
+        self.assertEqual(self.events_sent(),[])
+        self.service.observe("post_llm_call",profile="default",session_id=cron,turn_id="turn-r",assistant_response="Offer ready."+footer,platform="cron")
+        self.service.observe("on_session_end",profile="default",session_id=cron,turn_id="turn-r",completed=True,platform="cron")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()],["scheduled.completed"])
+
     def hermes_rules(self, *, human_turn_notice=True, broken=False):
         # Hermes' own predicates; silence_allowed arrived with the human-turn notice, so
         # supply it (or leave it out) to cover every supported Hermes the same way.
