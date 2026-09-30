@@ -50,6 +50,8 @@ _EVENT_TYPES = {
 }
 _APPROVAL_EVENT = "approval.required"
 _CLARIFICATION_EVENT = "clarification.required"
+# The messaging adapter presents a question just after the clarify tool hook saw it.
+_ASKED_WINDOW_SECONDS = 600
 _MAX_RICH_TEXT = 1_600
 _MAX_AVATAR_BYTES = 524_288
 _APPROVAL_GRACE_SECONDS = 3
@@ -218,6 +220,9 @@ class ManagedNotifications:
         # Turns whose reply alert already went out from post_llm_call (setdefault: a
         # state dict made by an older copy of this module in the same process).
         self._alerted: OrderedDict[tuple[str, str, str], bool] = state.setdefault("alerted", OrderedDict())
+        # Turns whose question alert already went out from the clarify tool hook, so the
+        # messaging adapter's own presentation of the same question isn't a second alert.
+        self._asked: OrderedDict[tuple[str, str, str], float] = state.setdefault("asked", OrderedDict())
         self._child_owners: dict[tuple[str, str, str], str] = state["child_owners"]
         self._child_goals: dict[tuple[str, str, str], str] = state["child_goals"]
         self._key = self._identity()
@@ -635,6 +640,31 @@ class ManagedNotifications:
         self._queue_event(profile, session_id, turn_id, _APPROVAL_EVENT,
                           tool_call_id=tool_call_id, content_text=content)
 
+    def _observe_question(self, profile: str, session_id: str, payload: dict[str, Any]):
+        """The agent asked a question with the clarify tool.
+
+        Chats in the bighelp app run on the dashboard, where no adapter presents
+        the question, so this is the only place that sees it. Each question alerts
+        once, as it is asked; it is shown in the chat, not in the alert's actions.
+        """
+        turn, call = payload.get("turn_id"), payload.get("tool_call_id")
+        if not isinstance(turn, str) or not _ID.fullmatch(turn): return
+        if not isinstance(call, str) or not _ID.fullmatch(call): return
+        question = _clarify_question(payload.get("args"))
+        if not question: return
+        try:
+            self._queue_event(profile, session_id, turn, _CLARIFICATION_EVENT,
+                              event_key="tool:" + call, content_text=question)
+        except ManagedNotificationError:
+            # No avatar or no text: the question still waits in the chat.
+            logger.warning("Question notification unavailable")
+            return
+        with self._lock:
+            self._asked[(profile, session_id, turn)] = self.clock()
+            self._asked.move_to_end((profile, session_id, turn))
+            while len(self._asked) > 256:
+                self._asked.popitem(last=False)
+
     @staticmethod
     def _rich_text(value: Any) -> str:
         if isinstance(value, str):
@@ -716,6 +746,9 @@ class ManagedNotifications:
         session_id = _identifier(session_id)
         turn_id = _identifier(turn_id)
         request_id = _identifier(request_id)
+        with self._lock:
+            if self._asked.get((profile, session_id, turn_id), 0) > self.clock() - _ASKED_WINDOW_SECONDS:
+                return
         self._session(profile, session_id)
         self._queue_event(profile, session_id, turn_id, _CLARIFICATION_EVENT,
                           event_key=request_id, content_text=self._rich_text(question))
@@ -805,6 +838,8 @@ class ManagedNotifications:
         if not child_hook and (payload.get("parent_session_id") or payload.get("platform") == "subagent"): return
         with self._db() as db:
             if not db.execute("SELECT 1 FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (int(self.clock()), profile)).fetchone(): return
+        if hook == "pre_tool_call" and payload.get("tool_name") == "clarify" and not child_hook:
+            self._observe_question(profile, session_id, payload)
         turn = payload.get("turn_id")
         if hook == "post_llm_call" and isinstance(turn, str) and _ID.fullmatch(turn):
             coordinate = (profile, session_id, turn)
@@ -1121,9 +1156,23 @@ _instances_lock = threading.Lock()
 _SHARED_OBSERVATIONS = "_loopdy_managed_notification_observations"
 
 
+def _clarify_question(args: Any) -> str:
+    """What the clarify tool asks: one question, or the first of a batch."""
+    if not isinstance(args, dict): return ""
+    questions = args.get("questions")
+    if isinstance(questions, list) and questions:
+        texts = [str((item.get("question") if isinstance(item, dict) else item) or "").strip()
+                 for item in questions[:64]]
+        texts = [text for text in texts if text]
+        if not texts: return ""
+        return texts[0] if len(texts) == 1 else f"{texts[0]} (+{len(texts) - 1} more)"
+    question = args.get("question")
+    return question.strip() if isinstance(question, str) else ""
+
+
 def _new_observations() -> dict[str, Any]:
     return {"lock": threading.RLock(), "wake": threading.Event(),
-            "work": OrderedDict(), "responses": OrderedDict(), "alerted": OrderedDict(),
+            "work": OrderedDict(), "responses": OrderedDict(), "alerted": OrderedDict(), "asked": OrderedDict(),
             "child_owners": {}, "child_goals": {},
             "loaded_profiles": set(), "approval_profiles": set(), "clarification_profiles": set()}
 
