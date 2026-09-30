@@ -108,6 +108,18 @@ class LiveVoiceTransportTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveVoiceProviderTests(unittest.TestCase):
+    def test_both_providers_wait_for_a_complete_request_before_delegating(self):
+        # GPT-Live-1 has no turn-detection setting; its instructions are the only lever.
+        from loopdy_plugin.live_voice_provider import DEFAULT_INSTRUCTIONS, PublicLiveProvider
+
+        for instructions in (DEFAULT_INSTRUCTIONS, PublicLiveProvider.default_instructions):
+            text = instructions.lower()
+            for phrase in ("pause mid-thought", "sounds complete", "never delegate half a sentence",
+                           "keep listening"):
+                with self.subTest(phrase=phrase):
+                    self.assertIn(phrase, text)
+            self.assertLess(len(instructions.encode("utf-8")), 16384)
+
     def test_subscription_instructions_cover_delegation_and_continued_turns(self):
         from loopdy_plugin.live_voice_provider import CodexLiveProvider, DEFAULT_INSTRUCTIONS
 

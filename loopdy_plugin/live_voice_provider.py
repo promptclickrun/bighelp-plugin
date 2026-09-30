@@ -40,7 +40,10 @@ DEFAULT_INSTRUCTIONS = (
     "delegate every request that needs facts, current information or careful reasoning to the "
     "client Hermes agent. This includes calendar, reminders and health questions, and any request "
     "to do, check, find, make, fix, run, remember or schedule something. Delegate before answering "
-    "anything that depends on Hermes. Do not delegate greetings, small talk, a brief clarification "
+    "anything that depends on Hermes. People pause mid-thought, especially in longer requests: wait "
+    "until a request sounds complete before you delegate or answer it, and never delegate half a "
+    "sentence. If the person trails off mid-sentence or says they have more, keep listening. "
+    "Do not delegate greetings, small talk, a brief clarification "
     "question, or repeating a verified result already delivered. Do not guess or invent facts, "
     "actions, permissions, job status, completion or results. While Hermes works, say briefly that "
     "you are checking and keep listening for later utterances. A completed Hermes result is queued "
@@ -788,7 +791,10 @@ class PublicLiveProvider(_LiveTransport):
                         "meridian", "bossa", "tempo", "beacon", "delta", "cinder"})
     default_instructions = (
         "You are bighelp's conversational voice front end. Delegate real work to the client; "
-        "you have no tools. Keep conversation natural while independent jobs run. Never "
+        "you have no tools. People pause mid-thought, especially in longer requests: wait until a "
+        "request sounds complete before you delegate or answer it, and never delegate half a "
+        "sentence; if they trail off or say there's more, keep listening. "
+        "Keep conversation natural while independent jobs run. Never "
         "invent status or completion. Speak verified results naturally; do not expose "
         "private reasoning. Audio interruption does not cancel accepted jobs."
     )
