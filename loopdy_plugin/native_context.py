@@ -274,4 +274,9 @@ def _native_features(
         features.append(usage_capability)
     else:
         skip(usage_capability, "public profile helpers are unimportable.")
+    from .provider_sign_in import CAPABILITY as sign_in_capability, available as sign_in_available
+    if sign_in_available():
+        features.append(sign_in_capability)
+    else:
+        skip(sign_in_capability, "sign-ins need a POSIX terminal and public profile helpers.")
     return profile, tuple(features)

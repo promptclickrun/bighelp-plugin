@@ -517,3 +517,62 @@ async def provider_usage(request: Request) -> Response:
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response({"agentId": body.agentId, **value}, owner, request_id)
+
+
+_SESSION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+
+
+class _SignInStart(_Body):
+    providerId: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+class _SignInSession(_Body):
+    sessionId: str = Field(pattern=_SESSION_ID)
+
+
+class _SignInCode(_SignInSession):
+    code: str = Field(min_length=1, max_length=2048)
+
+
+_SIGN_IN_BODIES: dict[str, type[_Body]] = {
+    "list": _Body, "start": _SignInStart, "status": _SignInSession, "submit": _SignInCode, "cancel": _SignInSession,
+}
+_SIGN_IN_STATUS = {
+    "sign_in_unavailable": 404, "sign_in_not_found": 404, "sign_in_tool_missing": 409, "sign_in_not_waiting": 409,
+    "sign_in_retired": 410, "sign_in_code_invalid": 422, "sign_in_busy": 429, "sign_in_start_failed": 503,
+}
+
+
+def _sign_in(operation: str, body: _Body) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from . import provider_sign_in as sign_in
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    try:
+        if operation == "list":
+            return {"providers": sign_in.providers()}
+        if operation == "start":
+            return sign_in.start(body.agentId, body.providerId)
+        if operation == "status":
+            return sign_in.status(body.agentId, body.sessionId)
+        if operation == "submit":
+            return sign_in.submit(body.agentId, body.sessionId, body.code)
+        return sign_in.cancel(body.agentId, body.sessionId)
+    except sign_in.SignInError as error:
+        raise NativeAPIError(_SIGN_IN_STATUS.get(error.code, 409), error.code, error.message) from None
+
+
+@router.post("/provider-sign-in/{operation}")
+async def provider_sign_in(operation: str, request: Request) -> Response:
+    """Sign in to a provider account with that provider's own sign-in tool (bighelp app: Provider Keys)."""
+    from .provider_sign_in import CAPABILITY
+    model = _SIGN_IN_BODIES.get(operation)
+    if model is None:
+        raise NativeAPIError(404, "unknown_operation", "The sign-in operation is unknown.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "sign_in_host_unavailable", "This host can't run sign-ins for the app.")
+    body = await _body(request, model)
+    value = await run_in_threadpool(_sign_in, operation, body)
+    return _response({"agentId": body.agentId, **value}, owner, request_id)

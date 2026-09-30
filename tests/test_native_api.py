@@ -155,6 +155,9 @@ class NativeAPITests(unittest.TestCase):
         if people_available():
             expected.append("native-people-v1")
         expected.append("native-provider-usage-v1")
+        from loopdy_plugin.provider_sign_in import available as sign_in_available
+        if sign_in_available():
+            expected.append("native-provider-sign-in-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
