@@ -75,6 +75,7 @@ provides_tools:
   - bighelp_react_to_message
   - bighelp_request_secure_input
   - bighelp_board
+  - bighelp_people
 platforms:
   - linux
   - macos

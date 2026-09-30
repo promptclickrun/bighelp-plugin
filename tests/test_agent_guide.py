@@ -39,7 +39,9 @@ class AgentGuideTests(unittest.TestCase):
         # The app's chats carry source "bighelp". Unlabelled, Hermes called them its terminal UI and
         # agents doubted they could send files, cards or reminders.
         brief = agent_guide.prompt_section({"platform": "bighelp"})
-        self.assertEqual(brief, agent_guide.CHAT_BRIEF)
+        self.assertTrue(brief.startswith(agent_guide.CHAT_BRIEF))
+        self.assertTrue(brief.endswith(agent_guide.CHAT_BRIEF_GUIDE))
+        self.assertIn("More than one person may use this host", brief)
         self.assertEqual(agent_guide.prompt_section({"platform": " BigHelp "}), brief)
         self.assertIn("not a terminal", brief)
         self.assertIn("MEDIA:", brief)
@@ -58,13 +60,13 @@ class AgentGuideTests(unittest.TestCase):
 
     def test_brief_fits_hermes_section_limits(self) -> None:
         # Hermes skips a section over 4,000 characters and caps all plugins together at 8,000.
-        self.assertLessEqual(len(agent_guide.CHAT_BRIEF), 2_000)
+        self.assertLessEqual(len(agent_guide.prompt_section({"platform": "bighelp"})), 2_600)
         self.assertLessEqual(len(agent_guide.ELSEWHERE_NOTE), 500)
         self.assertRegex(agent_guide.SECTION_ID, r"^[a-z0-9._-]{1,128}$")
 
     def test_guidance_names_only_tools_the_plugin_provides(self) -> None:
         provided = _provided_tools()
-        texts = [agent_guide.CHAT_BRIEF, agent_guide.ELSEWHERE_NOTE]
+        texts = [agent_guide.prompt_section({"platform": "bighelp"}), agent_guide.ELSEWHERE_NOTE]
         texts += [(ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
                   for name in ("bighelp", "generative-ui", "bighelp-feed-and-ideas")]
         for text in texts:
@@ -123,7 +125,9 @@ class HermesSectionContractTests(unittest.TestCase):
         except ImportError:
             self.skipTest("Hermes without plugin prompt sections")
         self.assertTrue(is_valid_system_prompt_section_id(agent_guide.SECTION_ID))
-        self.assertLessEqual(len(agent_guide.CHAT_BRIEF), MAX_SYSTEM_PROMPT_SECTION_CHARS)
+        # Room for the longest name the people line can add.
+        self.assertLessEqual(len(agent_guide.prompt_section({"platform": "bighelp"})) + 200,
+                             MAX_SYSTEM_PROMPT_SECTION_CHARS)
 
 
 if __name__ == "__main__":
