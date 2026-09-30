@@ -30,6 +30,13 @@ def plugin_version(root: Path = ROOT) -> str:
     return manifest_version((root / "plugin.yaml").read_text(encoding="utf-8"))
 
 
+def check_dashboard_version(version: str, root: Path = ROOT) -> None:
+    """Hermes' dashboard shows dashboard/manifest.json's version, so it must match plugin.yaml."""
+    dashboard = json.loads((root / "dashboard" / "manifest.json").read_text(encoding="utf-8")).get("version")
+    if dashboard != version:
+        raise SystemExit(f"dashboard/manifest.json says {dashboard}, but plugin.yaml says {version}")
+
+
 def version_key(version: str) -> tuple[int, ...]:
     parts = [int(part) for part in version.split(".")]
     return tuple(parts + [0] * (4 - len(parts)))
@@ -66,6 +73,7 @@ def _gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     version = plugin_version()
+    check_dashboard_version(version)
     tag = f"v{version}"
     if _gh("release", "view", tag, "--repo", repository, check=False).returncode == 0:
         print(f"{tag} is already released; nothing to publish.")

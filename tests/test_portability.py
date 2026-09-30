@@ -23,6 +23,17 @@ class PortabilityTests(unittest.TestCase):
         self.assertEqual(manifest["version"], PLUGIN_VERSION)
         self.assertEqual(set(manifest["platforms"]), {"linux", "macos", "windows"})
 
+    def test_dashboard_manifest_reports_the_plugin_version(self) -> None:
+        # Hermes' dashboard shows this file's version, not plugin.yaml's, so a release must bump both.
+        import json
+
+        import yaml
+
+        manifest = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8"))
+        dashboard = json.loads((PLUGIN_ROOT / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(dashboard["version"], manifest["version"])
+
     def test_link_runtime_coordinates_never_depend_on_posix_path_syntax(self) -> None:
         from loopdy_plugin import adapter
 

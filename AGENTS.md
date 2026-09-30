@@ -21,10 +21,10 @@ Many features span both repos. The app's side of each route lives in the app rep
 
 - **Releases are batched, and the maintainer starts them.**
   - Pull requests don't change the version. Merged changes collect on `main`, which must stay releasable.
-  - When the maintainer decides to ship, a release PR bumps `plugin.yaml` and `PLUGIN_VERSION` and lists
-    everything since the last release. Its title leads with the version. Its description becomes the release
-    notes, and the app shows the first 1,500 characters on its update screen, so open with a short summary in
-    plain words for people who run hosts. Credit outside contributors.
+  - When the maintainer decides to ship, a release PR bumps `plugin.yaml`, `PLUGIN_VERSION` and
+    `dashboard/manifest.json` and lists everything since the last release. Its title leads with the version. Its
+    description becomes the release notes, and the app shows the first 1,500 characters on its update screen, so
+    open with a short summary in plain words for people who run hosts. Credit outside contributors.
   - After it merges, the maintainer runs the Release workflow (`gh workflow run release.yml`). It publishes the
     version from the release PR's merge; anything merged later waits for the next release.
   - The bighelp app offers the latest release to every host, and `hermes bighelp update` installs it. No app
@@ -119,8 +119,10 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
    - Add it to `PROCESS_FEATURES` in `tests/test_native_startup_logging.py`.
    - Add unit tests for the module itself.
 4. **Docs:** add `docs/<FEATURE>.md` with the full route contract, and a row in the README feature table.
-5. **Version:** leave it alone. The next release PR bumps `plugin.yaml` and `PLUGIN_VERSION` in
-   `loopdy_plugin/link_contracts.py` together; `tests/test_portability.py` checks that they match.
+5. **Version:** leave it alone. The next release PR bumps `plugin.yaml`, `PLUGIN_VERSION` in
+   `loopdy_plugin/link_contracts.py` and `dashboard/manifest.json` together (the Hermes dashboard shows the
+   last one). `tests/test_portability.py` checks that they match, and the Release workflow refuses to publish if
+   they don't.
 6. **After the release:** the app offers the new version to hosts. The app adds its side of the route in its own
    release.
 

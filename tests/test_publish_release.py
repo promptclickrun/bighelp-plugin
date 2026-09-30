@@ -22,6 +22,16 @@ class PublishReleaseTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 publish_release.plugin_version(root)
 
+    def test_it_refuses_a_stale_dashboard_version(self):
+        publish_release.check_dashboard_version(PLUGIN_VERSION)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dashboard").mkdir()
+            (root / "dashboard" / "manifest.json").write_text('{"version": "2.8.0"}', encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                publish_release.check_dashboard_version("3.1.0", root)
+            publish_release.check_dashboard_version("2.8.0", root)
+
     def test_notes_come_from_the_release_pull_request(self):
         notes = publish_release.release_notes({"title": "3.0.0: bighelp names", "body": "What changed."}, "commit")
         self.assertEqual(notes, "## 3.0.0: bighelp names\n\nWhat changed.")
