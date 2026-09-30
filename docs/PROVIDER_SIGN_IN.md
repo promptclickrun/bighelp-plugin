@@ -16,6 +16,9 @@ xAI Grok) keep using Hermes' own sign-in.
 | Anthropic Account (`anthropic`) | Claude Code: `claude setup-token`. Its long-lived token goes to the profile's env as `CLAUDE_CODE_OAUTH_TOKEN`, the route Hermes documents for Claude subscriptions | Link; paste the code back |
 | Qwen OAuth (`qwen-oauth`) | None. Qwen stopped offering this sign-in in April 2026 | Listed as retired, with Qwen Cloud's API key as the replacement |
 
+A sign-in is listed only when this Hermes has that provider. That includes GitHub Copilot, which Hermes files under
+API keys because it keeps a token, but which signs in with GitHub like an account.
+
 If the tool isn't installed, the app says so and shows the install command. Nothing is installed for you.
 
 ## Respecting provider terms

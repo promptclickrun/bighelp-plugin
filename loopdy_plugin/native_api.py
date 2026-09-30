@@ -550,7 +550,7 @@ def _sign_in(operation: str, body: _Body) -> dict:
         raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
     try:
         if operation == "list":
-            return {"providers": sign_in.providers()}
+            return {"providers": sign_in.providers(body.agentId)}
         if operation == "start":
             return sign_in.start(body.agentId, body.providerId)
         if operation == "status":

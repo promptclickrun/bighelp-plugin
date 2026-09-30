@@ -240,7 +240,7 @@ class PasteSignInTests(Base):
 
 class CatalogTests(Base):
     def test_lists_ready_missing_and_retired_sign_ins(self):
-        rows = {row["providerId"]: row for row in si.providers()}
+        rows = {row["providerId"]: row for row in si.providers("default")}
         self.assertEqual(rows["copilot-acp"]["state"], "ready")
         self.assertEqual(rows["claude-code"], {
             "providerId": "claude-code", "name": "Claude Code", "client": "Claude Code", "flow": si.PASTE,
@@ -248,10 +248,36 @@ class CatalogTests(Base):
         self.assertEqual(rows["qwen-oauth"]["state"], "retired")
         self.assertEqual(rows["qwen-oauth"]["replacementKey"], "DASHSCOPE_API_KEY")
         with patch.object(si, "find_cli", return_value=None):
-            missing = {row["providerId"]: row for row in si.providers()}
+            missing = {row["providerId"]: row for row in si.providers("default")}
         self.assertEqual((missing["claude-code"]["state"], missing["claude-code"]["installCommand"]),
                          ("notInstalled", "npm install -g @anthropic-ai/claude-code"))
         self.assertEqual(missing["claude-code"]["message"], "Claude Code isn't installed on this computer.")
+
+    def test_github_copilot_is_listed_though_hermes_files_it_under_keys(self):
+        from hermes_cli.provider_catalog import provider_catalog
+        tabs = {descriptor.slug: descriptor.tab for descriptor in provider_catalog()}
+        self.assertEqual(tabs.get("copilot"), "keys", "Hermes keeps Copilot's token as a key")
+        listed = [row["providerId"] for row in si.providers("default")]
+        self.assertIn("copilot", listed)
+        self.assertIn("copilot-acp", listed)
+        # Hermes' own Claude Code status row is always there; a provider plugin this host lacks isn't.
+        self.assertIn("claude-code", listed)
+        self.assertNotIn("claude-subscription-directsdk-experimental", listed)
+        with patch.object(si, "_hermes_providers", return_value=None):
+            self.assertIn("claude-subscription-directsdk-experimental",
+                          [row["providerId"] for row in si.providers("default")])
+
+    def test_github_copilot_is_signed_in_once_hermes_has_its_token(self):
+        from hermes_cli import copilot_auth
+        from hermes_cli.config import save_env_value
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN")}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(copilot_auth, "_try_gh_cli_token", return_value=None):
+            copilot = lambda: next(row for row in si.providers("default") if row["providerId"] == "copilot")
+            self.assertEqual(copilot()["signedIn"], False)
+            save_env_value("COPILOT_GITHUB_TOKEN", "gho_" + "f" * 36)
+            self.assertEqual(copilot()["signedIn"], True)
 
     def test_refuses_unknown_retired_and_missing_tools(self):
         for provider, code in (("nope", "sign_in_unavailable"), ("qwen-oauth", "sign_in_retired")):

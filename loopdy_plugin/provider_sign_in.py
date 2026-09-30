@@ -14,6 +14,8 @@ sign-in its provider has ended is listed as retired instead of started.
 Adding a provider: add a ``Recipe`` to ``RECIPES`` with the provider's Hermes id, its own CLI and
 arguments, the domains its links may use, and whether its page approves by itself (``DEVICE``) or
 shows a code to paste back (``PASTE``). Commands are fixed here; the phone only names a provider.
+A sign-in is listed only when this Hermes has that provider, including ones Hermes files under API
+keys (GitHub Copilot keeps its token as a key but signs in with GitHub).
 
 Privacy: terminal output stays in memory for one sign-in and is never logged or returned. A token a
 tool prints for the person to keep (``claude setup-token``) is saved straight to this profile's
@@ -86,6 +88,8 @@ class Recipe:
     signed_in: Callable[[], bool | None] | None = None
     retired: str = ""
     replacement_key: str = ""
+    # Listed only when this Hermes has the provider; Hermes' own status rows (claude-code) always are.
+    needs_hermes_provider: bool = True
 
 
 def available() -> bool:
@@ -179,6 +183,27 @@ def _claude_signed_in(command: Callable[[], list[str] | None], config_variable: 
     return signed_in
 
 
+def _hermes_signed_in(provider_id: str) -> Callable[[], bool | None]:
+    """Hermes' own read-only status for a provider it keeps the credential for (in the profile scope)."""
+    def signed_in() -> bool | None:
+        try:
+            from hermes_cli.auth import get_auth_status
+            state = get_auth_status(provider_id).get("logged_in")
+        except Exception:  # noqa: BLE001 - a status Hermes can't give is "unknown", never a failure
+            return None
+        return state if isinstance(state, bool) else None
+    return signed_in
+
+
+def _hermes_providers() -> set[str] | None:
+    """Every provider this Hermes has (keys and accounts, plugins included); None if it can't say."""
+    try:
+        from hermes_cli.provider_catalog import provider_catalog
+        return {descriptor.slug for descriptor in provider_catalog()}
+    except Exception:  # noqa: BLE001 - list every sign-in rather than none
+        return None
+
+
 _GITHUB_CODE = re.compile(r"\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
 _CLAUDE_HOSTS = ("claude.com", "claude.ai", "anthropic.com")
 _CLAUDE_INSTALL = "npm install -g @anthropic-ai/claude-code"
@@ -202,12 +227,13 @@ RECIPES: tuple[Recipe, ...] = (
     Recipe(
         provider_id="copilot", name="GitHub Copilot", client="Hermes", flow=DEVICE, link_hosts=("github.com",),
         command=_hermes_helper("copilot", "hermes_cli.copilot_auth"),
-        docs="https://docs.github.com/en/copilot", code=_GITHUB_CODE, env=_profile_home),
+        docs="https://docs.github.com/en/copilot", code=_GITHUB_CODE, env=_profile_home,
+        signed_in=_hermes_signed_in("copilot")),
     Recipe(
         provider_id="claude-code", name="Claude Code", client="Claude Code", flow=PASTE, link_hosts=_CLAUDE_HOSTS,
         command=lambda: (argv + ["auth", "login", "--claudeai"]) if (argv := _claude()) else None,
         install=_CLAUDE_INSTALL, docs=_CLAUDE_DOCS, rejected=_CLAUDE_REJECTED, env=_claude_env(),
-        signed_in=_claude_signed_in(_claude)),
+        signed_in=_claude_signed_in(_claude), needs_hermes_provider=False),
     Recipe(
         provider_id="claude-subscription-directsdk-experimental", name="Claude Subscription DirectSDK",
         client="Claude Code", flow=PASTE, link_hosts=_CLAUDE_HOSTS,
@@ -235,27 +261,32 @@ def recipe(provider_id: str) -> Recipe | None:
     return _BY_ID.get(provider_id)
 
 
-def providers() -> list[dict]:
+def providers(agent_id: str) -> list[dict]:
     """Every sign-in this host can run, or why it can't, for the app's Provider Keys screen."""
-    rows = []
-    for item in RECIPES:
-        row: dict = {"providerId": item.provider_id, "name": item.name, "client": item.client, "flow": item.flow}
-        if item.docs:
-            row["docsURL"] = item.docs
-        if item.retired:
-            row.update(state="retired", message=item.retired)
-            if item.replacement_key:
-                row["replacementKey"] = item.replacement_key
-        elif item.command() is None:
-            row.update(state="notInstalled", message=f"{item.client} isn't installed on this computer.")
-            if item.install:
-                row["installCommand"] = item.install
-        else:
-            row["state"] = "ready"
-            if item.signed_in is not None and (state := item.signed_in()) is not None:
-                row["signedIn"] = state
-        rows.append(row)
-    return rows
+    from .workspace_capabilities import profile_scope
+    with profile_scope(agent_id):
+        known = _hermes_providers()
+        return [_row(item) for item in RECIPES
+                if not item.needs_hermes_provider or known is None or item.provider_id in known]
+
+
+def _row(item: Recipe) -> dict:
+    row: dict = {"providerId": item.provider_id, "name": item.name, "client": item.client, "flow": item.flow}
+    if item.docs:
+        row["docsURL"] = item.docs
+    if item.retired:
+        row.update(state="retired", message=item.retired)
+        if item.replacement_key:
+            row["replacementKey"] = item.replacement_key
+    elif item.command() is None:
+        row.update(state="notInstalled", message=f"{item.client} isn't installed on this computer.")
+        if item.install:
+            row["installCommand"] = item.install
+    else:
+        row["state"] = "ready"
+        if item.signed_in is not None and (state := item.signed_in()) is not None:
+            row["signedIn"] = state
+    return row
 
 
 # ---- Terminal output --------------------------------------------------------------------------
