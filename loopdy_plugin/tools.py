@@ -712,7 +712,9 @@ def register(
         schema={
             "name": "bighelp_await_form_response",
             "description": (
-                "Wait for one exact-session bighelp form response. Call this tool directly; it must "
+                "Read one exact-session bighelp form response that an older bighelp app saved on the host. "
+                "Current apps send a form's answers as the user's next message instead, so call this only "
+                "if the user says they sent the form and no answers arrived. Call this tool directly; it must "
                 "not be routed through tool_search, tool_describe, or tool_call."
             ),
             "parameters": _strict_object(

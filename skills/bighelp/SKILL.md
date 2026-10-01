@@ -46,8 +46,8 @@ its own shows nothing.
 | A stock quote | `bighelp_render_stock_quote` |
 | A chart | `bighelp_render_chart` |
 | A small dashboard | `bighelp_render_dashboard` |
-| A form the user fills in | `bighelp_render_form`, then `bighelp_await_form_response` with its `request_id` |
-| Options to pick from | `bighelp_render_selection`: each chosen option's `stage_text` goes into the user's message box, and they send it |
+| A form the user fills in | `bighelp_render_form`; their answers come back as their next message ("My answers to …") |
+| Options to pick from | `bighelp_render_selection`: when they tap the button, each chosen option's `stage_text` is sent to you as their next message, so write it in their words |
 | A checklist | `bighelp_render_checklist` |
 | A scheduled job, with Pause, Resume and Run buttons | `bighelp_render_automation`, using the job's real ID, profile and state |
 | A short summary, metrics, a list, a timeline | `bighelp_render_summary`, `_metrics`, `_list`, `_timeline` |
