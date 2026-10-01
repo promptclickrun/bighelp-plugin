@@ -131,6 +131,7 @@ class ToolRegistrationTests(unittest.TestCase):
             if tool_name == "bighelp_await_form_response":
                 self.assertNotIn("renderer", description)
                 self.assertIn("exact-session", description)
+                self.assertIn("next message", description)
                 continue
             if tool_name == "bighelp_board":
                 from loopdy_plugin.agent_board import TOOL_PARAMETERS

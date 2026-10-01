@@ -77,10 +77,14 @@ Use v2 for typed current-data and interactive cards:
 - `bighelp_render_stock_quote`
 - `bighelp_render_chart`
 - `bighelp_render_dashboard`
-- `bighelp_render_form`
+- `bighelp_render_form`: when the user sends it, their answers come back as
+  their next message, starting "My answers to" and the form's title, one line
+  per field.
 - `bighelp_render_checklist`
-- `bighelp_render_selection`: each chosen option's `stage_text` is put in the
-  user's message box; nothing is sent until they send it.
+- `bighelp_render_selection`: when the user taps the button, each chosen
+  option's `stage_text` is sent to you as their next message (one per line), so
+  write it the way they would say it. Text starting with "/" goes into their
+  message box instead, for them to send.
 - `bighelp_render_automation`: one real scheduled job with Pause, Resume or Run
   buttons that act on it directly. Use the job's actual ID, profile and state.
 
@@ -89,9 +93,11 @@ component, and the exact strict tool schema. Current-data cards require source
 timestamps and freshness provenance. The renderer derives `age_seconds` from
 those timestamp facts, so it may be omitted (or supplied as stale model
 metadata). Forms are bound by the host to the exact
-profile and session. After rendering a form, call
-`bighelp_await_form_response` with only its server-generated `request_id`; do
-not invent an endpoint, route, command, URL, or action target.
+profile and session. After rendering a form or a selection, end your turn: the
+answers arrive as the user's next message. Older bighelp apps instead held a
+form's answers on the host; if the user says they sent a form and no answers
+arrived, call `bighelp_await_form_response` with only its server-generated
+`request_id`. Do not invent an endpoint, route, command, URL, or action target.
 
 Every v1 call uses `version: 1`, the matching `component`, and an optional short `title`. Do not add URLs, HTML, styles, routes, actions, or executable content.
 

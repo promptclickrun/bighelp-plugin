@@ -48,6 +48,20 @@ class AgentGuideTests(unittest.TestCase):
         self.assertIn('deliver "local"', brief)
         self.assertIn('skill_view("loopdy:bighelp")', brief)
 
+    def test_card_answers_arrive_as_the_next_message(self) -> None:
+        # bighelp sends a form's answers and a picked option to the agent as the user's next message.
+        # Telling agents to call bighelp_await_form_response after every form made them end the turn
+        # on "pending" and wait for answers that never came that way.
+        brief = agent_guide.prompt_section({"platform": "bighelp"})
+        self.assertIn("next message", brief)
+        self.assertNotIn("After a form, call", brief)
+        skill = (ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("goes into the user's message box", skill)
+        self.assertIn("next message", skill)
+        cards = (ROOT / "skills" / "generative-ui" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("put in the\n  user's message box", cards)
+        self.assertIn("next message", cards)
+
     def test_other_chats_get_one_pointer_and_unattended_runs_get_nothing(self) -> None:
         for platform in ("telegram", "tui", "cli", "desktop", "imsg", "loopdy"):
             with self.subTest(platform=platform):
