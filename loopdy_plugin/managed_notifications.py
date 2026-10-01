@@ -93,6 +93,14 @@ _OFF_SCREEN_DISPLAY_KIND = "hidden"
 _UNEXPECTED_SILENCE_REPLY = ("⚠️ The model returned only a silence marker for a message that needed "
                              "a reply. Try again or rephrase.")
 _LEGACY_SILENCE_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"})
+# Hermes' turn-end file-mutation verifier footer (run_agent.py): a "⚠️ File-mutation verifier:"
+# line plus indented "•" bullets, appended AFTER the model's final line. It is runtime machinery,
+# not the model's answer, so a run that ended on a silence marker must stay silent with it attached.
+_VERIFIER_FOOTER = re.compile(r"\n\s*⚠️?\s*File-mutation verifier:.*\Z", re.DOTALL)
+
+
+def _without_runtime_footer(response: Any) -> Any:
+    return _VERIFIER_FOOTER.sub("", response).rstrip() if isinstance(response, str) else response
 
 
 def _turn_prompt(history: Any) -> tuple[Any, Any]:
@@ -109,15 +117,16 @@ def _turn_prompt(history: Any) -> tuple[Any, Any]:
 def _delivered_reply(response: Any, *, autonomous: bool, history: Any) -> Any:
     """``response`` as Hermes would deliver it: ``""`` when the turn stays silent, Hermes' notice
     when a person got a bare marker, else unchanged. Never raises; unsure means unchanged."""
+    answer = _without_runtime_footer(response)
     try:
         rules = importlib.import_module("gateway.response_filters")
     except ImportError:  # Every supported Hermes has it; a bare marker still stays quiet.
-        text = response.strip().upper() if isinstance(response, str) else ""
+        text = answer.strip().upper() if isinstance(answer, str) else ""
         return "" if text in _LEGACY_SILENCE_MARKERS or (autonomous and text.startswith("[SILENT]")) else response
     try:
         if autonomous:
-            return "" if rules.is_autonomous_silence_response(response) else response
-        if not rules.is_intentional_silence_response(response):
+            return "" if rules.is_autonomous_silence_response(answer) else response
+        if not rules.is_intentional_silence_response(answer):
             return response
         silence_allowed = getattr(rules, "silence_allowed", None)
         if silence_allowed is None:  # Before the human-turn notice, Hermes kept every bare marker quiet.
