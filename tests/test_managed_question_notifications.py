@@ -24,6 +24,7 @@ class ManagedQuestionNotificationTests(unittest.TestCase):
     grant: dict[str, Any]
     calls: list[tuple[str, str, bytes, dict[str, str]]]
     now: int
+    phone_public: str
     setUp = fixtures.ManagedNotificationTests.setUp
     tearDown = fixtures.ManagedNotificationTests.tearDown
     get_session = fixtures.ManagedNotificationTests.get_session
@@ -34,6 +35,7 @@ class ManagedQuestionNotificationTests(unittest.TestCase):
         self.grant = dict(self.grant, grantId=self.grant_id, eventTypes=event_types or [
             "session.completed", "session.failed", "approval.required", "clarification.required"])
         self.service.enroll(self.grant_id, str(uuid.uuid4()))
+        self.service.register_recipient(self.grant_id, self.phone_public)
         self.service.subscribe(self.grant_id, "default", "native-session", True)
         self.service.producer_loaded("default", start_worker=False, clarification_producer_loaded=True)
         self.calls.clear()

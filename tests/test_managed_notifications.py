@@ -10,10 +10,32 @@ import hashlib
 import importlib
 import sys
 import types
+import zlib
 from unittest.mock import patch
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from loopdy_plugin.managed_notifications import ManagedNotifications, ManagedNotificationError, host_request_transcript
 from loopdy_plugin.relay_crypto import b64url_encode, b64url_decode, key_id, public_key_bytes, public_key_from_x963, verify_p1363
+from loopdy_plugin.sealed_alerts import alert_aad, signature_input
+
+
+def open_sealed(envelope: dict, recipient: ec.EllipticCurvePrivateKey, sender_public: bytes) -> dict:
+    """What the phone does: check the host's signature, then decrypt."""
+    aad = alert_aad(grant_id=envelope["grantId"], event_id=envelope["eventId"],
+                    recipient_key_id=envelope["recipientKeyId"], sender_key_id=envelope["senderKeyId"],
+                    issued=envelope["issued"])
+    parts = {name: b64url_decode(envelope[name]) for name in
+             ("ephemeralPublicKey", "salt", "nonce", "ciphertext", "tag", "signature")}
+    verify_p1363(public_key_from_x963(sender_public), parts["signature"], signature_input(
+        aad=aad, ephemeral_public_key=parts["ephemeralPublicKey"], salt=parts["salt"], nonce=parts["nonce"],
+        ciphertext=parts["ciphertext"], tag=parts["tag"]))
+    shared = recipient.exchange(ec.ECDH(), public_key_from_x963(parts["ephemeralPublicKey"]))
+    derived = HKDF(algorithm=hashes.SHA256(), length=32, salt=parts["salt"],
+                   info=b"loopdy-sealed-alert-key-v2\0" + hashlib.sha256(aad).digest()).derive(shared)
+    packed = AESGCM(derived).decrypt(parts["nonce"], parts["ciphertext"] + parts["tag"], aad)
+    return json.loads(zlib.decompress(packed, -15))
 
 
 class ManagedNotificationTests(unittest.TestCase):
@@ -32,7 +54,11 @@ class ManagedNotificationTests(unittest.TestCase):
         self.grant = dict(grantId=self.grant_id,hostKeyId=self.service.key_id,hostPublicKey=self.service.public_key,
             authorizationEpoch=1,profile="default",eventTypes=["session.completed","session.failed"],
             createdAt=self.now-10,expiresAt=self.now+3600,revision=1,provider="buzzkit",subscriberScope="account",state="active")
+        # The phone's content key: alerts only go out sealed for it.
+        self.phone = ec.generate_private_key(ec.SECP256R1())
+        self.phone_public = b64url_encode(public_key_bytes(self.phone.public_key()))
         self.service.enroll(self.grant_id,str(uuid.uuid4()))
+        self.service.register_recipient(self.grant_id,self.phone_public)
         self.service.subscribe(self.grant_id,"default","native-session",True)
         self.calls.clear()
 
@@ -214,7 +240,20 @@ class ManagedNotificationTests(unittest.TestCase):
         self.assertEqual(self.calls,[])
 
     def events_sent(self):
-        return [json.loads(raw) for _, path, raw, _ in self.calls if path.endswith("/events")]
+        """Each sent alert as the phone reads it: the routing fields plus the opened text."""
+        sent=[]
+        for _, path, raw, _ in self.calls:
+            if not path.endswith("/events"): continue
+            body=json.loads(raw)
+            self.assertEqual(body["version"],3,"Alerts leave the host sealed")
+            opened=open_sealed(body["sealed"],self.phone,b64url_decode(self.service.public_key))
+            sent.append(dict(body,content={"text":opened["body"]}))
+        return sent
+
+    def enroll_with_key(self, grant_id):
+        self.service.enroll(grant_id,str(uuid.uuid4()))
+        self.service.register_recipient(grant_id,self.phone_public)
+        self.calls.clear()
 
     def test_a_reply_alert_goes_out_as_soon_as_it_is_queued(self):
         # The process that ran the turn sends at once; waiting for the sender-owning
@@ -240,7 +279,7 @@ class ManagedNotificationTests(unittest.TestCase):
     def test_scheduled_run_alerts_without_a_session_subscription(self):
         self.grant["eventTypes"]=["scheduled.completed","scheduled.failed","session.completed","session.failed"]
         grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
-        self.service.enroll(grant_id,str(uuid.uuid4())); self.calls.clear()
+        self.enroll_with_key(grant_id)
         cron="cron_d2b364c4a34d_20260923_093038"
         self.service.observe("post_llm_call",profile="default",session_id=cron,turn_id="turn-c",assistant_response="Briefing delivered.")
         self.service.observe("on_session_end",profile="default",session_id=cron,turn_id="turn-c",completed=True,platform="cron")
@@ -252,7 +291,7 @@ class ManagedNotificationTests(unittest.TestCase):
         # still reached the phone as a push reading "[SILENT]".
         self.grant["eventTypes"]=["scheduled.completed","scheduled.failed","session.completed","session.failed"]
         grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
-        self.service.enroll(grant_id,str(uuid.uuid4())); self.calls.clear()
+        self.enroll_with_key(grant_id)
         cron="cron_143638f07ae3_20260927_185802"
         for turn,reply in (("turn-s","[SILENT]"),("turn-t","[SILENT] No qualifying restock.")):
             self.service.observe("post_llm_call",profile="default",session_id=cron,turn_id=turn,assistant_response=reply,platform="cron")
@@ -270,7 +309,7 @@ class ManagedNotificationTests(unittest.TestCase):
         # appended its file-mutation verifier footer after the marker; the phone got the whole dump.
         self.grant["eventTypes"]=["scheduled.completed","scheduled.failed","session.completed","session.failed"]
         grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
-        self.service.enroll(grant_id,str(uuid.uuid4())); self.calls.clear()
+        self.enroll_with_key(grant_id)
         cron="cron_5f1e2d3c4b6a_20260930_180333"
         footer=("\n\n⚠️ File-mutation verifier: 1 file edit(s) FAILED this turn despite any wording above.\n"
                 "  • `/tmp/x.json` — [write_file] Refusing to overwrite `/tmp/x.json`")
@@ -354,7 +393,7 @@ class ManagedNotificationTests(unittest.TestCase):
     def test_subagent_completion_alerts_for_an_unopened_parent_session(self):
         self.grant["eventTypes"]=["session.completed","session.failed","subagent.completed","subagent.failed"]
         grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
-        self.service.enroll(grant_id,str(uuid.uuid4())); self.calls.clear()
+        self.enroll_with_key(grant_id)
         self.service.observe("pre_llm_call",profile="default",session_id="parent-chat",turn_id="turn-p",platform="desktop")
         self.service.observe("subagent_start",profile="default",parent_session_id="parent-chat",parent_turn_id="turn-p",child_session_id="child-1",child_goal="Audit the build")
         self.service.observe("subagent_stop",profile="default",parent_session_id="parent-chat",child_session_id="child-1",child_status="completed")

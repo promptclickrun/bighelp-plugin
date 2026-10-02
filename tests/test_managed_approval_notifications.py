@@ -18,6 +18,7 @@ class ManagedApprovalNotificationTests(unittest.TestCase):
     grant: dict[str, Any]
     calls: list[tuple[str, str, bytes, dict[str, str]]]
     now: int
+    phone_public: str
     setUp = fixtures.ManagedNotificationTests.setUp
     tearDown = fixtures.ManagedNotificationTests.tearDown
     get_session = fixtures.ManagedNotificationTests.get_session
@@ -28,6 +29,7 @@ class ManagedApprovalNotificationTests(unittest.TestCase):
         self.grant = dict(self.grant, grantId=self.grant_id,
                           eventTypes=["session.completed", "session.failed", "approval.required"])
         self.service.enroll(self.grant_id, str(uuid.uuid4()))
+        self.service.register_recipient(self.grant_id, self.phone_public)
         self.service.subscribe(self.grant_id, "default", "native-session", True)
         self.calls.clear()
 

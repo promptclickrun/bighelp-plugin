@@ -74,8 +74,10 @@ A sealed alert must fit one push, so its envelope is capped at 2,300 bytes; very
 format is in [`sealed_alerts.py`](../loopdy_plugin/sealed_alerts.py), and
 `fixtures/contracts/sealed-alert-v2-vector.json` is shared with the app's tests.
 
-Grants without a content key (apps older than bighelp 2.3.0 build 20) still get unsealed alerts, which the
-notification service can read.
+The host only sends sealed alerts. Until a grant has a content key, nothing is queued for it, so an alert that
+happens in the moment between turning notifications on and the phone registering its key is skipped. Apps older
+than bighelp 2.3.0 build 20 never register a key and get no alerts. An unsealed alert left in the queue by an
+older plugin is marked failed and never sent.
 
 ## Live Activities
 

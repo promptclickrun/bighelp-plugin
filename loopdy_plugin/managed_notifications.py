@@ -787,6 +787,12 @@ class ManagedNotifications:
                     if db.execute("SELECT COUNT(*) FROM approval_attention WHERE grant_id=?", (grant["grantId"],)).fetchone()[0] >= _APPROVAL_LIMIT: continue
                 if db.execute("SELECT COUNT(*) FROM events WHERE grant_id=?", (grant["grantId"],)).fetchone()[0] >= 4096: continue
                 if db.execute("SELECT COUNT(*) FROM pending WHERE grant_id=? AND state IN ('pending','sending')", (grant["grantId"],)).fetchone()[0] >= 32: continue
+                # Alerts leave this host only sealed for the phone. Until the phone has
+                # registered its key (it does right after enrolling), there's no alert.
+                recipient = db.execute("SELECT public_key FROM recipients WHERE grant_id=?", (grant["grantId"],)).fetchone()
+                if not recipient:
+                    logger.info("Managed notification skipped: the phone's content key isn't registered yet")
+                    continue
                 content_kind = ("approval" if approval else "clarification" if event_type == _CLARIFICATION_EVENT
                                 else "scheduled" if event_type.startswith("scheduled.")
                                 else "subagent" if event_type.startswith("subagent.")
@@ -802,17 +808,10 @@ class ManagedNotifications:
                                (event_id, grant["grantId"], profile, session_id, turn_id, tool_call_id,
                                 self._approval_owner, "pending", expires, "observed"))
                 reference = session_reference(profile, session_id)
-                recipient = db.execute("SELECT public_key FROM recipients WHERE grant_id=?", (grant["grantId"],)).fetchone()
-                if recipient:
-                    # End to end: only the enrolled phone can read the name, text and avatar.
-                    raw = self._sealed_event(db, grant["grantId"], recipient["public_key"], event_id=event_id,
-                        event_type=event_type, session_reference=reference, turn_id=turn_id, occurred_at=now,
-                        title=agent_name, text=content_text, avatar=avatar)
-                else:
-                    raw = canonical_json_bytes({"version": 2, "eventId": event_id,
-                        "eventType": event_type, "sessionReference": reference, "turnId": turn_id,
-                        "occurredAt": now, "agent": {"id": profile, "name": agent_name, "avatar": avatar},
-                        "content": {"kind": content_kind, "text": content_text}, "sound": True})
+                # End to end: only the enrolled phone can read the name, text and avatar.
+                raw = self._sealed_event(db, grant["grantId"], recipient["public_key"], event_id=event_id,
+                    event_type=event_type, session_reference=reference, turn_id=turn_id, occurred_at=now,
+                    title=agent_name, text=content_text, avatar=avatar)
                 db.execute("INSERT INTO events VALUES(?,?,?,?)",
                            (event_id, grant["grantId"], canonical_json_bytes(detail).decode(), now))
                 due = now + _APPROVAL_GRACE_SECONDS if approval else now
@@ -1137,6 +1136,12 @@ class ManagedNotifications:
         with self._db() as db:
             claimed = db.execute("UPDATE pending SET state='sending',next_attempt=? WHERE intent_id=? AND state='pending' AND expires>? AND EXISTS(SELECT 1 FROM grants WHERE grants.grant_id=pending.grant_id AND grants.state='active' AND grants.expires>?)", (now + 30, row["intent_id"], now, now)).rowcount
         if claimed != 1: return
+        if row["path"] == "/events" and json.loads(bytes(row["raw"])).get("version") != 3:
+            # An unsealed alert queued by an older plugin before the update: never send it.
+            with self._db() as db:
+                db.execute("UPDATE pending SET state='failed' WHERE intent_id=? AND state='sending'", (row["intent_id"],))
+                db.execute("UPDATE approval_attention SET state='retired',reason='send_failed' WHERE event_id=? AND state='pending'", (row["intent_id"],))
+            return
         try:
             approval = row["path"] == "/events" and json.loads(bytes(row["raw"])).get("eventType") == _APPROVAL_EVENT
             result = self._request("POST", row["grant_id"], row["path"], bytes(row["raw"]),
