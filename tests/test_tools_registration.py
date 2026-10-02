@@ -127,6 +127,7 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertIn("tapback", description)
                 self.assertIn("never as a status signal", description)
                 self.assertIn("Never narrate", description)
+                self.assertIn("reply with just [SILENT]", description)
                 continue
             if tool_name == "bighelp_await_form_response":
                 self.assertNotIn("renderer", description)
