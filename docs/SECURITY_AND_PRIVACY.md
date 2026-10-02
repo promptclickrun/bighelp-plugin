@@ -22,11 +22,12 @@ permissions. Nothing is sent to bighelp except notifications you turned on.
 
 ## Notifications
 
-The notification service and BuzzKit deliver alerts but, with current app builds, can't read them. The host
-encrypts each alert's title, text and agent picture for the recipient phone and signs it with its own key. What
-the service does see: which grant it belongs to, the event type (for example "reply" or "approval needed"), the
-time, and a placeholder text. Phones on app builds before bighelp 2.3.0 (20) haven't registered a content key,
-so their alerts are sent unsealed and are readable by the service.
+The notification service and BuzzKit deliver alerts but can't read them. The host encrypts each alert's title,
+text and agent picture for the recipient phone and signs it with its own key. What the service does see: which
+grant it belongs to, the event type (for example "reply" or "approval needed"), the time, and a placeholder text.
+The host never sends an alert it can't seal: until the phone has registered its content key, which current app
+builds do right after turning notifications on, no alert is queued or sent. App builds before bighelp 2.3.0 (20)
+never register a key, so they get no alerts.
 
 Live Activity updates contain only a phase, a fixed label and counts, never message text. The Lock Screen can
 still show the agent and chat name the app put on the activity; turn off Live Activities or notification

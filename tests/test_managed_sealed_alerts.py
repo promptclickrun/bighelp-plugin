@@ -3,37 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import zlib
+import uuid
 from pathlib import Path
 
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from loopdy_plugin.managed_notifications import ManagedNotificationError
-from loopdy_plugin.relay_crypto import b64url_decode, b64url_encode, key_id, public_key_bytes, public_key_from_x963, verify_p1363
-from loopdy_plugin.sealed_alerts import MAX_ENVELOPE_BYTES, alert_aad, avatar_aad, seal_alert, signature_input
-from test_managed_notifications import ManagedNotificationTests
+from loopdy_plugin.relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes
+from loopdy_plugin.sealed_alerts import MAX_ENVELOPE_BYTES, avatar_aad, seal_alert
+from test_managed_notifications import ManagedNotificationTests, open_sealed
 
 VECTOR = Path(__file__).resolve().parents[1] / "fixtures" / "contracts" / "sealed-alert-v2-vector.json"
-
-
-def open_sealed(envelope: dict, recipient: ec.EllipticCurvePrivateKey, sender_public: bytes) -> dict:
-    """What the phone does: check the host's signature, then decrypt."""
-    aad = alert_aad(grant_id=envelope["grantId"], event_id=envelope["eventId"],
-                    recipient_key_id=envelope["recipientKeyId"], sender_key_id=envelope["senderKeyId"],
-                    issued=envelope["issued"])
-    parts = {name: b64url_decode(envelope[name]) for name in
-             ("ephemeralPublicKey", "salt", "nonce", "ciphertext", "tag", "signature")}
-    verify_p1363(public_key_from_x963(sender_public), parts["signature"], signature_input(
-        aad=aad, ephemeral_public_key=parts["ephemeralPublicKey"], salt=parts["salt"], nonce=parts["nonce"],
-        ciphertext=parts["ciphertext"], tag=parts["tag"]))
-    shared = recipient.exchange(ec.ECDH(), public_key_from_x963(parts["ephemeralPublicKey"]))
-    derived = HKDF(algorithm=hashes.SHA256(), length=32, salt=parts["salt"],
-                   info=b"loopdy-sealed-alert-key-v2\0" + hashlib.sha256(aad).digest()).derive(shared)
-    packed = AESGCM(derived).decrypt(parts["nonce"], parts["ciphertext"] + parts["tag"], aad)
-    return json.loads(zlib.decompress(packed, -15))
 
 
 def open_avatar(grant_id: str, avatar: dict, blob: bytes) -> bytes:
@@ -43,10 +24,7 @@ def open_avatar(grant_id: str, avatar: dict, blob: bytes) -> bytes:
 
 
 class SealedAlertTests(ManagedNotificationTests):
-    def setUp(self):
-        super().setUp()
-        self.phone = ec.generate_private_key(ec.SECP256R1())
-        self.phone_public = b64url_encode(public_key_bytes(self.phone.public_key()))
+    # The base setUp enrolls the phone and registers its content key (self.phone).
 
     def finish_turn(self, turn: str, text: str):
         self.service.observe("post_llm_call", profile="default", session_id="native-session", turn_id=turn,
@@ -59,10 +37,46 @@ class SealedAlertTests(ManagedNotificationTests):
     def test_capabilities_advertise_sealed_alerts(self):
         self.assertEqual(self.service.capabilities()["sealedAlerts"], {"version": 2})
 
-    def test_without_a_phone_key_alerts_are_unchanged(self):
-        raw = json.loads(self.finish_turn("turn-a", "The report is ready."))
-        self.assertEqual(raw["version"], 2)
-        self.assertEqual(raw["content"]["text"], "The report is ready.")
+    def test_without_a_phone_key_no_alert_leaves_the_host(self):
+        # Enrolled, but the phone hasn't registered its key yet: nothing is queued
+        # or sent, rather than an alert the service could read.
+        self.service.remove(self.grant_id)  # only the keyless enrollment below exists
+        grant_id = str(uuid.uuid4())
+        self.grant = dict(self.grant, grantId=grant_id)
+        self.grant_id = grant_id
+        self.service.enroll(grant_id, str(uuid.uuid4()))
+        self.service.subscribe(grant_id, "default", "native-session", True)
+        self.calls.clear()
+        self.service.observe("post_llm_call", profile="default", session_id="native-session", turn_id="turn-a",
+                             assistant_response="PRIVATE report text")
+        self.service.observe("on_session_end", profile="default", session_id="native-session", turn_id="turn-a",
+                             completed=True, platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual([path for _, path, _, _ in self.calls if path.endswith("/events")], [])
+        with sqlite3.connect(self.service.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM pending WHERE grant_id=? AND path='/events'",
+                                        (grant_id,)).fetchone()[0], 0)
+        # Once the key arrives, the next alert goes out sealed.
+        self.service.register_recipient(grant_id, self.phone_public)
+        body = json.loads(self.finish_turn("turn-b", "The report is ready."))
+        self.assertEqual(body["version"], 3)
+        self.assertEqual(open_sealed(body["sealed"], self.phone, b64url_decode(self.service.public_key))["body"],
+                         "The report is ready.")
+
+    def test_an_unsealed_alert_queued_before_the_update_is_never_sent(self):
+        # A plugin older than this one could have queued an unsealed (version 2) alert.
+        intent = self.grant_id + ":" + "c" * 64
+        legacy = canonical_json_bytes({"version": 2, "eventId": intent, "eventType": "session.completed",
+                                       "content": {"kind": "reply", "text": "PRIVATE reply"}, "sound": True})
+        with sqlite3.connect(self.service.db_path) as db:
+            db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref)"
+                       " VALUES(?,?,?,?,?,'pending',?,?)",
+                       (intent, self.grant_id, "/events", legacy, self.now + 600, self.now, "legacy-ref"))
+        self.service.drain_pending()
+        self.assertEqual(self.calls, [])
+        with sqlite3.connect(self.service.db_path) as db:
+            self.assertEqual(db.execute("SELECT state FROM pending WHERE intent_id=?", (intent,)).fetchone()[0],
+                             "failed")
 
     def test_sealed_alert_hides_the_name_text_and_avatar_from_the_service(self):
         receipt = self.service.register_recipient(self.grant_id, self.phone_public)
