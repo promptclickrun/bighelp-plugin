@@ -34,6 +34,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from .reactions import REACTION_SCHEMA
 from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
 from .sealed_alerts import seal_alert, seal_avatar
 from .session_state import open_profile_store
@@ -114,6 +115,26 @@ def _turn_prompt(history: Any) -> tuple[Any, Any]:
     return None, None
 
 
+def _turn_reacted(history: Any) -> bool:
+    """Whether this turn's agent reacted to the person's message (``bighelp_react_to_message``).
+    Hermes retries a reply with no text, so a reaction that says it all ends on a bare marker."""
+    for message in reversed(history if isinstance(history, list) else ()):
+        if not isinstance(message, dict) or message.get("role") == "user":
+            return False
+        content = message.get("content")
+        if message.get("role") != "tool" or not isinstance(content, str) or len(content) > 65_536:
+            continue
+        try:
+            result = json.loads(content)
+        except ValueError:
+            continue
+        if (isinstance(result, dict) and result.get("schema") == REACTION_SCHEMA and result.get("success") is True
+                and any(isinstance(item, dict) and item.get("author") == "agent"
+                        for item in result.get("reactions") or ())):
+            return True
+    return False
+
+
 def _delivered_reply(response: Any, *, autonomous: bool, history: Any) -> Any:
     """``response`` as Hermes would deliver it: ``""`` when the turn stays silent, Hermes' notice
     when a person got a bare marker, else unchanged. Never raises; unsure means unchanged."""
@@ -132,7 +153,7 @@ def _delivered_reply(response: Any, *, autonomous: bool, history: Any) -> Any:
         if silence_allowed is None:  # Before the human-turn notice, Hermes kept every bare marker quiet.
             return ""
         kind, reply_expected = _turn_prompt(history)
-        if kind == _OFF_SCREEN_DISPLAY_KIND or silence_allowed(kind, reply_expected):
+        if kind == _OFF_SCREEN_DISPLAY_KIND or silence_allowed(kind, reply_expected) or _turn_reacted(history):
             return ""
         return _UNEXPECTED_SILENCE_REPLY
     except Exception:

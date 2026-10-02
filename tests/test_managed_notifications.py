@@ -338,9 +338,9 @@ class ManagedNotificationTests(unittest.TestCase):
             rules.is_intentional_silence_response=fail
         return patch.dict(sys.modules,{"gateway.response_filters":rules})
 
-    def chat_turn(self, turn, reply, *, prompt=None, platform="desktop"):
+    def chat_turn(self, turn, reply, *, prompt=None, platform="desktop", tools=()):
         history=[{"role":"user","content":"earlier","display_kind":"internal_notification"},{"role":"assistant","content":"ok"},
-                 dict({"role":"user","content":"now"},**(prompt or {})),{"role":"assistant","content":reply}]
+                 dict({"role":"user","content":"now"},**(prompt or {})),*tools,{"role":"assistant","content":reply}]
         self.service.observe("post_llm_call",profile="default",session_id="desktop-chat",turn_id=turn,assistant_response=reply,conversation_history=history,platform=platform)
         self.service.observe("on_session_end",profile="default",session_id="desktop-chat",turn_id=turn,completed=True,platform=platform)
 
@@ -358,6 +358,28 @@ class ManagedNotificationTests(unittest.TestCase):
             self.chat_turn("turn-b","no_reply.",prompt={"display_metadata":{"reply_expected":True}})
         notice="⚠️ The model returned only a silence marker for a message that needed a reply. Try again or rephrase."
         self.assertEqual(self.alerts(),[("session.completed",notice)]*2)
+
+    def test_a_reaction_then_a_bare_marker_is_the_whole_reply(self):
+        # Hermes retries a reply with no text, so an agent whose reaction says it all ends the turn
+        # on a marker. The reaction answered the person: no notice. A failed or removed reaction,
+        # or one from an earlier turn, doesn't count.
+        def reacted(reactions, success=True):
+            return [{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bighelp_react_to_message","arguments":"{}"}}]},
+                    {"role":"tool","tool_call_id":"call-1","content":json.dumps({"schema":"loopdy.message-reaction","version":1,"success":success,"rowId":7,"targetRole":"user","reactions":reactions})}]
+        thumbs=[{"emoji":"👍","author":"agent"}]
+        with self.hermes_rules():
+            self.chat_turn("turn-a","[SILENT]",tools=reacted(thumbs))
+        self.assertEqual(self.alerts(),[])
+        notice="⚠️ The model returned only a silence marker for a message that needed a reply. Try again or rephrase."
+        with self.hermes_rules():
+            self.chat_turn("turn-b","[SILENT]",tools=reacted(thumbs,success=False))
+            self.chat_turn("turn-c","[SILENT]",tools=reacted([]))
+            self.chat_turn("turn-d","[SILENT]",tools=[{"role":"tool","tool_call_id":"x","content":"not json"}])
+        self.assertEqual(self.alerts(),[("session.completed",notice)]*3)
+        # A reaction alongside words still alerts the words.
+        with self.hermes_rules():
+            self.chat_turn("turn-e","Congrats!",tools=reacted(thumbs))
+        self.assertEqual(self.alerts(),[("session.completed","Congrats!")])
 
     def test_turns_nobody_typed_stay_silent(self):
         # Off-screen notes (a widget tap), Hermes' internal notifications and
