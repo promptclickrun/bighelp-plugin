@@ -62,6 +62,16 @@ marker Hermes itself wouldn't send:
   keep every bare marker silent.
 - Failed runs always alert.
 
+### Staying signed in
+
+A rotating sign-in, like the Nous Portal's whose renewal token lasts a day, runs out if bighelp stays closed.
+So every eight hours the background sender asks the service to wake each enrolled phone (one with a content
+key) with a quiet push: `POST /v1/notifications/host-grants/<grantId>/wake` with
+`{"version": 1, "reason": "renew-sign-in"}`. The push has no text, sound or topic, only
+`bighelp_wake: {version: 1, type: "renew-sign-in", grantId}`, and the service sends at most one per grant every
+six hours. The app then renews its sign-in to each computer it isn't connected to. A refused wake (an older
+service answers 404) waits for the next interval and never removes the phone's enrollment.
+
 ## End-to-end encryption
 
 With a registered content key, the host seals each alert's title, text and avatar for that phone
