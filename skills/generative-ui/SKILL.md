@@ -18,6 +18,32 @@ official `tool_search`, `tool_describe`, and `tool_call` bridge to find and
 invoke that exact renderer. Do not route a visible renderer through the bridge,
 wrap it in another tool, or invent a replacement.
 
+## Reusable templates (optional)
+
+Rendering a card never saves it. `bighelp_save_ui_template` keeps a layout to
+fill in again later; it's optional, not a step after every card.
+
+- Save when the user asks to reuse a card, has asked for similar cards before,
+  or the layout fits a likely recurring need (a weekly summary, a daily
+  check-in). Skip one-off cards and unfinished experiments.
+- Call `bighelp_search_card_templates` first. Render a match with
+  `bighelp_render_card_template`, or update it by passing its `template_id`
+  and the `version` you read as `expected_version`. A save with a name or
+  layout that's already taken is refused and names the match.
+- `layout` is a `bighelp_render_card` document with `data_sources: []`. Put
+  each value that changes behind a `{{name}}` placeholder, in text or in a
+  `{"literal": "{{name}}"}` value. Placeholders can't fill ids, types,
+  formats or other structure.
+- Declare every placeholder once in `parameters` (`name`, `type`: string,
+  integer, number or boolean, `description`, `required`, optional `enum` and
+  `default`). Optional parameters need a default. A whole-value placeholder
+  keeps its type, so a title needs a string parameter.
+- Save structure, not data: no names, places, balances, health numbers or
+  credentials in the layout, defaults or descriptions. Use made-up examples
+  when you show the user what you saved.
+- Saving is private to this agent. It doesn't render, notify, schedule or
+  publish anything.
+
 ## Choose the delivery path first
 
 ### A. Inline card in the active chat
