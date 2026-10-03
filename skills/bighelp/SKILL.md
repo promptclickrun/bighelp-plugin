@@ -62,6 +62,13 @@ Cards hold only the values you put in them: no live data, code, HTML or
 secrets. Current-data cards need their source and time. Payload rules and
 examples: `skill_view("loopdy:generative-ui")`.
 
+Saving a layout as a template with `bighelp_save_ui_template` is optional.
+Save one when the user asks to reuse it, keeps asking for similar cards, or
+it clearly fits something recurring. Skip one-off cards and experiments.
+Search first and reuse or update a match. A template keeps the layout and
+`{{placeholders}}`, never the user's personal details or today's values. It
+stays private to this agent: saving doesn't show, share or publish anything.
+
 ## Feed, Ideas and Goals
 
 The app has three boards beside the chat. Write to them with `bighelp_board`:

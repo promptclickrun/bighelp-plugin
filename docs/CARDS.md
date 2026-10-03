@@ -211,6 +211,69 @@ A template bundle is declarative data with `id`, `version`, `name`, `summary`,
 7. Removing a template deletes its install state and synchronization record. It
    does not rewrite cards already stored in transcripts.
 
+### Templates an agent saves
+
+`bighelp_save_ui_template` lets an agent keep a layout it will fill in again.
+It is optional, and rendering a card never saves one. A saved template goes
+into the same per-profile store as installed templates, so
+`bighelp_search_card_templates`, `bighelp_get_card_template` and
+`bighelp_render_card_template` work on it, also after a restart.
+
+Arguments:
+
+| Field | Rules |
+|---|---|
+| `name` | 1 to 120 characters. Unique in the profile, ignoring case and spacing |
+| `purpose` | 1 to 600 characters. Stored as the bundle's `summary` |
+| `usage_guidance` | 1 to 600 characters: when to pick this template |
+| `layout` | A `bighelp_render_card` document with `data_sources: []` and `{{name}}` placeholders |
+| `parameters` | 1 to 32 of `{name, type, description, required, default?, enum?, title?}`. `type` is string, integer, number or boolean |
+| `template_id`, `expected_version` | Only to update a template this agent saved, together |
+
+Rules:
+
+- Every placeholder must be declared and every parameter used. Placeholders
+  fill text and literal values only, as in step 6 above. `{{ name }}` with
+  spaces is refused rather than shown as text.
+- Optional parameters need a default, which rendering fills in when the
+  parameter is left out. A missing required, unknown or wrongly typed
+  parameter fails the render and names it.
+- The layout is rendered once with stand-in values before it is stored, so a
+  saved template is known to render. A layout without placeholders is a
+  snapshot and is refused, as is anything that looks like a credential.
+  Arguments are capped at 80 KB, and a profile at 500 templates (the most the
+  app's list reads).
+- A new save gets a stable id from its name (`saved-daily-steps`), version 1,
+  author `Your agent` and license `Private`. The id never changes, even when
+  the template is renamed.
+- Saving the same thing again returns `unchanged`. A different template with
+  the same name is refused as `duplicate_name`, and the same layout and
+  parameters under another name as `duplicate_layout`; both name the existing
+  template instead of overwriting it.
+- An update needs `template_id` and the current version as
+  `expected_version`; a stale version is a `version_conflict`. Updates bump the
+  version and only apply to templates an agent saved, never to ones installed
+  from the app.
+- Templates belong to the agent's profile. Other profiles can't see, render or
+  change them.
+- Saving only writes the store. It doesn't render, notify, schedule, post to a
+  board or publish to the Marketplace.
+
+The result is `{"status": "created" | "updated" | "unchanged", "template_id",
+"version", "sha256", "template", "usage_guidance", "parameters_schema",
+"render_with"}`, or `{"status": "rejected", "error": {"code", "message", …}}`
+with one of `invalid_arguments`, `payload_too_large`, `invalid_parameter`,
+`invalid_layout`, `no_parameters`, `undeclared_placeholder`,
+`unused_parameter`, `malformed_placeholder`, `misplaced_placeholder`,
+`render_check_failed`, `sensitive_content`, `duplicate_name`,
+`duplicate_layout`, `template_not_found`, `not_a_saved_template`,
+`missing_expected_version`, `version_conflict` or `catalog_full`.
+
+Search and get results add `origin` (`saved` or `installed`) and, for saved
+templates, `usage_guidance`. The `/native/cards/templates/list` route is
+unchanged: it returns saved templates too, with the same fields as installed
+ones.
+
 Templates never install native code or add new component capabilities. No
 production catalog URL is configured in this repository. Public catalog
 publication requires a separately reviewed catalog repository, governance,

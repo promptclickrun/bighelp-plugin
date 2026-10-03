@@ -245,6 +245,20 @@ def _template_store(store: Any) -> Any:
     return store
 
 
+def _template_details(store: Any, profile: str) -> dict[str, dict[str, str]]:
+    """origin ("saved" or "installed") and, for saved ones, when to pick them."""
+    reader = getattr(store, "card_template_metadata", None)
+    if not callable(reader):
+        return {}
+    return {
+        template_id: {
+            "origin": detail["origin"],
+            **({"usage_guidance": detail["usage_guidance"]} if detail["usage_guidance"] else {}),
+        }
+        for template_id, detail in reader(profile=profile).items()
+    }
+
+
 def _template_search_handler(*, store: Any, profile: str):
     def handle(payload, **_kwargs):
         if not isinstance(payload, dict) or set(payload) != {"query"}:
@@ -252,21 +266,28 @@ def _template_search_handler(*, store: Any, profile: str):
         query = payload.get("query")
         if not isinstance(query, str) or len(query) > 120:
             raise ValueError("template search query is invalid")
-        needle = query.strip().casefold()
+        words = query.casefold().split()
+        details = _template_details(store, profile)
         templates = []
         for template in _template_store(store).list_card_templates(profile=profile):
+            detail = details.get(template["id"], {})
             searchable = " ".join(
-                str(template.get(key) or "")
-                for key in ("id", "name", "summary", "author")
+                [str(template.get(key) or "") for key in ("id", "name", "summary", "author")]
+                + [detail.get("usage_guidance", "")]
             ).casefold()
-            if needle and needle not in searchable:
+            # Every word must appear, in any order, so a search finds a saved match
+            # before an agent saves a near-duplicate.
+            if not all(word in searchable for word in words):
                 continue
             templates.append({
-                key: template[key]
-                for key in (
-                    "id", "version", "name", "summary", "author", "license",
-                    "minimum_card_version", "sha256"
-                )
+                **{
+                    key: template[key]
+                    for key in (
+                        "id", "version", "name", "summary", "author", "license",
+                        "minimum_card_version", "sha256"
+                    )
+                },
+                **detail,
             })
         return canonical_card_json({"templates": templates})
 
@@ -286,7 +307,10 @@ def _template_get_handler(*, store: Any, profile: str):
         )
         if template is None:
             raise ValueError("bighelp card template was not found")
-        return canonical_card_json({"template": template})
+        return canonical_card_json({
+            "template": template,
+            **_template_details(store, profile).get(template["id"], {}),
+        })
 
     return handle
 
@@ -327,8 +351,19 @@ def _template_render_handler(
 def _validated_template_parameters(schema: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     properties = schema["properties"]
     required = set(schema["required"])
-    if set(values) - set(properties) or not required.issubset(values):
-        raise ValueError("template parameters do not match the declared schema")
+    missing = sorted(required - set(values))
+    if missing:
+        raise ValueError(
+            "template parameters do not match the declared schema: missing required "
+            + ", ".join(missing)
+        )
+    unknown = sorted(set(values) - set(properties))
+    if unknown:
+        shown = [name for name in unknown if _TEMPLATE_PARAMETER_NAME.fullmatch(str(name))][:8]
+        raise ValueError(
+            "template parameters do not match the declared schema: unknown "
+            + (", ".join(shown) if shown else "parameter names")
+        )
     normalized: dict[str, Any] = {}
     for name, property_schema in properties.items():
         if name not in values:
@@ -359,6 +394,7 @@ def _validated_template_parameters(schema: dict[str, Any], values: dict[str, Any
     return normalized
 
 
+_TEMPLATE_PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _TEMPLATE_SLOT = re.compile(r"\{\{([A-Za-z][A-Za-z0-9_-]{0,63})\}\}")
 _TEMPLATE_STRUCTURAL_KEYS = frozenset({
     "schema", "version", "type", "id", "source", "pointer", "op", "operation",
@@ -791,6 +827,15 @@ def register(
                 ),
             ),
         )
+        if hasattr(store, "save_card_template"):
+            from . import saved_card_templates
+
+            template_tools += ((
+                saved_card_templates.TOOL_NAME,
+                saved_card_templates.DESCRIPTION,
+                saved_card_templates.parameters(),
+                saved_card_templates.handler(store=store, profile=selected_profile, now=clock),
+            ),)
         for name, description, parameters, handler in template_tools:
             ctx.register_tool(
                 name=name,
