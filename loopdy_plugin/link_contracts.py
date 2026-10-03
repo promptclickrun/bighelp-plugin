@@ -118,7 +118,7 @@ HEALTH_TYPES = (
     "body_fat_percentage",
     "workout",
 )
-PLUGIN_VERSION = "3.4.5"
+PLUGIN_VERSION = "3.4.6"
 AVAILABLE_WIKI_OPERATIONS = available_wiki_operations()
 GROUPS_OPERATIONS = frozenset(
     {
