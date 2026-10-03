@@ -82,6 +82,7 @@ class GenerativeUiActionTests(unittest.TestCase):
                 "bighelp_render_card",
                 "bighelp_render_checklist", "bighelp_render_selection", "bighelp_render_automation",
                 "bighelp_search_card_templates", "bighelp_get_card_template", "bighelp_render_card_template",
+                "bighelp_save_ui_template",
                 "bighelp_await_form_response", "bighelp_marketplace_prepare_upload",
                 "bighelp_react_to_message", "bighelp_request_secure_input",
             },

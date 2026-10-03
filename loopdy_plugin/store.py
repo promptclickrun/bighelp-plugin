@@ -11,6 +11,7 @@ import re
 import sqlite3
 import threading
 import time
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -47,6 +48,23 @@ class CardTemplateConflict(ValueError):
 
 class CardTemplateLimit(ValueError):
     """A bounded template catalog cannot represent all stored rows."""
+
+
+class CardTemplateSaveRejected(ValueError):
+    """An agent's template save was refused, with a code and details it can act on."""
+
+    def __init__(self, code: str, message: str, **details: Any):
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+# Agents save their own templates; the app installs the rest. Only saved ones can be
+# updated by an agent, so a save never overwrites a template someone installed.
+CARD_TEMPLATE_ORIGIN_INSTALLED = "installed"
+CARD_TEMPLATE_ORIGIN_SAVED = "saved"
+SAVED_CARD_TEMPLATE_AUTHOR = "Your agent"
+SAVED_CARD_TEMPLATE_LICENSE = "Private"
 
 
 class BighelpStore:
@@ -559,15 +577,17 @@ class BighelpStore:
                 """
                 INSERT INTO card_templates (
                     profile, template_id, version, name, summary, sha256,
-                    template_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    template_json, created_at, updated_at, origin, usage_guidance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
                 ON CONFLICT(profile, template_id) DO UPDATE SET
                     version=excluded.version,
                     name=excluded.name,
                     summary=excluded.summary,
                     sha256=excluded.sha256,
                     template_json=excluded.template_json,
-                    updated_at=excluded.updated_at
+                    updated_at=excluded.updated_at,
+                    origin=excluded.origin,
+                    usage_guidance=excluded.usage_guidance
                 """,
                 (
                     owner,
@@ -579,9 +599,192 @@ class BighelpStore:
                     canonical_card_json(normalized),
                     now,
                     now,
+                    CARD_TEMPLATE_ORIGIN_INSTALLED,
                 ),
             )
         return {"changed": True, "template": normalized}
+
+    def save_card_template(
+        self,
+        *,
+        profile: str,
+        name: str,
+        summary: str,
+        usage_guidance: str,
+        parameters_schema: Mapping[str, Any],
+        document: Mapping[str, Any],
+        template_id: str | None = None,
+        expected_version: int | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Create or explicitly update one agent-saved template in one profile.
+
+        Creating never replaces anything: a matching name or layout is reported
+        back so the agent can reuse or update it. Updating names the template and
+        the version the agent last saw, and only touches agent-saved templates.
+        """
+        owner = _identifier(profile, "profile")
+        guidance = _required_text(usage_guidance, "usage guidance", 1_000)
+        name_key = _card_template_name_key(name)
+        document_hash = hashlib.sha256(canonical_card_json(dict(document)).encode("utf-8")).hexdigest()
+        schema_json = canonical_card_json(dict(parameters_schema))
+        now = int(time.time())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT template_id, version, name, sha256, template_json, origin, usage_guidance "
+                "FROM card_templates WHERE profile=? ORDER BY template_id",
+                (owner,),
+            ).fetchall()
+            by_id = {str(row["template_id"]): row for row in rows}
+
+            def same_content(row: sqlite3.Row) -> bool:
+                stored = json.loads(str(row["template_json"]))
+                return (
+                    str(row["origin"]) == CARD_TEMPLATE_ORIGIN_SAVED
+                    and stored.get("name") == name.strip()
+                    and stored.get("summary") == summary.strip()
+                    and str(row["usage_guidance"]) == guidance
+                    and str(row["sha256"]) == document_hash
+                    and canonical_card_json(stored.get("parameters_schema")) == schema_json
+                )
+
+            def unchanged(row: sqlite3.Row) -> dict[str, Any]:
+                return {
+                    "status": "unchanged",
+                    "template": json.loads(str(row["template_json"])),
+                    "usage_guidance": guidance,
+                }
+
+            def name_taken(except_id: str | None) -> None:
+                for row in rows:
+                    if row["template_id"] != except_id and _card_template_name_key(row["name"]) == name_key:
+                        raise CardTemplateSaveRejected(
+                            "duplicate_name",
+                            "Another template already has this name. Reuse it, update it with "
+                            "template_id and expected_version, or choose a different name.",
+                            existing_template_id=str(row["template_id"]),
+                            existing_version=int(row["version"]),
+                            existing_origin=str(row["origin"]),
+                        )
+
+            if template_id is None:
+                for row in rows:
+                    if _card_template_name_key(row["name"]) == name_key and same_content(row):
+                        return unchanged(row)
+                name_taken(None)
+                for row in rows:
+                    stored = json.loads(str(row["template_json"]))
+                    if (
+                        str(row["sha256"]) == document_hash
+                        and canonical_card_json(stored.get("parameters_schema")) == schema_json
+                    ):
+                        raise CardTemplateSaveRejected(
+                            "duplicate_layout",
+                            "This layout and its parameters are already saved under another name. "
+                            "Render that template, or update it with template_id and expected_version.",
+                            existing_template_id=str(row["template_id"]),
+                            existing_version=int(row["version"]),
+                            existing_name=str(row["name"]),
+                        )
+                if len(rows) >= limit:
+                    raise CardTemplateSaveRejected(
+                        "catalog_full",
+                        f"This agent already has {limit} card templates. Ask the user which to "
+                        "remove in the app before saving another.",
+                    )
+                identifier = _saved_card_template_id(name, taken=set(by_id))
+                version = 1
+                status = "created"
+                created_at = now
+            else:
+                identifier = _card_template_id(template_id)
+                current = by_id.get(identifier)
+                if current is None:
+                    raise CardTemplateSaveRejected(
+                        "template_not_found",
+                        "No template with this id belongs to this agent. Search for it first, or "
+                        "leave out template_id to save a new one.",
+                    )
+                if str(current["origin"]) != CARD_TEMPLATE_ORIGIN_SAVED:
+                    raise CardTemplateSaveRejected(
+                        "not_a_saved_template",
+                        "This template was installed in the app, so it can't be changed here. "
+                        "Save your version under a new name instead.",
+                    )
+                current_version = int(current["version"])
+                if expected_version != current_version:
+                    raise CardTemplateSaveRejected(
+                        "version_conflict",
+                        "The template changed since you read it. Get it again and retry with its "
+                        "current version.",
+                        current_version=current_version,
+                    )
+                name_taken(identifier)
+                if same_content(current):
+                    return unchanged(current)
+                version = current_version + 1
+                status = "updated"
+                created_at = None
+            template = _card_template({
+                "id": identifier,
+                "version": version,
+                "name": name,
+                "summary": summary,
+                "author": SAVED_CARD_TEMPLATE_AUTHOR,
+                "license": SAVED_CARD_TEMPLATE_LICENSE,
+                "minimum_card_version": 1,
+                "parameters_schema": dict(parameters_schema),
+                "document": dict(document),
+                "sha256": document_hash,
+            })
+            connection.execute(
+                """
+                INSERT INTO card_templates (
+                    profile, template_id, version, name, summary, sha256,
+                    template_json, created_at, updated_at, origin, usage_guidance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile, template_id) DO UPDATE SET
+                    version=excluded.version,
+                    name=excluded.name,
+                    summary=excluded.summary,
+                    sha256=excluded.sha256,
+                    template_json=excluded.template_json,
+                    updated_at=excluded.updated_at,
+                    origin=excluded.origin,
+                    usage_guidance=excluded.usage_guidance
+                """,
+                (
+                    owner,
+                    template["id"],
+                    template["version"],
+                    template["name"],
+                    template["summary"],
+                    template["sha256"],
+                    canonical_card_json(template),
+                    created_at if created_at is not None else now,
+                    now,
+                    CARD_TEMPLATE_ORIGIN_SAVED,
+                    guidance,
+                ),
+            )
+        return {"status": status, "template": template, "usage_guidance": guidance}
+
+    def card_template_metadata(self, *, profile: str) -> dict[str, dict[str, str]]:
+        """Where each of a profile's templates came from, and when to pick saved ones."""
+        owner = _identifier(profile, "profile")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT template_id, origin, usage_guidance FROM card_templates WHERE profile=?",
+                (owner,),
+            ).fetchall()
+        return {
+            str(row["template_id"]): {
+                "origin": str(row["origin"]),
+                "usage_guidance": str(row["usage_guidance"]),
+            }
+            for row in rows
+        }
 
     def list_card_templates(self, *, profile: str, limit: int | None = None) -> list[dict[str, Any]]:
         owner = _identifier(profile, "profile")
@@ -3598,6 +3801,8 @@ class BighelpStore:
                         template_json TEXT NOT NULL,
                         created_at INTEGER NOT NULL,
                         updated_at INTEGER NOT NULL,
+                        origin TEXT NOT NULL DEFAULT 'installed',
+                        usage_guidance TEXT NOT NULL DEFAULT '',
                         PRIMARY KEY (profile, template_id)
                     );
                     CREATE INDEX IF NOT EXISTS card_templates_profile_name_idx
@@ -3620,6 +3825,20 @@ class BighelpStore:
                     );
                     """
                 )
+                card_template_columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(card_templates)").fetchall()
+                }
+                if "origin" not in card_template_columns:
+                    connection.execute(
+                        "ALTER TABLE card_templates ADD COLUMN origin TEXT NOT NULL "
+                        "DEFAULT 'installed'"
+                    )
+                if "usage_guidance" not in card_template_columns:
+                    connection.execute(
+                        "ALTER TABLE card_templates ADD COLUMN usage_guidance TEXT NOT NULL "
+                        "DEFAULT ''"
+                    )
                 marketplace_columns = {
                     row[1]
                     for row in connection.execute(
@@ -4133,6 +4352,22 @@ def _card_template_id(value: Any) -> str:
     if type(value) is not str or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", value) is None:
         raise ValueError("Card template id is invalid")
     return value
+
+
+def _card_template_name_key(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _saved_card_template_id(name: str, *, taken: set[str]) -> str:
+    """A readable id from the name; it never changes once saved, even on rename."""
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:48].strip("-")
+    digest = hashlib.sha256(_card_template_name_key(name).encode("utf-8")).hexdigest()
+    base = f"saved-{slug or digest[:8]}"
+    for candidate in (base, f"{base}-{digest[:6]}", *(f"{base}-{digest[:6]}-{n}" for n in range(2, 100))):
+        if candidate not in taken:
+            return candidate
+    raise CardTemplateSaveRejected("catalog_full", "No free template id is left for this name.")
 
 
 def _card_template_hash(value: Any) -> str:
