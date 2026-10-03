@@ -144,7 +144,8 @@ class NativeAPITests(unittest.TestCase):
             expected.extend(("native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1"))
         from loopdy_plugin.agent_board import available as board_available
         if board_available():
-            expected.extend(("native-agent-board-v1", "native-agent-board-feedback-v1"))
+            expected.extend(("native-agent-board-v1", "native-agent-board-feedback-v1",
+                             "native-agent-board-goal-categories-v1"))
         from loopdy_plugin.native_attachments import available as attachments_available
         if attachments_available():
             expected.extend(("native-agent-attachments-v1", "native-agent-media-v1"))
@@ -260,6 +261,7 @@ class NativeAPITests(unittest.TestCase):
         post = store.publish("feed", title="Evening AI news", body="Three stories.", icon="🗝️",
                              images=[str(png), "https://example.com/a.jpg"], links=["https://example.com/story"])
         store.publish("goal", title="Package watch", section="tracking", note="Out for delivery", item_id="pkg")
+        store.publish("goal", title="Run a 10k", category="health", item_id="run")
         store.record_activity(session_id="s1", turn_id="t1", request="Check the porch", summary="Bag delivered.",
                               category="seeing", tools=["vision_analyze"], outcome="done")
         store.record_approval(session_id="s1", description="HTTPS connection to example.com",
@@ -274,6 +276,8 @@ class NativeAPITests(unittest.TestCase):
         self.assertEqual([item["title"] for item in items], ["Evening AI news"])
         self.assertEqual(items[0]["images"], [{"index": 0, "mimeType": "image/png"}, {"url": "https://example.com/a.jpg"}])
         self.assertNotIn(str(self.home), listed.text)
+        goals = {item["id"]: item for item in board("list", {"agentId": "default", "kinds": ["goal"]}).json()["items"]}
+        self.assertEqual((goals["run"]["category"], goals["pkg"]["category"]), ("health", ""))
 
         liked = board("update", {"agentId": "default", "itemId": post["id"], "liked": True})
         self.assertTrue(liked.json()["item"]["liked"])

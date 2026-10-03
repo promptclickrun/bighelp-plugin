@@ -6,8 +6,8 @@ import tempfile
 import unittest
 
 from loopdy_plugin.agent_board import (
-    ANSWER_MEMORY_SECONDS, ActivityRecorder, BoardError, BoardStore, MAX_ITEMS_PER_KIND, handle_tool,
-    tool_category,
+    ANSWER_MEMORY_SECONDS, GOAL_CATEGORIES, TOOL_PARAMETERS, ActivityRecorder, BoardError, BoardStore,
+    MAX_ITEMS_PER_KIND, handle_tool, tool_category,
 )
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 32
@@ -54,6 +54,45 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.store.publish("idea", title="Audit Google access", section="Security", item_id="audit")
         self.store.publish("idea", title="Audit Google access now", section="Security", item_id="audit")
         self.assertEqual([idea["title"] for idea in self.store.items(("idea",))], ["Audit Google access now"])
+
+    def test_goals_carry_a_category_from_the_fixed_list(self):
+        self.assertEqual(GOAL_CATEGORIES, ("health", "relationships", "finance", "career", "interests",
+                                           "productivity", "other"))
+        goal = self.store.publish("goal", title="Run a 10k", category="Health", item_id="10k")
+        self.assertEqual(goal["category"], "health")
+        self.assertEqual(self.store.publish("goal", title="Inbox under 20")["category"], "")
+        with self.assertRaises(BoardError):
+            self.store.publish("goal", title="Nope", category="hobbies")
+        with self.assertRaises(BoardError):
+            self.store.publish("goal", title="Nope", category=3)
+        # Republishing without one keeps it; update_goal can move it.
+        self.assertEqual(self.store.publish("goal", title="Run a 10k", note="Week 2", item_id="10k")["category"],
+                         "health")
+        self.assertEqual(self.store.update_goal("10k", category="interests")["category"], "interests")
+        self.assertEqual(self.store.update_goal("10k", note="Week 3")["category"], "interests")
+        with self.assertRaises(BoardError):
+            self.store.update_goal("10k", category="hobbies")
+        # Only goals have one.
+        self.assertEqual(self.store.publish("feed", title="News", category="health")["category"], "")
+        self.assertEqual(self.store.publish("idea", title="Plan", category="health")["category"], "")
+
+    def test_the_agent_sets_and_sees_goal_categories(self):
+        self.assertEqual(TOOL_PARAMETERS["properties"]["category"]["enum"], list(GOAL_CATEGORIES))
+        created = json.loads(handle_tool({"action": "goal", "title": "Save for Lisbon", "category": "finance",
+                                          "id": "lisbon"}, self.store))
+        self.assertEqual(created["kind"], "goal")
+        listed = json.loads(handle_tool({"action": "list", "kind": "goal"}, self.store))["items"]
+        self.assertEqual(listed[0]["category"], "finance")
+        moved = json.loads(handle_tool({"action": "update_goal", "id": "lisbon", "category": "other"}, self.store))
+        self.assertTrue(moved["ok"])
+        self.assertIn("error", json.loads(handle_tool({"action": "goal", "title": "x", "category": "pets"},
+                                                      self.store)))
+
+    def test_an_idea_in_a_category_section_becomes_a_goal_in_that_category(self):
+        health = self.store.publish("idea", title="Walk after lunch", section="Health")
+        money = self.store.publish("idea", title="Cheaper phone plan", section="Money")
+        self.assertEqual(self.store.promote_idea(health["id"])["category"], "health")
+        self.assertEqual(self.store.promote_idea(money["id"])["category"], "")
 
     def test_dismissed_items_hide_and_republishing_restores(self):
         item = self.store.publish("goal", title="Package watch", section="tracking", item_id="pkg")
@@ -200,6 +239,7 @@ class AgentBoardStoreTests(unittest.TestCase):
         items = {item["id"]: item for item in BoardStore(legacy).items()}
         self.assertEqual((items["a"]["rating"], items["b"]["rating"]), ("up", "none"))
         self.assertTrue(items["a"]["read"] and items["b"]["read"], "Nothing already there shows as new")
+        self.assertEqual((items["a"]["category"], items["b"]["category"]), ("", ""), "Old goals have no category")
         self.assertFalse(BoardStore(legacy).publish("feed", title="Fresh")["read"])
 
 class ActivityRecorderTests(unittest.TestCase):

@@ -241,15 +241,18 @@ def _native_features(
     try:
         from .agent_board import CAPABILITY as board_capability
         from .agent_board import FEEDBACK_CAPABILITY as board_feedback_capability
+        from .agent_board import GOAL_CATEGORIES_CAPABILITY as board_categories_capability
         from .agent_board import available as board_available
         if board_available():
-            features.extend((board_capability, board_feedback_capability))
+            features.extend((board_capability, board_feedback_capability, board_categories_capability))
         else:
             skip(board_capability, "public profile helpers are unimportable.")
             skip(board_feedback_capability, "public profile helpers are unimportable.")
+            skip(board_categories_capability, "public profile helpers are unimportable.")
     except ImportError:
         skip("native-agent-board-v1", "agent board support is unimportable.")
         skip("native-agent-board-feedback-v1", "agent board support is unimportable.")
+        skip("native-agent-board-goal-categories-v1", "agent board support is unimportable.")
     try:
         from .native_attachments import CAPABILITY as attachments_capability
         from .native_attachments import MEDIA_CAPABILITY as media_capability

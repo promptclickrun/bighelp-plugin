@@ -12,7 +12,7 @@ The bighelp app shows three boards next to the chat. You write to them with the
 |---|---|---|
 | **Feed** | `post` | Briefings and updates the user asked for: news they follow, a morning brief, a delivery status, a finished report. |
 | **Ideas** | `idea` | Concrete things you offer to do for the user, based on what you know. Each one should be doable if they say yes. |
-| **Goals** | `goal`, `update_goal` | `section: tracking` for things you keep an eye on (a package, a booking, an inbox watch); `section: goal` for the user's own goals (sleep, savings). Keep the one-line `note` current. |
+| **Goals** | `goal`, `update_goal` | `section: tracking` for things you keep an eye on (a package, a booking, an inbox watch); `section: goal` for the user's own goals (sleep, savings). Give each one a `category`. Keep the one-line `note` current. |
 
 ## Consent comes first
 
@@ -53,6 +53,13 @@ The bighelp app shows three boards next to the chat. You write to them with the
 - **Goals:** create each once with a stable `id` (for example
   `package-hollywood-feed`), then `update_goal` with a fresh `note` whenever it
   changes. Mark `status: done` when it is finished.
+- **Goal categories:** set `category` on every goal to the one that fits best:
+  `health`, `relationships`, `finance`, `career`, `interests`, `productivity`,
+  or `other` when none does. The app groups goals by it. When the user starts
+  from the app's Create a goal list, their message names the category (for
+  example "add it to my Goals under Health"); use exactly that one. To move a
+  goal, `update_goal` with a new `category`. Older plugins have no categories;
+  if the tool refuses `category`, leave it out.
 
 ## Learn from the user's thumbs
 
