@@ -20,7 +20,8 @@ PROCESS_FEATURES = (
     "native-context-v1", "serving-profile-v1", "native-card-templates-v1",
     "native-voice-v1", "native-device-tools-v1", "native-room-activity-v1",
     "native-project-git-read-v1", "native-agent-templates-v1",
-    "native-workspace-files-v1", "native-workspace-recent-v1", "native-host-restart-v1",
+    "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
+    "native-host-restart-v1",
     "native-provider-usage-v1", "native-provider-sign-in-v1",
 )
 WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
@@ -57,13 +58,14 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.templates = module("loopdy_plugin.agent_templates", CAPABILITY=PROCESS_FEATURES[7],
                                 available=Mock(return_value=True))
         self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[8],
-                            RECENT_CAPABILITY=PROCESS_FEATURES[9], available=Mock(return_value=True))
-        self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
-        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[10],
-                              available=Mock(return_value=True))
-        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[11],
+                            RECENT_CAPABILITY=PROCESS_FEATURES[9], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[10],
                             available=Mock(return_value=True))
-        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[12],
+        self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
+        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[11],
+                              available=Mock(return_value=True))
+        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[12],
+                            available=Mock(return_value=True))
+        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[13],
                               available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in,
@@ -123,7 +125,8 @@ class NativeStartupLoggingTests(unittest.TestCase):
             "hermes_cli.profiles": ("native-card-templates-v1", "native-voice-v1"),
             "loopdy_plugin.native_device_tools": ("native-device-tools-v1",),
             "loopdy_plugin.agent_templates": ("native-agent-templates-v1",),
-            "loopdy_plugin.workspace_artifacts": ("native-workspace-files-v1", "native-workspace-recent-v1"),
+            "loopdy_plugin.workspace_artifacts": ("native-workspace-files-v1", "native-workspace-recent-v1",
+                                                  "native-workspace-hermes-home-v1"),
         }
         for name, omitted in missing.items():
             with self.subTest(module=name), patch.dict(sys.modules, {name: None}), \

@@ -126,7 +126,7 @@ class AgentTemplateTests(unittest.TestCase):
         self.launched_in(self.home)
         with self.assertRaises(templates.AgentTemplateError) as caught:
             templates._save("default", self.document(), None)
-        self.assertEqual(caught.exception.code, "workspace_not_configured")
+        self.assertEqual(caught.exception.code, "workspace_hermes_folder")
         self.assertFalse((self.home / ".loopdy").exists())
 
     def test_zero_progress_write_fails_without_leaving_temporary_file(self):

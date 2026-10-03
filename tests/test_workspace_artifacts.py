@@ -160,8 +160,45 @@ class WorkspaceArtifactRouteTests(unittest.TestCase):
         (self.home / ".env").write_text("FIXTURE_KEY=not-for-the-phone\n")
         response = self.request("scope")
         self.assertEqual(response.status_code, 409, response.text)
-        self.assertEqual(response.json()["error"]["code"], "workspace_not_configured")
+        self.assertEqual(response.json()["error"]["code"], "workspace_hermes_folder")
         self.assertNotIn("not-for-the-phone", self.request("read", str(self.home / ".env")).text)
+
+    def test_hosted_hermes_shows_the_workspace_folder_in_its_own_folder_without_secrets(self):
+        # The Nous Portal image runs Hermes in its home (/opt/data, also HOME) with
+        # terminal.cwd ".", and makes /opt/data/workspace for the agent.
+        self.launched_in(self.home)
+        (self.home / "config.yaml").write_text(yaml.safe_dump({"terminal": {"backend": "local", "cwd": "."}}))
+        (self.home / ".env").write_text("FIXTURE_KEY=not-for-the-phone\n")
+        root = self.home / "workspace"
+        (root / "meetings").mkdir(parents=True)
+        (root / "mcp-tokens").mkdir()
+        (root / "notes.md").write_text("made by the agent")
+        (root / "meetings" / "transcript.txt").write_text("meeting notes")
+        for secret in (root / ".env", root / "auth.json", root / "meetings" / "node_token.json",
+                       root / "mcp-tokens" / "server.json"):
+            secret.write_text("not-for-the-phone")
+        self.assertIn(files.HERMES_HOME_CAPABILITY, self.context().json()["features"])
+        scope = self.request("scope")
+        self.assertEqual(scope.status_code, 200, scope.text)
+        self.assertEqual(scope.json()["workspace"]["root"], str(root.resolve()))
+        self.assertEqual(scope.json()["workspace"]["origin"], "hermes-workspace")
+        self.assertEqual(scope.json()["workspace"]["source"], "terminal.cwd")
+        listing = self.request("list")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual({row["name"] for row in listing.json()["entries"]}, {"notes.md", "meetings"})
+        meetings = self.request("list", str(root.resolve() / "meetings"))
+        self.assertEqual([row["name"] for row in meetings.json()["entries"]], ["transcript.txt"])
+        for path in (root / ".env", root / "auth.json", root / "meetings" / "node_token.json",
+                     root / "mcp-tokens" / "server.json", self.home / ".env"):
+            response = self.request("read", str(path.resolve()))
+            self.assertNotEqual(response.status_code, 200, path)
+            self.assertNotIn("not-for-the-phone", response.text)
+        self.assertNotEqual(self.request("list", str(root.resolve() / "mcp-tokens")).status_code, 200)
+        self.history([(None, self.wrote(root.resolve() / "auth.json"), 500.0),
+                      (None, self.wrote(root.resolve() / "notes.md"), 400.0)])
+        recent = self.request("recent")
+        self.assertEqual(recent.status_code, 200, recent.text)
+        self.assertEqual({row["name"] for row in recent.json()["entries"]}, {"notes.md", "transcript.txt"})
 
     def test_container_and_remote_backends_say_why_instead_of_not_configured(self):
         root = self.home / "workspace"

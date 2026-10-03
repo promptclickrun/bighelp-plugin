@@ -163,7 +163,7 @@ class WorkspaceRootTests(unittest.TestCase):
         self.configure()
         os.chdir(self.hermes)
         error = self.refusal()
-        self.assertEqual((error.status, error.code), (409, "workspace_not_configured"))
+        self.assertEqual((error.status, error.code), (409, "workspace_hermes_folder"))
         (self.hermes / "logs").mkdir()
         os.chdir(self.hermes / "logs")
         self.assertEqual(self.refusal().code, "workspace_not_configured")
@@ -178,6 +178,55 @@ class WorkspaceRootTests(unittest.TestCase):
         (self.hermes / "workspace").mkdir()
         self.configure({"cwd": str(self.hermes / "workspace")})
         self.assertEqual(workspace_root.resolve("default").root, self.hermes / "workspace")
+
+    def test_hermes_running_in_its_own_folder_uses_its_workspace_folder(self):
+        # Hosted Hermes (the Nous Portal image): its home, the user's home and the folder
+        # it runs in are one folder, so its chats start among its settings and keys.
+        # Hermes makes a "workspace" folder there for the agent; that's the one to show.
+        (self.hermes / "workspace").mkdir()
+        os.chdir(self.hermes)
+        for terminal in (None, {"cwd": "."}, {"cwd": str(self.hermes)}, {"cwd": "~"}):
+            self.configure(terminal)
+            with patch.dict(os.environ, {"HOME": str(self.hermes)}):
+                workspace = workspace_root.resolve("default")
+            self.assertEqual(workspace.root, self.hermes / "workspace", terminal)
+            self.assertEqual(workspace.origin, "hermes-workspace", terminal)
+            self.assertTrue(workspace.in_hermes_folder)
+        # Hermes' own answer for a new chat, when its chat gateway runs here.
+        gateway, _ = hermes_chat_gateway(self.hermes)
+        sys.modules["tui_gateway.server"] = gateway
+        os.chdir(self.launch)
+        self.configure()
+        self.assertEqual(workspace_root.resolve("default").root, self.hermes / "workspace")
+
+    def test_hermes_started_in_its_program_folder_uses_its_workspace_folder(self):
+        (self.hermes / "workspace").mkdir()
+        self.configure()
+        with patch.object(workspace_root, "_install_folders", return_value=[self.launch]):
+            workspace = workspace_root.resolve("default")
+        self.assertEqual((workspace.root, workspace.origin), (self.hermes / "workspace", "hermes-workspace"))
+
+    def test_a_workspace_folder_that_leads_out_of_hermes_folder_is_not_used(self):
+        (self.hermes / "workspace").symlink_to(self.user)
+        self.configure()
+        os.chdir(self.hermes)
+        self.assertEqual(self.refusal().code, "workspace_hermes_folder")
+
+    def test_a_folder_of_the_agents_own_is_not_in_hermes_folder(self):
+        self.configure({"cwd": str(self.user)})
+        self.assertFalse(workspace_root.resolve("default").in_hermes_folder)
+        (self.hermes / "projects").mkdir()
+        self.configure({"cwd": str(self.hermes / "projects")})
+        self.assertTrue(workspace_root.resolve("default").in_hermes_folder)
+
+    def test_hermes_secret_names_are_known(self):
+        # Hermes' own Files tab hides these wherever they are (hermes_cli/web_routers/files.py).
+        for name in (".env", ".ENV.local", ".env.example", ".envrc", "auth.json", "Auth.JSON", "auth.lock",
+                     "config.yaml", "credentials", ".git-credentials", "google_token.json", "node_token.json",
+                     "bws_cache.enc.json", "mcp-tokens", "pairing", "vault", "browser-profile"):
+            self.assertTrue(workspace_root.is_secret_name(name), name)
+        for name in ("notes.md", "report.json", "config.yml.example", "env", "vaults"):
+            self.assertFalse(workspace_root.is_secret_name(name), name)
 
     def test_hermes_folders_are_known_so_listings_can_hide_them(self):
         (self.user / ".hermes").mkdir()

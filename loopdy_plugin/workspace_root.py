@@ -20,7 +20,13 @@ it can't serve says why with its own code:
 
 A default that lands on the disk root, Hermes' own folders or its install is
 not a working folder of the agent's own, and Hermes' own folders are never a
-workspace: they hold its settings and keys.
+workspace: they hold its settings and keys. Hosted Hermes (the Docker image the
+Nous Portal runs) starts in its home, which is also the user's home, so its
+chats start there. Hermes makes a ``workspace`` folder in each home for the
+agent's files (the image's stage2 hook, ``hermes profile create``); when the
+agent works in Hermes' home, that folder is its workspace. Secret-bearing names
+inside a workspace in Hermes' folder are never shown, as in Hermes' own Files
+tab.
 """
 from __future__ import annotations
 
@@ -48,13 +54,34 @@ _CONTAINER_HOME = "/root"
 _MAX_PATH_BYTES = 4_096
 _MAX_VOLUMES = 64
 _MAX_PROFILES = 256
+HERMES_WORKSPACE = "hermes-workspace"
+# Credential stores Hermes' own Files tab never lists or reads, by name, wherever
+# they are (hermes_cli/web_routers/files.py, agent/file_safety.py), plus the
+# Google Meet node token Hermes keeps in its workspace folder.
+_SECRET_FILE_NAMES = frozenset({
+    "auth.json", "auth.lock", "credentials", "config.yaml", ".anthropic_oauth.json",
+    "google_token.json", "google_oauth_pending.json", "google_oauth.json",
+    "webhook_subscriptions.json", "bws_cache.json", "bws_cache.enc.json", ".git-credentials",
+    "node_token.json",
+})
+_SECRET_FOLDER_NAMES = frozenset({"mcp-tokens", "pairing", "vault", "browser-profile"})
 
 
 @dataclass(frozen=True)
 class Workspace:
     root: Path
-    # "config" (terminal.cwd), "default" (Hermes' own choice) or "docker-volume".
+    # "config" (terminal.cwd), "default" (Hermes' own choice), "docker-volume" or
+    # "hermes-workspace" (the workspace folder in Hermes' home, where it runs the agent).
     origin: str
+    # Inside one of Hermes' folders, so secret-bearing names are hidden.
+    in_hermes_folder: bool = False
+
+
+def is_secret_name(name: str) -> bool:
+    """Whether a file or folder named *name* holds Hermes credentials."""
+    lowered = name.lower()
+    return (lowered == ".env" or lowered.startswith(".env.") or lowered == ".envrc"
+            or lowered in _SECRET_FILE_NAMES or lowered in _SECRET_FOLDER_NAMES)
 
 
 def available() -> bool:
@@ -100,8 +127,11 @@ def resolve_config(profile_id: str, raw: Any, *, agent_files: bool = True) -> Wo
     backend = _backend(terminal, launch) if agent_files else "local"
     if backend == "local":
         if configured is None:
-            return _default(profile_id, launch)
-        return _configured_workspace(_existing_folder(configured), profile_id, "config")
+            return _default(profile_id, launch, own_workspace=True)
+        root = _existing_folder(configured)
+        if root is not None and root in _hermes_folder_paths(profile_id):
+            return _own_workspace(profile_id) or _configured_workspace(root, profile_id, "config")
+        return _configured_workspace(root, profile_id, "config")
     if backend == "ssh":
         raise NativeAPIError(409, "workspace_on_remote",
                              "This agent works on another computer over SSH, so its files aren't on this one.")
@@ -168,19 +198,47 @@ def _existing_folder(raw: str | None) -> Path | None:
 def _configured_workspace(root: Path | None, profile_id: str, origin: str) -> Workspace:
     if root is None:
         raise NativeAPIError(409, "workspace_unavailable", "The configured workspace is unavailable.")
-    if root in _hermes_folder_paths(profile_id):
-        raise NativeAPIError(409, "workspace_hermes_folder",
-                             "This agent's working folder is Hermes' own folder, which holds its settings and keys.")
-    return Workspace(root, origin)
+    hermes = _hermes_folder_paths(profile_id)
+    if root in hermes:
+        raise _hermes_folder_refusal()
+    return Workspace(root, origin, any(folder in root.parents for folder in hermes))
 
 
-def _default(profile_id: str, launch: bool) -> Workspace:
+def _default(profile_id: str, launch: bool, *, own_workspace: bool = False) -> Workspace:
     root = _existing_folder(_hermes_new_chat_folder(profile_id, launch))
-    protected = [*_hermes_folder_paths(profile_id), *_install_folders()]
-    if root is None or root.parent == root or any(root == folder or folder in root.parents for folder in protected):
-        raise NativeAPIError(409, "workspace_not_configured",
-                             "Hermes runs this agent without a working folder of its own; set terminal.cwd for it.")
-    return Workspace(root, "default")
+    hermes = _hermes_folder_paths(profile_id)
+    protected = [*hermes, *_install_folders()]
+    if root is not None and root.parent != root \
+            and not any(root == folder or folder in root.parents for folder in protected):
+        return Workspace(root, "default")
+    # Hermes' chats start somewhere that isn't the agent's own (hosted Hermes
+    # runs in its home): its workspace folder is where the agent's files belong.
+    if own_workspace and (workspace := _own_workspace(profile_id)) is not None:
+        return workspace
+    if root in hermes:
+        raise _hermes_folder_refusal()
+    raise NativeAPIError(409, "workspace_not_configured",
+                         "Hermes runs this agent without a working folder of its own; set terminal.cwd for it.")
+
+
+def _hermes_folder_refusal() -> NativeAPIError:
+    return NativeAPIError(409, "workspace_hermes_folder",
+                          "This agent works in Hermes' own folder, which holds its settings and keys, and "
+                          "there's no workspace folder in it for the agent's files.")
+
+
+def _own_workspace(profile_id: str) -> Workspace | None:
+    """The workspace folder Hermes makes in the agent's profile home, if it has one."""
+    try:
+        from hermes_cli.profiles import get_profile_dir
+        home = Path(get_profile_dir(profile_id)).resolve(strict=True)
+    except Exception:
+        return None
+    root = _existing_folder(str(home / "workspace"))
+    # A link that leads out of the home (or back to a Hermes folder) isn't it.
+    if root is None or home not in root.parents or root in _hermes_folder_paths(profile_id):
+        return None
+    return Workspace(root, HERMES_WORKSPACE, True)
 
 
 def _hermes_new_chat_folder(profile_id: str, launch: bool) -> str | None:

@@ -141,7 +141,7 @@ class NativeAPITests(unittest.TestCase):
         if templates_available():
             expected.append("native-agent-templates-v1")
         if files_available():
-            expected.extend(("native-workspace-files-v1", "native-workspace-recent-v1"))
+            expected.extend(("native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1"))
         from loopdy_plugin.agent_board import available as board_available
         if board_available():
             expected.extend(("native-agent-board-v1", "native-agent-board-feedback-v1"))

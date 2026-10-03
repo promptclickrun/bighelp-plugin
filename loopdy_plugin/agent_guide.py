@@ -65,10 +65,38 @@ def prompt_section(session: Mapping[str, Any]) -> str:
     platform = str(session.get("platform") or "").strip().lower()
     if platform == SESSION_SOURCE:
         from .people import brief_line
-        return "\n".join((CHAT_BRIEF, brief_line(session), CHAT_BRIEF_GUIDE))
+        lines = [CHAT_BRIEF, brief_line(session)]
+        if folder := _workspace_line(session):
+            lines.append(folder)
+        return "\n".join((*lines, CHAT_BRIEF_GUIDE))
     if not platform or platform in _UNATTENDED:
         return ""
     return ELSEWHERE_NOTE
+
+
+def _workspace_line(session: Mapping[str, Any]) -> str:
+    """Where to save files, when the chat starts in Hermes' own folder.
+
+    Hosted Hermes starts chats in its home, and bighelp's Workspace shows the
+    workspace folder in it instead, so files saved elsewhere wouldn't show.
+    """
+    profile = str(session.get("profile_name") or "")
+    if not profile:
+        return ""
+    try:
+        from . import workspace_root
+        workspace = workspace_root.resolve(profile)
+    except Exception as error:  # the brief must never fail a turn
+        logger.debug("bighelp workspace brief skipped: %s", type(error).__name__)
+        return ""
+    if workspace.origin != workspace_root.HERMES_WORKSPACE:
+        return ""
+    cwd = str(session.get("cwd") or "")
+    root = str(workspace.root)
+    if cwd == root or cwd.startswith(root.rstrip("/") + "/"):
+        return ""
+    return (f"- Save files you make for the user in {root} (or a folder inside it). That's the folder the "
+            "app's Workspace shows; your working folder holds Hermes' own settings.")
 
 
 def register(ctx: Any) -> None:
