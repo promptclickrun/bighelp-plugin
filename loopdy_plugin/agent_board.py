@@ -510,7 +510,8 @@ class BoardStore:
             "links": json.loads(row["links"]), "images": images, "source": row["source"],
             # Names, types and sizes only: the path stays on the host.
             "files": [{"index": index, "fileName": file["name"], "mimeType": file["mimeType"],
-                       "byteCount": file["size"]} for index, file in enumerate(json.loads(row["files"]))],
+                       "byteCount": file["size"], "addedAt": int(file.get("added", 0))}
+                      for index, file in enumerate(json.loads(row["files"]))],
             "liked": row["rating"] == 1, "dismissed": bool(row["dismissed"]),
             "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
             "read": bool(row["read"]), "answer": row["answer"] or "none", "category": row["category"],

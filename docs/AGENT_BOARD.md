@@ -68,8 +68,9 @@ category, and the app shows them under Other.
 
 With `native-agent-board-files-v1`:
 
-Feed posts carry `files`: `index`, `fileName`, `mimeType` and `byteCount` for each,
-never the path. The app gets a file through the attachment routes
+Feed posts carry `files`: `index`, `fileName`, `mimeType`, `byteCount` and `addedAt`
+(when the agent attached it; attaching the same path again gives a new time, so the
+app knows its saved copy is old) for each, never the path. The app gets a file through the attachment routes
 ([Agent attachments](AGENT_ATTACHMENTS.md)): `attachments/board` with `itemId` and
 `index` returns an opaque attachment ID, and `attachments/fetch` downloads it in
 chunks. Without the feature, posts have no files and the app shows Feed as before.

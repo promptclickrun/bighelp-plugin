@@ -258,9 +258,11 @@ class FeedFileTests(unittest.TestCase):
 
     def test_a_post_keeps_references_and_shows_names_never_paths(self):
         item = self.store.publish("feed", title="Your Lisbon trip", files=[str(self.png), str(self.pdf)])
+        added = item["updatedAt"]
         self.assertEqual(item["files"], [
-            {"index": 0, "fileName": "harbor.png", "mimeType": "image/png", "byteCount": len(PNG)},
-            {"index": 1, "fileName": "Trip plan.pdf", "mimeType": "application/pdf", "byteCount": 2009},
+            {"index": 0, "fileName": "harbor.png", "mimeType": "image/png", "byteCount": len(PNG), "addedAt": added},
+            {"index": 1, "fileName": "Trip plan.pdf", "mimeType": "application/pdf", "byteCount": 2009,
+             "addedAt": added},
         ])
         self.assertNotIn(str(self.root), json.dumps(item))
         self.assertEqual(self.store.file_reference(item["id"], 1), (str(self.pdf), item["updatedAt"]))

@@ -346,7 +346,8 @@ class NativeAPITests(unittest.TestCase):
         listed = call("/board/list", {"agentId": "default", "kinds": ["feed"]})
         self.assertEqual(listed.status_code, 200, listed.text)
         self.assertEqual(listed.json()["items"][0]["files"],
-                         [{"index": 0, "fileName": "Trip plan.pdf", "mimeType": "application/pdf", "byteCount": 4105}])
+                         [{"index": 0, "fileName": "Trip plan.pdf", "mimeType": "application/pdf", "byteCount": 4105,
+                           "addedAt": post["updatedAt"]}])
         self.assertNotIn(str(self.home), listed.text)
         resolved = call("/attachments/board", {"agentId": "default", "itemId": post["id"], "index": 0})
         self.assertEqual(resolved.status_code, 200, resolved.text)
