@@ -519,6 +519,33 @@ async def provider_usage(request: Request) -> Response:
     return _response({"agentId": body.agentId, **value}, owner, request_id)
 
 
+class _UsageActivity(_Body):
+    days: StrictInt = Field(ge=1, le=365)
+
+
+def _usage_activity(agent_id: str, days: int) -> dict:
+    from .usage_activity import activity
+    try:
+        return activity(agent_id, days)
+    except LookupError:
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.") from None
+
+
+@router.post("/usage/activity")
+async def usage_activity(request: Request) -> Response:
+    """When an agent works: hours, messages and models per day (bighelp app: Usage)."""
+    from .usage_activity import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "usage_activity_unavailable", "Usage details aren't available on this host.")
+    body = await _body(request, _UsageActivity)
+    value = await run_in_threadpool(_usage_activity, body.agentId, body.days)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response({"agentId": body.agentId, **value}, owner, request_id)
+
+
 _SESSION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 
