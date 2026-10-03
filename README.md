@@ -58,7 +58,7 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
 
 | Feature | What you get in bighelp | Details |
 | --- | --- | --- |
-| Agent board | Each agent's Feed, Ideas, Goals, Activity and approval history, next to its chat. Agents post with the `bighelp_board` tool. | [Agent board](docs/AGENT_BOARD.md) |
+| Agent board | Each agent's Feed, Ideas, Goals, Activity and approval history, next to its chat. Agents post with the `bighelp_board` tool, and Feed posts can carry files to open, save and share. | [Agent board](docs/AGENT_BOARD.md) |
 | Apps tab | Files the agent recently made or changed, and the pictures and videos it delivered. | [Artifacts and media](docs/APPS_ARTIFACTS_AND_MEDIA.md) |
 | Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, via the `bighelp_render_*` tools. Agents can save a layout as a private card template and reuse it with fresh values. | [Cards guide](docs/CARDS.md) |
 | Reactions | Agents can react to your messages with an emoji (`bighelp_react_to_message`). | |

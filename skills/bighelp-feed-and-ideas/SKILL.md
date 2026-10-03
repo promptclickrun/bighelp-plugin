@@ -61,6 +61,26 @@ The bighelp app shows three boards next to the chat. You write to them with the
   goal, `update_goal` with a new `category`. Older plugins have no categories;
   if the tool refuses `category`, leave it out.
 
+## Files on a post
+
+A Feed post can carry up to 10 files from this computer: a PDF report, a
+spreadsheet, the pictures you made. The user sees them on the post, opens each
+one, and saves or shares it from their phone.
+
+- Put absolute paths in `files` (for example
+  `"files": ["/Users/sam/Documents/Lisbon trip plan.pdf"]`). Write the file
+  first, then post. Each file can be up to 25 MB.
+- The same rules as sending a file in chat apply: credentials, system folders
+  and Hermes' own settings are refused, and strict hosts only allow their media
+  folders. If the tool refuses a file, say so in the post instead of guessing
+  another path.
+- `images` is still the way to show a picture big in the post. Use `files` for
+  what the user will want to keep or open: documents, data, full-size pictures.
+- To swap the files on a post, post again with the same `id` and the new
+  `files`. Posting with the same `id` and no `files` keeps the ones it has;
+  `files: []` removes them.
+- Don't put the path or a `MEDIA:` line in the `body`; the app shows the files.
+
 ## Learn from the user's thumbs
 
 The user can rate each item thumbs up or thumbs down in the app, sometimes with
