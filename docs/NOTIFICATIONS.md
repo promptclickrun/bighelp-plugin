@@ -60,6 +60,9 @@ marker Hermes itself wouldn't send:
   or a group message that wasn't addressed to the agent. When a person's message got only a marker, the alert
   carries Hermes' notice instead ("The model returned only a silence marker…"). Hermes versions before that notice
   keep every bare marker silent.
+- **Group chats:** Hermes tells an agent with nothing new to add to reply `(pass)`. A group chat reply that is
+  just a pass (`(pass)`, `pass` or `Pass.`, any case) sends no alert, the same as the chat, which shows nothing for
+  it. Anywhere else, "Pass." is an answer and alerts.
 - Failed runs always alert.
 
 ### Staying signed in

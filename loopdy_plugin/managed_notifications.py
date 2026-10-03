@@ -98,6 +98,11 @@ _OFF_SCREEN_DISPLAY_KIND = "hidden"
 _UNEXPECTED_SILENCE_REPLY = ("⚠️ The model returned only a silence marker for a message that needed "
                              "a reply. Try again or rephrase.")
 _LEGACY_SILENCE_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"})
+# Hermes runs each group chat member's turn in a session of this source, and its rules there tell an
+# agent with nothing new to add to reply "(pass)". Hermes publishes no message for a pass, so it
+# sends no alert either. The pattern is gateway/hosted_room_discussion.py's is_pass_text.
+_GROUP_CHAT_PLATFORM = "bot_room"
+_GROUP_CHAT_PASS = re.compile(r"\(?\s*pass\s*\)?\.?", re.IGNORECASE)
 # Hermes' turn-end file-mutation verifier footer (run_agent.py): a "⚠️ File-mutation verifier:"
 # line plus indented "•" bullets, appended AFTER the model's final line. It is runtime machinery,
 # not the model's answer, so a run that ended on a silence marker must stay silent with it attached.
@@ -139,10 +144,12 @@ def _turn_reacted(history: Any) -> bool:
     return False
 
 
-def _delivered_reply(response: Any, *, autonomous: bool, history: Any) -> Any:
+def _delivered_reply(response: Any, *, autonomous: bool, history: Any, group_chat: bool = False) -> Any:
     """``response`` as Hermes would deliver it: ``""`` when the turn stays silent, Hermes' notice
     when a person got a bare marker, else unchanged. Never raises; unsure means unchanged."""
     answer = _without_runtime_footer(response)
+    if group_chat and isinstance(answer, str) and _GROUP_CHAT_PASS.fullmatch(answer.strip()):
+        return ""
     try:
         rules = importlib.import_module("gateway.response_filters")
     except ImportError:  # Every supported Hermes has it; a bare marker still stays quiet.
@@ -883,7 +890,8 @@ class ManagedNotifications:
                 # check reads the raw reply: _rich_text collapses the lines the loose rule reads.
                 reply = _delivered_reply(
                     payload.get("assistant_response"), history=payload.get("conversation_history"),
-                    autonomous=scheduled or payload.get("platform") in _AUTONOMOUS_PLATFORMS)
+                    autonomous=scheduled or payload.get("platform") in _AUTONOMOUS_PLATFORMS,
+                    group_chat=payload.get("platform") == _GROUP_CHAT_PLATFORM)
                 response_text = self._rich_text(reply) if reply else ""
             except ManagedNotificationError:
                 response_text = ""
