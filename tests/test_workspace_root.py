@@ -164,7 +164,7 @@ class WorkspaceRootTests(unittest.TestCase):
         os.chdir(self.hermes)
         error = self.refusal()
         self.assertEqual((error.status, error.code), (409, "workspace_hermes_folder"))
-        (self.hermes / "logs").mkdir()
+        (self.hermes / "logs").mkdir(exist_ok=True)
         os.chdir(self.hermes / "logs")
         self.assertEqual(self.refusal().code, "workspace_not_configured")
         gateway, _ = hermes_chat_gateway("/")
