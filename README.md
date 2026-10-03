@@ -15,7 +15,7 @@ own dashboard and uses its sign-in. It opens no extra ports and needs no bighelp
 ## Requirements
 
 - Hermes 0.21.1 or later on macOS or Linux. Windows works for core features, but file, wiki and self-update
-  features need macOS or Linux. CI tests Hermes 0.21.1 and 0.21.2. The bighelp app supports hosts on Hermes
+  features need macOS or Linux (on Windows the app says files aren't supported there yet). CI tests Hermes 0.21.1 and 0.21.2. The bighelp app supports hosts on Hermes
   0.21.2 to 0.21.5.
 - The bighelp app connects straight to your Hermes dashboard, over your local network or Tailscale. It signs in
   with the host's own login.

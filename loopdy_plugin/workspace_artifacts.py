@@ -1,8 +1,9 @@
-"""Configured-workspace file projection for bighelp native clients.
+"""Workspace file projection for bighelp native clients.
 
-This module deliberately does not use Hermes' process cwd or its permissive
-managed-files fallback. Every operation starts from the serving profile's raw,
-absolute ``terminal.cwd`` and traverses below that canonical root.
+Every operation starts from the serving profile's working folder, found the way
+Hermes finds it (``workspace_root``), and traverses below that canonical root.
+It never uses Hermes' permissive managed-files fallback, and never enters
+Hermes' own folders, which hold its settings and keys.
 """
 from __future__ import annotations
 
@@ -24,7 +25,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from .native_context import NativeAPIError, NativeContext, PROFILE_ID, native_context
+from . import workspace_root
+from .native_context import NativeAPIError, NativeContext, native_context
 
 
 CAPABILITY = "native-workspace-files-v1"
@@ -79,47 +81,16 @@ def _invalid_number(_: str) -> None:
 
 
 def available() -> bool:
-    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+    if not workspace_root.available():
         return False
-    try:
-        from hermes_cli.config import read_user_config_raw
-        from hermes_cli.profiles import get_profile_dir, profile_exists
-    except ImportError:
-        return False
-    return all(callable(value) for value in (read_user_config_raw, get_profile_dir, profile_exists))
+    # Windows is advertised so the route can say it isn't supported there yet.
+    return workspace_root._IS_WINDOWS or (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"))
 
 
-def _configured_root(profile_id: str | None) -> Path:
-    if profile_id is None or PROFILE_ID.fullmatch(profile_id) is None:
-        raise NativeAPIError(501, "workspace_identity_unavailable", "This host cannot identify its serving profile workspace.")
-    try:
-        from hermes_cli.config import read_user_config_raw
-        from hermes_cli.profiles import get_profile_dir, profile_exists
-    except ImportError:
-        raise NativeAPIError(501, "workspace_files_unavailable", "Configured workspace files are unavailable on this host.") from None
-    if not profile_exists(profile_id):
-        raise NativeAPIError(409, "workspace_identity_changed", "The serving profile workspace changed; reconnect before retrying.")
-    try:
-        raw = read_user_config_raw(get_profile_dir(profile_id) / "config.yaml")
-    except (OSError, UnicodeError, ValueError, TypeError):
-        raise NativeAPIError(409, "workspace_config_invalid", "The serving profile configuration must be repaired locally.") from None
-    terminal = raw.get("terminal")
-    cwd = terminal.get("cwd") if isinstance(terminal, dict) else None
-    if not isinstance(cwd, str) or not cwd.strip() or cwd.strip() in {".", "auto", "cwd"}:
-        raise NativeAPIError(409, "workspace_not_configured", "Set an absolute terminal.cwd for this profile before opening workspace files.")
-    try:
-        candidate = Path(cwd).expanduser()
-    except (OSError, RuntimeError, ValueError):
-        raise NativeAPIError(409, "workspace_not_configured", "The serving profile requires an absolute terminal.cwd.") from None
-    if not candidate.is_absolute():
-        raise NativeAPIError(409, "workspace_not_configured", "The serving profile requires an absolute terminal.cwd.")
-    try:
-        root = candidate.resolve(strict=True)
-    except (OSError, RuntimeError):
-        raise NativeAPIError(409, "workspace_unavailable", "The configured workspace is unavailable.") from None
-    if not root.is_dir():
-        raise NativeAPIError(409, "workspace_unavailable", "The configured workspace is unavailable.")
-    return root
+def _workspace(workspace: workspace_root.Workspace, profile_id: str) -> dict[str, Any]:
+    # "terminal.cwd" names the agent's terminal working folder however Hermes
+    # chose it, so app builds that check it keep working; origin says how.
+    return {"root": str(workspace.root), "source": "terminal.cwd", "origin": workspace.origin, "profileId": profile_id}
 
 
 def _relative(root: Path, raw_path: str | None) -> tuple[str, ...]:
@@ -148,7 +119,8 @@ def _response_path(root: Path, parts: tuple[str, ...]) -> str:
 
 
 @contextmanager
-def _opened_posix(root: Path, parts: tuple[str, ...], *, directory: bool) -> Iterator[int]:
+def _opened_posix(root: Path, parts: tuple[str, ...], *, directory: bool,
+                  hidden: frozenset[tuple[int, int]] = frozenset()) -> Iterator[int]:
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         raise NativeAPIError(501, "secure_traversal_unavailable", "Secure workspace traversal is unavailable on this host.")
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -156,8 +128,10 @@ def _opened_posix(root: Path, parts: tuple[str, ...], *, directory: bool) -> Ite
     try:
         try:
             descriptors.append(os.open(root, directory_flags))
+            _refuse_hidden(descriptors[-1], hidden)
             for component in parts[:-1] if not directory else parts:
                 descriptors.append(os.open(component, directory_flags, dir_fd=descriptors[-1]))
+                _refuse_hidden(descriptors[-1], hidden)
             if directory:
                 yield descriptors[-1]
             else:
@@ -166,6 +140,8 @@ def _opened_posix(root: Path, parts: tuple[str, ...], *, directory: bool) -> Ite
                 file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
                 descriptors.append(os.open(parts[-1], file_flags, dir_fd=descriptors[-1]))
                 yield descriptors[-1]
+        except NativeAPIError:
+            raise
         except FileNotFoundError:
             raise NativeAPIError(404, "file_not_found", "The workspace path no longer exists.") from None
         except NotADirectoryError:
@@ -177,10 +153,21 @@ def _opened_posix(root: Path, parts: tuple[str, ...], *, directory: bool) -> Ite
             os.close(descriptor)
 
 
+def _refuse_hidden(descriptor: int, hidden: frozenset[tuple[int, int]]) -> None:
+    info = os.fstat(descriptor)
+    if (info.st_dev, info.st_ino) in hidden:
+        raise NativeAPIError(403, "path_outside_workspace", "The requested path is outside the configured workspace.")
+
+
+def _is_hidden(info: os.stat_result, hidden: frozenset[tuple[int, int]]) -> bool:
+    return stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) in hidden
+
+
 @contextmanager
-def _opened(root: Path, parts: tuple[str, ...], *, directory: bool) -> Iterator[int | Path]:
+def _opened(root: Path, parts: tuple[str, ...], *, directory: bool,
+            hidden: frozenset[tuple[int, int]] = frozenset()) -> Iterator[int | Path]:
     if os.name != "nt":
-        with _opened_posix(root, parts, directory=directory) as descriptor:
+        with _opened_posix(root, parts, directory=directory, hidden=hidden) as descriptor:
             yield descriptor
         return
     # A resolve-then-open fallback can race junction or symlink replacement.
@@ -254,9 +241,11 @@ def _entry(root: Path, parent_parts: tuple[str, ...], name: str, info: os.stat_r
     }
 
 
-def _list(root: Path, parts: tuple[str, ...], profile_id: str) -> dict[str, Any]:
+def _list(workspace: workspace_root.Workspace, parts: tuple[str, ...], profile_id: str,
+          hidden: frozenset[tuple[int, int]] = frozenset()) -> dict[str, Any]:
+    root = workspace.root
     entries: list[dict[str, Any]] = []
-    with _opened(root, parts, directory=True) as opened:
+    with _opened(root, parts, directory=True, hidden=hidden) as opened:
         try:
             names = sorted(os.listdir(opened))
         except OSError:
@@ -269,6 +258,8 @@ def _list(root: Path, parts: tuple[str, ...], profile_id: str) -> dict[str, Any]
             try:
                 if isinstance(opened, int):
                     info = os.stat(name, dir_fd=opened, follow_symlinks=False)
+                    if _is_hidden(info, hidden):
+                        continue
                     child_fd = None
                     if stat.S_ISREG(info.st_mode):
                         try:
@@ -293,15 +284,16 @@ def _list(root: Path, parts: tuple[str, ...], profile_id: str) -> dict[str, Any]
     path = _response_path(root, parts)
     parent = None if not parts else _response_path(root, parts[:-1])
     return {
-        "workspace": {"root": str(root), "source": "terminal.cwd", "profileId": profile_id},
+        "workspace": _workspace(workspace, profile_id),
         "path": path, "parent": parent, "entries": entries,
         "root": str(root), "locked_root": str(root), "can_change_path": False,
     }
 
 
-def _scope(root: Path, profile_id: str) -> dict[str, Any]:
+def _scope(workspace: workspace_root.Workspace, profile_id: str) -> dict[str, Any]:
+    root = workspace.root
     return {
-        "workspace": {"root": str(root), "source": "terminal.cwd", "profileId": profile_id},
+        "workspace": _workspace(workspace, profile_id),
         "path": str(root), "parent": None, "entries": [],
         "root": str(root), "locked_root": str(root), "can_change_path": False,
     }
@@ -364,7 +356,8 @@ def _agent_written_paths(profile_id: str) -> list[tuple[float, str]]:
     return found
 
 
-def _confined_entry(root: Path, raw_path: str) -> tuple[tuple[str, ...], dict[str, Any]] | None:
+def _confined_entry(root: Path, raw_path: str,
+                    hidden: frozenset[tuple[int, int]] = frozenset()) -> tuple[tuple[str, ...], dict[str, Any]] | None:
     """A workspace entry for an absolute path that still resolves inside the root."""
     try:
         candidate = Path(raw_path).expanduser()
@@ -377,7 +370,7 @@ def _confined_entry(root: Path, raw_path: str) -> tuple[tuple[str, ...], dict[st
     if not parts or any(part.startswith(".") for part in parts) or _skip_recent_file(parts[-1]):
         return None
     try:
-        with _opened(root, parts, directory=False) as descriptor:
+        with _opened(root, parts, directory=False, hidden=hidden) as descriptor:
             info = os.fstat(descriptor) if isinstance(descriptor, int) else descriptor.stat()
             projected = _entry(root, parts[:-1], parts[-1], info,
                                descriptor if isinstance(descriptor, int) else None)
@@ -388,7 +381,8 @@ def _confined_entry(root: Path, raw_path: str) -> tuple[tuple[str, ...], dict[st
     return parts, projected
 
 
-def _shallow_newest(root: Path, deadline: float) -> list[tuple[tuple[str, ...], dict[str, Any]]]:
+def _shallow_newest(root: Path, deadline: float,
+                    hidden: frozenset[tuple[int, int]] = frozenset()) -> list[tuple[tuple[str, ...], dict[str, Any]]]:
     """Files in the top folders, opened O_NOFOLLOW relative to their parent."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     found: list[tuple[tuple[str, ...], dict[str, Any]]] = []
@@ -413,7 +407,7 @@ def _shallow_newest(root: Path, deadline: float) -> list[tuple[tuple[str, ...], 
                     except OSError:
                         continue
                     if stat.S_ISDIR(info.st_mode):
-                        if not _skip_recent_directory(name):
+                        if not _skip_recent_directory(name) and not _is_hidden(info, hidden):
                             folders.append(name)
                     elif not _skip_recent_file(name):
                         projected = _entry(root, parts, name, info)
@@ -451,28 +445,30 @@ def _shallow_newest(root: Path, deadline: float) -> list[tuple[tuple[str, ...], 
     return found
 
 
-def _recent(root: Path, profile_id: str) -> dict[str, Any]:
+def _recent(workspace: workspace_root.Workspace, profile_id: str,
+            hidden: frozenset[tuple[int, int]] = frozenset()) -> dict[str, Any]:
     """Artifacts: files the agent wrote or delivered, plus new top-level files.
 
     Agent files rank by when the agent wrote them; others by creation time.
     Every entry is re-opened O_NOFOLLOW below the root, so history can never
     point the app outside the configured workspace.
     """
+    root = workspace.root
     deadline = time.monotonic() + RECENT_SHALLOW_SECONDS
     ranked: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
     for timestamp, raw_path in _agent_written_paths(profile_id):
         if len(ranked) >= RECENT_LIMIT:
             break
-        confined = _confined_entry(root, raw_path)
+        confined = _confined_entry(root, raw_path, hidden)
         if confined is not None and confined[0] not in ranked:
             ranked[confined[0]] = (timestamp, confined[1])
-    for parts, projected in _shallow_newest(root, deadline):
+    for parts, projected in _shallow_newest(root, deadline, hidden):
         if parts not in ranked:
             ranked[parts] = (projected["created"] or projected["mtime"], projected)
     newest = heapq.nlargest(RECENT_LIMIT, ranked.values(), key=lambda row: row[0])
     entries = [row[1] for row in newest]
     result = {
-        "workspace": {"root": str(root), "source": "terminal.cwd", "profileId": profile_id},
+        "workspace": _workspace(workspace, profile_id),
         "path": str(root), "parent": None, "entries": entries,
         "root": str(root), "locked_root": str(root), "can_change_path": False,
     }
@@ -482,8 +478,10 @@ def _recent(root: Path, profile_id: str) -> dict[str, Any]:
     return result
 
 
-def _read(root: Path, parts: tuple[str, ...], profile_id: str) -> dict[str, Any]:
-    with _opened(root, parts, directory=False) as opened:
+def _read(workspace: workspace_root.Workspace, parts: tuple[str, ...], profile_id: str,
+          hidden: frozenset[tuple[int, int]] = frozenset()) -> dict[str, Any]:
+    root = workspace.root
+    with _opened(root, parts, directory=False, hidden=hidden) as opened:
         try:
             if isinstance(opened, int):
                 info = os.fstat(opened)
@@ -513,7 +511,7 @@ def _read(root: Path, parts: tuple[str, ...], profile_id: str) -> dict[str, Any]
     name = parts[-1]
     mime_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
     return {
-        "workspace": {"root": str(root), "source": "terminal.cwd", "profileId": profile_id},
+        "workspace": _workspace(workspace, profile_id),
         "path": path, "size": len(content), "mime_type": mime_type,
         "data_url": "data:" + mime_type + ";base64," + base64.b64encode(content).decode("ascii"),
         "root": str(root), "locked_root": str(root), "can_change_path": False,
@@ -526,33 +524,35 @@ async def request(operation: str, request: Request) -> Response:
     body = await _body(request)
     if native_context(request) != context:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
-    root = _configured_root(context.serving_profile_id)
+    workspace = await run_in_threadpool(workspace_root.resolve, context.serving_profile_id)
+    root = workspace.root
     profile_id = context.serving_profile_id
     if profile_id is None:
         raise NativeAPIError(501, "workspace_identity_unavailable", "This host cannot identify its serving profile workspace.")
+    hidden = await run_in_threadpool(workspace_root.hermes_folders, profile_id)
     if operation == "scope":
         if body.path is not None:
             raise NativeAPIError(422, "invalid_request", "Workspace scope discovery does not accept a path.")
-        result = _scope(root, profile_id)
+        result = _scope(workspace, profile_id)
         maximum = MAX_LISTING_BYTES
     elif operation == "list":
         parts = _relative(root, body.path)
-        result = await run_in_threadpool(_list, root, parts, profile_id)
+        result = await run_in_threadpool(_list, workspace, parts, profile_id, hidden)
         maximum = MAX_LISTING_BYTES
     elif operation == "read":
         parts = _relative(root, body.path)
-        result = await run_in_threadpool(_read, root, parts, profile_id)
+        result = await run_in_threadpool(_read, workspace, parts, profile_id, hidden)
         maximum = MAX_READ_RESPONSE_BYTES
     elif operation == "recent":
         if body.path is not None:
             raise NativeAPIError(422, "invalid_request", "Recent workspace files do not accept a path.")
-        result = await run_in_threadpool(_recent, root, profile_id)
+        result = await run_in_threadpool(_recent, workspace, profile_id, hidden)
         maximum = MAX_LISTING_BYTES
     else:
         raise NativeAPIError(404, "unsupported_operation", "The workspace file operation is unsupported.")
     if native_context(request) != context:
         raise NativeAPIError(412, "context_changed", "The native context changed; retry against the current workspace.")
-    if _configured_root(profile_id) != root:
+    if (await run_in_threadpool(workspace_root.resolve, profile_id)).root != root:
         raise NativeAPIError(409, "workspace_changed", "The configured workspace changed; refresh before retrying.")
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8")
     if len(encoded) > maximum:
