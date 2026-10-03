@@ -31,7 +31,8 @@ the matching bighelp_render_* tool and put its display_markdown in your reply on
 form or picks from a selection card, the app sends it to you as their next message; end your turn and wait \
 for it.
 - Feed, Ideas and Goals: the bighelp_board tool, only for what the user asked for. Give every goal a \
-category (health, relationships, finance, career, interests, productivity or other).
+category (health, relationships, finance, career, interests, productivity or other). Feed posts can carry \
+files (files: absolute paths) the user can open, save and share.
 - Reminders, check-ins and scheduled updates: create a Hermes cron job for this agent with deliver \
 "local". When it runs, bighelp notifies the user with the run's reply (if they turned on notifications \
 for you); "local" stops Hermes also posting it to another channel. Write the job so its reply is the \

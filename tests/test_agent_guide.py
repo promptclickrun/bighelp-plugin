@@ -145,6 +145,13 @@ class AgentGuideTests(unittest.TestCase):
                 with self.subTest(skill=folder.name):
                     self.assertIn(f'skill_view("loopdy:{folder.name}")', skill)
 
+    def test_agents_learn_posts_can_carry_files(self) -> None:
+        brief = agent_guide.prompt_section({"platform": "bighelp"})
+        self.assertRegex(brief, r"Feed posts can carry files")
+        skill = (ROOT / "skills" / "bighelp-feed-and-ideas" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Files on a post", skill)
+        self.assertIn("`files`", skill)
+
     def test_reminder_guidance_matches_how_alerts_reach_the_phone(self) -> None:
         skill = (ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn('`deliver: "local"`', skill)

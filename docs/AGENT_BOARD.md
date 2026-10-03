@@ -10,6 +10,14 @@ The `bighelp_board` tool (toolset `bighelp`) publishes Feed posts (`post`), Idea
 images are copied into `board-media/` at publish time; only those copies (PNG, JPEG,
 GIF, WebP, HEIC, 8 MB max) are ever served. https image URLs are passed through.
 
+Feed posts can also carry up to 10 files (`files`: absolute paths, 25 MB each). Unlike
+images, files are kept as references, not copies: the board stores each path with its
+name, type and size. Each path must pass Hermes' own delivery policy (the one `MEDIA:`
+files in chat get: no credentials, system folders or Hermes' own secrets, and strict
+hosts allow only their media folders) when the agent posts it, and again when the app
+fetches it. Posting again with the same `id` and no `files` keeps a post's files;
+`files: []` removes them.
+
 Nothing creates posts on its own. The bundled `bighelp-feed-and-ideas` skill tells
 agents to publish only what the user asked for, and to set up a scheduled job only
 when the user wants something recurring.
@@ -57,6 +65,15 @@ Republishing a goal without a category keeps the one it had. Feed posts and
 ideas always have `""`. Making an idea a goal keeps its `section` as the
 category when the section is one of those names. Goals from before this have no
 category, and the app shows them under Other.
+
+With `native-agent-board-files-v1`:
+
+Feed posts carry `files`: `index`, `fileName`, `mimeType`, `byteCount` and `addedAt`
+(when the agent attached it; attaching the same path again gives a new time, so the
+app knows its saved copy is old) for each, never the path. The app gets a file through the attachment routes
+([Agent attachments](AGENT_ATTACHMENTS.md)): `attachments/board` with `itemId` and
+`index` returns an opaque attachment ID, and `attachments/fetch` downloads it in
+chunks. Without the feature, posts have no files and the app shows Feed as before.
 
 ### Answers to ideas
 

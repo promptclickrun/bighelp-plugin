@@ -18,6 +18,12 @@ All routes are `POST /api/plugins/loopdy/native/attachments/<operation>` with th
 - **`recent`**: the pictures and videos an agent sent or generated lately, for the Apps tab (see
   [Artifacts and media](APPS_ARTIFACTS_AND_MEDIA.md)). Advertised as `native-agent-media-v1`.
 
+- **`board`**: one file a Feed post carries (`agentId`, `itemId`, `index` from 0 to 9). The plugin looks up
+  the path the agent attached to that post with `bighelp_board`, applies the same delivery rules as `resolve`,
+  and returns `attachment`: an opaque ID, a file name, a type and a size, for `fetch`. The app never sends a
+  path. A post, position or file that isn't there, or that the rules refuse, answers 404
+  `attachment_unavailable`. Advertised as `native-agent-board-files-v1` (see [Agent board](AGENT_BOARD.md)).
+
 Approved files are copied into a per-profile cache
 (`<Hermes profile home>/plugin-data/loopdy/agent-attachments.sqlite3`), so reopening an old chat still works if
 the original file has moved. Missing, denied or oversized files simply show no attachment.

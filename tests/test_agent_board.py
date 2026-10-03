@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from loopdy_plugin.agent_board import (
-    ANSWER_MEMORY_SECONDS, GOAL_CATEGORIES, TOOL_PARAMETERS, ActivityRecorder, BoardError, BoardStore,
+    ANSWER_MEMORY_SECONDS, GOAL_CATEGORIES, MAX_FILES, TOOL_PARAMETERS, ActivityRecorder, BoardError, BoardStore,
     MAX_ITEMS_PER_KIND, handle_tool, tool_category,
 )
 
@@ -240,7 +240,102 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual((items["a"]["rating"], items["b"]["rating"]), ("up", "none"))
         self.assertTrue(items["a"]["read"] and items["b"]["read"], "Nothing already there shows as new")
         self.assertEqual((items["a"]["category"], items["b"]["category"]), ("", ""), "Old goals have no category")
+        self.assertEqual((items["a"]["files"], items["b"]["files"]), ([], []), "Old posts have no files")
         self.assertFalse(BoardStore(legacy).publish("feed", title="Fresh")["read"])
+
+class FeedFileTests(unittest.TestCase):
+    """Feed posts carry files from the host by reference, checked like MEDIA: files."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.store = BoardStore(self.root / "board")
+        self.pdf = self.root / "Trip plan.pdf"
+        self.pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 2000)
+        self.png = self.root / "harbor.png"
+        self.png.write_bytes(PNG)
+
+    def test_a_post_keeps_references_and_shows_names_never_paths(self):
+        item = self.store.publish("feed", title="Your Lisbon trip", files=[str(self.png), str(self.pdf)])
+        added = item["updatedAt"]
+        self.assertEqual(item["files"], [
+            {"index": 0, "fileName": "harbor.png", "mimeType": "image/png", "byteCount": len(PNG), "addedAt": added},
+            {"index": 1, "fileName": "Trip plan.pdf", "mimeType": "application/pdf", "byteCount": 2009,
+             "addedAt": added},
+        ])
+        self.assertNotIn(str(self.root), json.dumps(item))
+        self.assertEqual(self.store.file_reference(item["id"], 1), (str(self.pdf), item["updatedAt"]))
+        # References, not copies: nothing lands next to the board.
+        self.assertFalse((self.root / "board" / "board-media").exists())
+        self.assertEqual(self.store.items(("feed",))[0]["files"], item["files"])
+
+    def test_updating_a_post_by_id_keeps_or_replaces_its_files(self):
+        self.store.publish("feed", title="Report", files=[str(self.pdf)], item_id="weekly")
+        kept = self.store.publish("feed", title="Report, updated", item_id="weekly")
+        self.assertEqual([f["fileName"] for f in kept["files"]], ["Trip plan.pdf"])
+        replaced = self.store.publish("feed", title="Report", files=[str(self.png)], item_id="weekly")
+        self.assertEqual([f["fileName"] for f in replaced["files"]], ["harbor.png"])
+        cleared = self.store.publish("feed", title="Report", files=[], item_id="weekly")
+        self.assertEqual(cleared["files"], [])
+        self.assertEqual(len(self.store.items(("feed",))), 1)
+
+    def test_files_are_checked_like_media_files(self):
+        from hermes_constants import get_hermes_home
+        secret = get_hermes_home() / ".env"
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text("OPENAI_API_KEY=made-up")
+        self.addCleanup(secret.unlink)
+        link = self.root / "notes.txt"
+        link.symlink_to(secret)
+        empty = self.root / "empty.pdf"
+        empty.write_bytes(b"")
+        for bad in ([str(secret)], [str(link)], ["Trip plan.pdf"], [str(self.root / "missing.pdf")],
+                    [str(self.root)], [str(empty)], [42], "not a list"):
+            with self.subTest(bad=bad), self.assertRaises(BoardError):
+                self.store.publish("feed", title="Leak", files=bad)
+        self.assertEqual(self.store.items(("feed",)), [])
+
+    def test_files_are_bounded(self):
+        from loopdy_plugin import agent_board
+        many = []
+        for index in range(MAX_FILES + 1):
+            path = self.root / f"page-{index}.pdf"
+            path.write_bytes(b"%PDF-1.4\n")
+            many.append(str(path))
+        self.assertEqual(MAX_FILES, 10)
+        self.assertEqual(len(self.store.publish("feed", title="Ten", files=many[:MAX_FILES])["files"]), MAX_FILES)
+        with self.assertRaises(BoardError):
+            self.store.publish("feed", title="Eleven", files=many)
+        # The same file twice is one attachment.
+        self.assertEqual(len(self.store.publish("feed", title="Twice", files=[str(self.pdf)] * 2)["files"]), 1)
+        saved = agent_board.MAX_FILE_BYTES
+        agent_board.MAX_FILE_BYTES = 1_000
+        self.addCleanup(setattr, agent_board, "MAX_FILE_BYTES", saved)
+        with self.assertRaises(BoardError):
+            self.store.publish("feed", title="Too big", files=[str(self.pdf)])
+
+    def test_only_feed_posts_carry_files(self):
+        with self.assertRaises(BoardError):
+            self.store.publish("idea", title="Read this", files=[str(self.pdf)])
+        item = self.store.publish("feed", title="Plan", files=[str(self.pdf)])
+        with self.assertRaises(BoardError):
+            self.store.file_reference(item["id"], 1)
+        with self.assertRaises(BoardError):
+            self.store.file_reference("missing", 0)
+
+    def test_the_agent_attaches_files_with_the_tool(self):
+        self.assertIn("files", TOOL_PARAMETERS["properties"])
+        self.assertEqual(TOOL_PARAMETERS["properties"]["files"]["maxItems"], MAX_FILES)
+        posted = json.loads(handle_tool({"action": "post", "title": "Trip plan", "id": "lisbon-plan",
+                                         "files": [str(self.pdf)]}, self.store))
+        self.assertEqual((posted["id"], posted["files"]), ("lisbon-plan", 1))
+        listed = json.loads(handle_tool({"action": "list", "kind": "feed"}, self.store))["items"]
+        self.assertEqual(listed[0]["files"], ["Trip plan.pdf"])
+        refused = json.loads(handle_tool({"action": "post", "title": "x", "files": ["Trip plan.pdf"]}, self.store))
+        self.assertIn("error", refused)
+        self.assertTrue(refused["error"].startswith("File 1 can't be shared"))
+
 
 class ActivityRecorderTests(unittest.TestCase):
     def setUp(self):

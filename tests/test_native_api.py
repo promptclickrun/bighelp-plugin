@@ -149,6 +149,8 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.native_attachments import available as attachments_available
         if attachments_available():
             expected.extend(("native-agent-attachments-v1", "native-agent-media-v1"))
+        if attachments_available() and board_available():
+            expected.append("native-agent-board-files-v1")
         from loopdy_plugin.host_restart import available as restart_available
         if restart_available():
             expected.append("native-host-restart-v1")
@@ -326,6 +328,41 @@ class NativeAPITests(unittest.TestCase):
         goal = board("promote", {"agentId": "default", "itemId": idea["id"]}).json()["item"]
         self.assertEqual((goal["kind"], goal["title"]), ("goal", "Sleep by 11"))
         self.assertEqual(board("promote", {"agentId": "default", "itemId": "pkg"}).status_code, 404)
+
+    def test_a_feed_posts_files_list_resolve_and_download_without_paths(self):
+        import base64
+        from loopdy_plugin import native_attachments
+        from loopdy_plugin.agent_board import store_for_profile
+        native_attachments._store = None
+        self.addCleanup(setattr, native_attachments, "_store", None)
+        (self.home / "Downloads").mkdir()
+        pdf = self.home / "Downloads" / "Trip plan.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n" + b"q" * 4096)
+        post = store_for_profile("default").publish("feed", title="Lisbon", files=[str(pdf)], item_id="lisbon")
+
+        def call(path, payload):
+            return self.client.post(PREFIX + path, headers=self.headers(), json=payload)
+
+        listed = call("/board/list", {"agentId": "default", "kinds": ["feed"]})
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["items"][0]["files"],
+                         [{"index": 0, "fileName": "Trip plan.pdf", "mimeType": "application/pdf", "byteCount": 4105,
+                           "addedAt": post["updatedAt"]}])
+        self.assertNotIn(str(self.home), listed.text)
+        resolved = call("/attachments/board", {"agentId": "default", "itemId": post["id"], "index": 0})
+        self.assertEqual(resolved.status_code, 200, resolved.text)
+        self.assertNotIn(str(self.home), resolved.text)
+        attachment = resolved.json()["attachment"]
+        chunk = call("/attachments/fetch", {"agentId": "default", "attachmentId": attachment["id"], "offset": 0})
+        self.assertEqual(chunk.status_code, 200, chunk.text)
+        self.assertEqual(base64.b64decode(chunk.json()["data"]), pdf.read_bytes())
+        self.assertIsNone(chunk.json()["nextOffset"])
+        self.assertEqual(call("/attachments/board", {"agentId": "default", "itemId": post["id"],
+                                                     "index": 1}).status_code, 404)
+        self.assertEqual(call("/attachments/board", {"agentId": "default", "itemId": post["id"], "index": 0,
+                                                     "path": str(pdf)}).status_code, 422)
+        self.assertEqual(call("/attachments/board", {"agentId": "missing", "itemId": post["id"],
+                                                     "index": 0}).status_code, 404)
 
     def test_template_headers_are_required_exact_and_echoed(self):
         headers = self.headers()
