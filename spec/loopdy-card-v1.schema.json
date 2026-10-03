@@ -465,6 +465,30 @@
       "required": ["name", "accessibility_label"],
       "additionalProperties": false
     },
+    "backgroundName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    },
+    "cardBackground": {
+      "description": "Optional animated weather behind a card. Allowed only on card elements, beside props. Names the app doesn't know are kept and drawn as a plain gradient.",
+      "type": "object",
+      "properties": {
+        "scene": {
+          "$ref": "#/$defs/backgroundName",
+          "description": "none, clear, partly_cloudy, overcast, rain, thunderstorm, snow, fog or wind."
+        },
+        "intensity": {
+          "$ref": "#/$defs/backgroundName",
+          "description": "light, moderate (default) or heavy."
+        },
+        "time_of_day": {
+          "$ref": "#/$defs/backgroundName",
+          "description": "day (default), dusk or night."
+        }
+      },
+      "required": ["scene"],
+      "additionalProperties": false
+    },
     "element": {
       "oneOf": [
         {
@@ -472,7 +496,8 @@
           "properties": {
             "type": { "const": "card" },
             "props": { "$ref": "#/$defs/cardProps" },
-            "children": { "$ref": "#/$defs/containerChildren" }
+            "children": { "$ref": "#/$defs/containerChildren" },
+            "background": { "$ref": "#/$defs/cardBackground" }
           },
           "required": ["type", "props", "children"],
           "additionalProperties": false

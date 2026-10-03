@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,8 @@ MAX_TABLE_ROWS = 50
 MAX_CHART_SERIES = 6
 MAX_CHART_POINTS = 120
 MAX_LIST_ITEMS = 50
+
+_LOG = logging.getLogger(__name__)
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
 _HASH_64 = re.compile(r"^[0-9a-f]{64}$")
@@ -96,6 +99,25 @@ _LOCAL_SUFFIXES = {
     "lan",
     "arpa",
 }
+# A card's optional weather background. Unknown names are allowed so a card
+# written for a newer app still renders on an older plugin; the app draws a
+# plain gradient for names it doesn't know.
+_BACKGROUND_FIELDS = {
+    "scene": {
+        "none",
+        "clear",
+        "partly_cloudy",
+        "overcast",
+        "rain",
+        "thunderstorm",
+        "snow",
+        "fog",
+        "wind",
+    },
+    "intensity": {"light", "moderate", "heavy"},
+    "time_of_day": {"day", "dusk", "night"},
+}
+_BACKGROUND_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _IMAGE_NAMES = {
     "bitcoinsign.circle.fill",
     "bolt.fill",
@@ -152,6 +174,7 @@ def validate_card_input(
     *,
     now: datetime,
     allow_live_data_for_testing: bool = False,
+    warn: bool = True,
 ) -> dict[str, object]:
     reference = _utc(now, code="invalid_clock")
     encoded = canonical_json(payload)
@@ -205,7 +228,7 @@ def validate_card_input(
         _identifier(element_id)
     source_ids = {source["id"] for source in sources}
     for element_id, element in elements.items():
-        _element(element_id, element, source_ids)
+        _element(element_id, element, source_ids, warn=warn)
 
     root = _identifier(value["root"])
     _validate_tree(root, elements)
@@ -265,7 +288,8 @@ def validate_card_result(payload: object, *, now: datetime) -> dict[str, object]
         _raise("invalid_origin", "Renderer origin is invalid")
 
     card_input = {key: value[key] for key in input_keys if key in value}
-    validated = validate_card_input(card_input, now=created)
+    # render_card already warned about this document's unknown values.
+    validated = validate_card_input(card_input, now=created, warn=False)
     expected_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -340,14 +364,32 @@ def _element(
     element_id: str,
     value: object,
     source_ids: set[str],
+    *,
+    warn: bool = True,
 ) -> None:
-    _object(value, {"type", "props", "children"}, {"type", "props", "children"})
+    _object(
+        value,
+        {"type", "props", "children", "background"},
+        {"type", "props", "children"},
+    )
     element_type = value["type"]
     if element_type not in _ELEMENT_TYPES:
         _raise("unsupported_element", f"Element {element_id} has an unsupported type")
     props = value["props"]
     if not isinstance(props, dict):
         _raise("invalid_value", f"Element {element_id} props must be an object")
+    if "background" in props:
+        _raise(
+            "invalid_background",
+            f"Element {element_id}: put background beside props on the card element, not inside props",
+        )
+    if "background" in value:
+        if element_type != "card":
+            _raise(
+                "invalid_background",
+                f"Element {element_id}: background is allowed only on card elements",
+            )
+        _background(value["background"], warn=warn)
     children = value["children"]
     if not isinstance(children, list):
         _raise("invalid_children", f"Element {element_id} children must be an array")
@@ -444,6 +486,31 @@ def _element(
         _text(props["accessibility_label"])
         _optional_enum(props, "semantic", _SEMANTICS)
         _optional_enum(props, "scale", {"small", "medium", "large"})
+
+
+def _background(value: object, *, warn: bool) -> None:
+    # Sits beside props rather than inside them: app builds from before
+    # backgrounds ignore unknown element keys but reject unknown props, so
+    # they keep showing the card, just without the weather.
+    if not isinstance(value, dict):
+        _raise("invalid_background", "Card background must be an object")
+    if set(value) - set(_BACKGROUND_FIELDS):
+        _raise(
+            "invalid_background",
+            "Card background takes only scene, intensity and time_of_day",
+        )
+    if "scene" not in value:
+        _raise("invalid_background", "Card background needs a scene")
+    for field, known in _BACKGROUND_FIELDS.items():
+        if field not in value:
+            continue
+        token = value[field]
+        if not isinstance(token, str) or not _BACKGROUND_TOKEN.fullmatch(token):
+            _raise("invalid_background", f"Card background {field} must be a lowercase name")
+        if warn and token not in known:
+            # Kept, not rejected: a newer app may know it, and this one falls
+            # back to a plain gradient. The value itself isn't logged.
+            _LOG.warning("bighelp card background unknown value field=%s", field)
 
 
 def _chart(props: dict[str, object], source_ids: set[str]) -> None:
