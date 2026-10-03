@@ -62,7 +62,7 @@ examples: `skill_view("loopdy:generative-ui")`.
 
 The app has three boards beside the chat. Write to them with `bighelp_board`:
 `post` for the Feed, `idea` for things you offer to do, `goal` and
-`update_goal` for goals and things you keep track of, `list` to see what's
+`update_goal` for goals and things you keep track of (each with a `category`), `list` to see what's
 there (with the user's thumbs up or down), `remove` to delete one. Publish only
 what the user asked for. Details: `skill_view("loopdy:bighelp-feed-and-ideas")`.
 

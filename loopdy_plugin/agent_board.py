@@ -31,10 +31,14 @@ logger = logging.getLogger(__name__)
 CAPABILITY = "native-agent-board-v1"
 # Thumbs up/down with a reason, read state, bulk read and idea → goal.
 FEEDBACK_CAPABILITY = "native-agent-board-feedback-v1"
+# Goals carry one of GOAL_CATEGORIES; the app groups them and starts new ones by category.
+GOAL_CATEGORIES_CAPABILITY = "native-agent-board-goal-categories-v1"
 TOOL_NAME = "bighelp_board"
 KINDS = ("feed", "idea", "goal")
 GOAL_SECTIONS = ("tracking", "goal")
 GOAL_STATUSES = ("active", "done")
+# The app's fixed list, in its order. "other" is the app's "Something else".
+GOAL_CATEGORIES = ("health", "relationships", "finance", "career", "interests", "productivity", "other")
 MAX_TITLE = 200
 MAX_BODY = 4_000
 MAX_NOTE = 600
@@ -79,6 +83,18 @@ def _clean(value: Any, limit: int, *, field: str, required: bool = False) -> str
     if len(text) > limit:
         raise BoardError(f"{field} is longer than {limit} characters.")
     return text
+
+
+def _category(value: Any) -> str:
+    """A goal's category, or "" for none. Anything outside the fixed list is refused."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise BoardError("category must be text.")
+    category = value.strip().lower()
+    if category and category not in GOAL_CATEGORIES:
+        raise BoardError("category must be one of " + ", ".join(GOAL_CATEGORIES) + ".")
+    return category
 
 
 def _image_type(head: bytes) -> tuple[str, str] | None:
@@ -139,6 +155,9 @@ class BoardStore:
                     ALTER TABLE items ADD COLUMN answer TEXT NOT NULL DEFAULT '';
                     ALTER TABLE items ADD COLUMN answered REAL NOT NULL DEFAULT 0;
                 """)
+            if "category" not in columns:
+                # Goals from before categories have none; the app shows them under Other.
+                db.execute("ALTER TABLE items ADD COLUMN category TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def _db(self):
@@ -156,7 +175,7 @@ class BoardStore:
 
     def publish(self, kind: str, *, title: Any, body: Any = "", icon: Any = "", section: Any = "",
                 links: Any = None, images: Any = None, source: Any = "", item_id: Any = None,
-                note: Any = "", status: Any = None, now: float | None = None) -> dict:
+                note: Any = "", status: Any = None, category: Any = None, now: float | None = None) -> dict:
         if kind not in KINDS:
             raise BoardError("kind must be feed, idea or goal.")
         now = time.time() if now is None else now
@@ -173,8 +192,10 @@ class BoardStore:
             status = (status or "active").lower()
             if status not in GOAL_STATUSES:
                 raise BoardError("A goal's status must be active or done.")
+            category = _category(category)
         else:
             status = ""
+            category = ""
         link_rows = self._links(links)
         if item_id is not None:
             item_id = _clean(item_id, 64, field="id", required=True)
@@ -193,22 +214,24 @@ class BoardStore:
                 raise BoardError("The user said not now to this idea recently. Don't offer it again yet; "
                                  "offer something different.")
             created = existing["created"] if existing else now
-            db.execute("""INSERT INTO items(id,kind,title,body,icon,section,status,note,links,images,source,created,updated)
-                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            db.execute("""INSERT INTO items(id,kind,title,body,icon,section,status,note,links,images,source,category,
+                                            created,updated)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(id) DO UPDATE SET title=excluded.title, body=excluded.body,
                             icon=excluded.icon, section=excluded.section, status=excluded.status,
                             note=excluded.note, links=excluded.links,
                             images=CASE WHEN excluded.images='[]' THEN items.images ELSE excluded.images END,
                             source=excluded.source,
+                            category=CASE WHEN excluded.category='' THEN items.category ELSE excluded.category END,
                             answer=CASE WHEN items.dismissed=1 THEN '' ELSE items.answer END,
                             answered=CASE WHEN items.dismissed=1 THEN 0 ELSE items.answered END,
                             dismissed=0, updated=excluded.updated""",
                        (item_id, kind, title, body, icon, section, status, note,
-                        json.dumps(link_rows), json.dumps(image_rows), source, created, now))
+                        json.dumps(link_rows), json.dumps(image_rows), source, category, created, now))
             self._prune(db, kind)
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
 
-    def update_goal(self, item_id: Any, *, note: Any = None, status: Any = None,
+    def update_goal(self, item_id: Any, *, note: Any = None, status: Any = None, category: Any = None,
                     now: float | None = None) -> dict:
         item_id = _clean(item_id, 64, field="id", required=True)
         with self._db() as db:
@@ -219,8 +242,9 @@ class BoardStore:
             next_status = row["status"] if status is None else str(status).lower()
             if next_status not in GOAL_STATUSES:
                 raise BoardError("A goal's status must be active or done.")
-            db.execute("UPDATE items SET note=?, status=?, updated=? WHERE id=?",
-                       (next_note, next_status, time.time() if now is None else now, item_id))
+            next_category = row["category"] if category is None else _category(category)
+            db.execute("UPDATE items SET note=?, status=?, category=?, updated=? WHERE id=?",
+                       (next_note, next_status, next_category, time.time() if now is None else now, item_id))
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
 
     def set_flags(self, item_id: str, *, liked: bool | None = None, dismissed: bool | None = None,
@@ -280,8 +304,11 @@ class BoardStore:
             row = db.execute("SELECT * FROM items WHERE id=? AND kind='idea'", (item_id,)).fetchone()
         if row is None:
             raise BoardError("No idea has that id.")
+        # An idea filed under a category's name ("Health") keeps it as a goal.
+        section = row["section"].strip().lower()
         goal = self.publish("goal", title=row["title"], body=row["body"], icon=row["icon"], section="goal",
-                            source=row["source"] or "From an idea", now=now)
+                            source=row["source"] or "From an idea",
+                            category=section if section in GOAL_CATEGORIES else None, now=now)
         self._answer(item_id, "goal", now)
         self.set_flags(item_id, dismissed=True)
         return goal
@@ -414,7 +441,7 @@ class BoardStore:
             "links": json.loads(row["links"]), "images": images, "source": row["source"],
             "liked": row["rating"] == 1, "dismissed": bool(row["dismissed"]),
             "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
-            "read": bool(row["read"]), "answer": row["answer"] or "none",
+            "read": bool(row["read"]), "answer": row["answer"] or "none", "category": row["category"],
             "createdAt": int(row["created"]), "updatedAt": int(row["updated"]),
         }
 
@@ -541,7 +568,8 @@ TOOL_DESCRIPTION = (
     "Publish to the user's bighelp app. Actions: 'post' adds a Feed post (a briefing, news item or "
     "update with optional images and links); 'idea' proposes something you could do for the user; "
     "'goal' adds or updates a Goal (section 'tracking' for things you watch, 'goal' for the user's "
-    "own goals) with a short status note; 'update_goal' changes a goal's note or marks it done; "
+    "own goals) with a short status note and a category; 'update_goal' changes a goal's note or category, "
+    "or marks it done; "
     "'list' shows recent items with the user's rating (up/down), reason and read state, so you can "
     "update rather than duplicate and post more of what they rate up, plus 'answered': ideas the user "
     "said yes, goal or not now to in the last 30 days; 'remove' deletes one. "
@@ -564,6 +592,9 @@ TOOL_PARAMETERS = {
                     "description": "Ideas: a short category like Health or Shopping. Goals: tracking or goal."},
         "note": {"type": "string", "maxLength": MAX_NOTE, "description": "A goal's latest status in one line."},
         "status": {"type": "string", "enum": list(GOAL_STATUSES)},
+        "category": {"type": "string", "enum": list(GOAL_CATEGORIES),
+                     "description": "Goals: the one that fits best. The app groups goals by it; 'other' "
+                                    "when none fits."},
         "images": {"type": "array", "maxItems": MAX_IMAGES, "items": {"type": "string"},
                    "description": "Absolute image file paths on this computer or https URLs."},
         "links": {"type": "array", "maxItems": MAX_LINKS, "items": {"type": "object", "properties": {
@@ -590,9 +621,10 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
         elif action == "goal":
             item = store.publish("goal", title=args.get("title"), body=args.get("body"), icon=args.get("icon"),
                                  section=args.get("section"), note=args.get("note"), status=args.get("status"),
-                                 source=args.get("source"), item_id=args.get("id"))
+                                 category=args.get("category"), source=args.get("source"), item_id=args.get("id"))
         elif action == "update_goal":
-            item = store.update_goal(args.get("id"), note=args.get("note"), status=args.get("status"))
+            item = store.update_goal(args.get("id"), note=args.get("note"), status=args.get("status"),
+                                     category=args.get("category"))
         elif action == "list":
             kind = args.get("kind")
             items = store.items((kind,) if kind in KINDS else KINDS, limit=30, include_dismissed=False)
@@ -601,8 +633,8 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
             # agent what's worth offering.
             return json.dumps({
                 "items": [{key: item[key] for key in
-                           ("id", "kind", "title", "section", "status", "note", "source", "createdAt",
-                            "rating", "reason", "read", "answer")} for item in items],
+                           ("id", "kind", "title", "section", "status", "note", "category", "source",
+                            "createdAt", "rating", "reason", "read", "answer")} for item in items],
                 "answered": [{"id": item["id"], "title": item["title"], "section": item["section"],
                               "answer": item["answer"], "rating": item["rating"], "reason": item["reason"]}
                              for item in answered],

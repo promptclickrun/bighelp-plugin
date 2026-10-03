@@ -28,7 +28,7 @@ All take `agentId` and follow the native context/ETag/request-ID contract.
 
 | Route | Body | Returns |
 |---|---|---|
-| `board/list` | `kinds`, `limit`, `includeDismissed` | `items` |
+| `board/list` | `kinds`, `limit`, `includeDismissed` | `items` (goals with `category`) |
 | `board/update` | `itemId`, `liked`, `dismissed`, `status` (goals); with feedback: `rating` (`up`/`down`/`none`), `reason` (thumbs down, 120 chars), `read` | `item` |
 | `board/media` | `itemId`, `index` | `mimeType`, base64 `data` |
 | `board/activity` | `limit` | `activity` with Hermes' session `title` |
@@ -47,6 +47,16 @@ to thumbs up. Hiding (`dismissed`) is the app's delete and can be undone; hidden
 items never reach the agent's `list`, which returns rating, reason and read so
 the agent can post more of what the user rates up. Boards from before 2.19.0
 keep their likes as thumbs up and start fully read.
+
+With `native-agent-board-goal-categories-v1`:
+
+Goals carry `category`: one of `health`, `relationships`, `finance`, `career`,
+`interests`, `productivity` or `other`, or `""` for none. Agents set it with the
+tool's `goal` and `update_goal` actions; anything outside the list is refused.
+Republishing a goal without a category keeps the one it had. Feed posts and
+ideas always have `""`. Making an idea a goal keeps its `section` as the
+category when the section is one of those names. Goals from before this have no
+category, and the app shows them under Other.
 
 ### Answers to ideas
 
