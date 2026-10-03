@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -101,6 +102,32 @@ class AgentTemplateTests(unittest.TestCase):
             templates._save("default", document, None)
         self.assertEqual(caught.exception.code, "secret_scan_blocked")
         self.assertFalse((self.workspace / ".loopdy").exists())
+
+    def launched_in(self, folder):
+        previous = os.getcwd()
+        os.chdir(folder)
+        self.addCleanup(os.chdir, previous)
+        modules = patch.dict(sys.modules)
+        modules.start()
+        self.addCleanup(modules.stop)
+        sys.modules.pop("tui_gateway.server", None)
+
+    def test_without_terminal_cwd_templates_live_where_hermes_runs_the_agent(self):
+        self.config.write_text(json.dumps({"model": "fixture-model"}))
+        outside = tempfile.TemporaryDirectory(prefix="loopdy-launch-", dir="/private/tmp")
+        self.addCleanup(outside.cleanup)
+        launch = Path(outside.name)
+        self.launched_in(launch)
+        templates._save("default", self.document(), None)
+        self.assertTrue((launch / ".loopdy" / "agent-templates" / "default").is_dir())
+
+    def test_hermes_own_folder_never_holds_templates(self):
+        self.config.write_text(json.dumps({"model": "fixture-model"}))
+        self.launched_in(self.home)
+        with self.assertRaises(templates.AgentTemplateError) as caught:
+            templates._save("default", self.document(), None)
+        self.assertEqual(caught.exception.code, "workspace_not_configured")
+        self.assertFalse((self.home / ".loopdy").exists())
 
     def test_zero_progress_write_fails_without_leaving_temporary_file(self):
         document = self.document()

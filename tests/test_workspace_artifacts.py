@@ -2,7 +2,10 @@
 import base64
 import json
 import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -116,13 +119,94 @@ class WorkspaceArtifactRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual({row["name"] for row in response.json()["entries"]}, {"notes.md", "summary.pdf"})
 
-    def test_missing_and_relative_config_never_fall_back_to_process_cwd(self):
-        for cwd in [None, ".", "auto", "relative/folder"]:
+    def launched_in(self, folder):
+        """Hermes was started in *folder*: the folder its chats use when none is set."""
+        previous = os.getcwd()
+        os.chdir(folder)
+        self.addCleanup(os.chdir, previous)
+        modules = patch.dict(sys.modules)
+        modules.start()
+        self.addCleanup(modules.stop)
+        sys.modules.pop("tui_gateway.server", None)
+
+    def test_without_terminal_cwd_the_agent_files_are_where_hermes_runs_its_chats(self):
+        outside = tempfile.TemporaryDirectory(prefix="loopdy-launch-", dir="/private/tmp")
+        self.addCleanup(outside.cleanup)
+        launch = Path(outside.name) / "launch"
+        (launch / "projects").mkdir(parents=True)
+        (launch / "notes.md").write_text("made by the agent")
+        self.launched_in(launch)
+        for cwd in [None, ".", "auto", "cwd"]:
             config = {} if cwd is None else {"terminal": {"cwd": cwd}}
             (self.home / "config.yaml").write_text(yaml.safe_dump(config))
+            scope = self.request("scope")
+            self.assertEqual(scope.status_code, 200, scope.text)
+            workspace = scope.json()["workspace"]
+            self.assertEqual(workspace["root"], str(launch.resolve()))
+            self.assertEqual(workspace["source"], "terminal.cwd")
+            self.assertEqual(workspace["origin"], "default")
+        listing = self.request("list")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual({row["name"] for row in listing.json()["entries"]}, {"notes.md", "projects"})
+        (self.home / "config.yaml").write_text(yaml.safe_dump({"terminal": {"cwd": "projects"}}))
+        scope = self.request("scope")
+        self.assertEqual(scope.status_code, 200, scope.text)
+        self.assertEqual(scope.json()["workspace"]["root"], str((launch / "projects").resolve()))
+        self.assertEqual(scope.json()["workspace"]["origin"], "config")
+
+    def test_hermes_running_in_its_own_folder_is_not_a_working_folder(self):
+        self.launched_in(self.home)
+        (self.home / "config.yaml").write_text(yaml.safe_dump({}))
+        (self.home / ".env").write_text("FIXTURE_KEY=not-for-the-phone\n")
+        response = self.request("scope")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "workspace_not_configured")
+        self.assertNotIn("not-for-the-phone", self.request("read", str(self.home / ".env")).text)
+
+    def test_container_and_remote_backends_say_why_instead_of_not_configured(self):
+        root = self.home / "workspace"
+        root.mkdir()
+        for terminal, code in [({"backend": "docker", "cwd": str(root)}, "workspace_in_container"),
+                               ({"backend": "modal"}, "workspace_in_container"),
+                               ({"backend": "ssh", "cwd": "~/site"}, "workspace_on_remote")]:
+            (self.home / "config.yaml").write_text(yaml.safe_dump({"terminal": terminal}))
+            for operation in ("scope", "recent"):
+                response = self.request(operation)
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["error"]["code"], code)
+
+    def test_windows_hosts_advertise_files_and_say_they_are_not_supported_yet(self):
+        from loopdy_plugin import workspace_root
+        self.configure()
+        with patch.object(workspace_root, "_IS_WINDOWS", True):
+            features = self.context().json()["features"]
+            self.assertIn(files.CAPABILITY, features)
+            self.assertIn(files.RECENT_CAPABILITY, features)
             response = self.request("scope")
-            self.assertEqual(response.status_code, 409, response.text)
-            self.assertEqual(response.json()["error"]["code"], "workspace_not_configured")
+        self.assertEqual(response.status_code, 501, response.text)
+        self.assertEqual(response.json()["error"]["code"], "workspace_windows_unsupported")
+
+    def test_hermes_own_folder_inside_the_workspace_is_never_shown_or_read(self):
+        root = self.home / "everything"
+        hermes = root / "hermes-home"
+        hermes.mkdir(parents=True)
+        (root / "notes.md").write_text("visible")
+        (hermes / ".env").write_text("FIXTURE_KEY=not-for-the-phone\n")
+        (hermes / "report.md").write_text("hermes internals")
+        (hermes / "config.yaml").write_text(yaml.safe_dump({"terminal": {"cwd": str(root)}}))
+        with patch.dict(os.environ, {"HERMES_HOME": str(hermes)}):
+            listing = self.request("list")
+            self.assertEqual(listing.status_code, 200, listing.text)
+            self.assertEqual([row["name"] for row in listing.json()["entries"]], ["notes.md"])
+            for path in (hermes, hermes / ".env", hermes / "report.md"):
+                operation = "list" if path == hermes else "read"
+                response = self.request(operation, str(path))
+                self.assertNotEqual(response.status_code, 200, response.text)
+                self.assertNotIn("not-for-the-phone", response.text)
+            self.history([(None, self.wrote(hermes / "report.md"), 500.0)])
+            recent = self.request("recent")
+        self.assertEqual(recent.status_code, 200, recent.text)
+        self.assertEqual([row["name"] for row in recent.json()["entries"]], ["notes.md"])
 
     def test_outside_traversal_symlink_and_special_files_are_not_readable(self):
         root = self.configure()

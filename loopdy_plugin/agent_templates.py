@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
+from . import workspace_root
 from .native_context import NativeAPIError, NativeContext, PROFILE_ID, native_context
 from .sensitive import contains_sensitive_credential
 
@@ -396,26 +397,12 @@ def _workspace_and_config(agent_id: str) -> tuple[Path, dict[str, Any]]:
         raw = read_user_config_raw(get_profile_dir(agent_id) / "config.yaml")
     except (OSError, UnicodeError, ValueError, TypeError):
         raise AgentTemplateError(409, "profile_config_invalid", "The selected profile configuration must be repaired locally.") from None
-    terminal = raw.get("terminal")
-    cwd = terminal.get("cwd") if isinstance(terminal, dict) else None
-    if not isinstance(cwd, str) or not cwd.strip() or cwd.strip() in {".", "auto", "cwd"}:
-        raise AgentTemplateError(
-            409,
-            "workspace_not_configured",
-            "Set an absolute terminal.cwd for this profile before using agent templates.",
-        )
+    # The agent's own folder, found the way Hermes finds it. Templates are the
+    # plugin's files, so they live on this computer whatever the terminal backend.
     try:
-        candidate = Path(cwd).expanduser()
-    except (OSError, RuntimeError, ValueError):
-        raise AgentTemplateError(409, "workspace_not_configured", "The selected profile requires an absolute terminal.cwd.") from None
-    if not candidate.is_absolute():
-        raise AgentTemplateError(409, "workspace_not_configured", "The selected profile requires an absolute terminal.cwd.")
-    try:
-        root = candidate.resolve(strict=True)
-    except (OSError, RuntimeError):
-        raise AgentTemplateError(409, "workspace_unavailable", "The selected profile workspace is unavailable.") from None
-    if not root.is_dir():
-        raise AgentTemplateError(409, "workspace_unavailable", "The selected profile workspace is unavailable.")
+        root = workspace_root.resolve_config(agent_id, raw, agent_files=False).root
+    except NativeAPIError as error:
+        raise AgentTemplateError(error.status, error.code, error.message) from None
     # This comparison proves the public profile helper still resolves the same
     # profile while the separately configured workspace remains its own boundary.
     if get_profile_dir(agent_id).name == "" or PROFILE_ID.fullmatch(agent_id) is None:
