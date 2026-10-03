@@ -53,6 +53,7 @@ provides_tools:
   - iphone_health
   - iphone_calendar
   - iphone_reminders
+  - iphone_location
   - bighelp_render_summary
   - bighelp_render_metrics
   - bighelp_render_list

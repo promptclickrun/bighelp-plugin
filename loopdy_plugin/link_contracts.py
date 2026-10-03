@@ -86,8 +86,14 @@ DEVICE_TOOL_OPERATIONS = frozenset(
         "health.read",
         "calendar.list", "calendar.create", "calendar.update", "calendar.delete",
         "reminders.list", "reminders.create", "reminders.update", "reminders.delete",
+        "location.current",
     }
 )
+# Operations that only read. Their results are private and never kept for a retry.
+DEVICE_TOOL_READ_OPERATIONS = frozenset(
+    {"health.read", "calendar.list", "reminders.list", "location.current"}
+)
+DEVICE_TOOL_KINDS = ("health", "calendar", "reminders", "location")
 HEALTH_TYPES = (
     "step_count",
     "distance_walking_running",
@@ -730,8 +736,8 @@ def parse_device_tool_status(
         raise ValueError("bighelp Link device tool status epoch is invalid")
     enabled = value.get("enabled")
     if (
-        not isinstance(enabled, list) or len(enabled) > 3
-        or any(item not in {"health", "calendar", "reminders"} for item in enabled)
+        not isinstance(enabled, list) or len(enabled) > len(DEVICE_TOOL_KINDS)
+        or any(item not in DEVICE_TOOL_KINDS for item in enabled)
         or len(set(enabled)) != len(enabled)
         or not isinstance(value.get("available"), bool)
     ):
@@ -2563,6 +2569,9 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
         allowed = {"id", "expectedRevision", "span", "occurrenceStart"}
     elif operation == "reminders.update":
         allowed = {"id", "expectedRevision", "title", "dueDate", "startDate", "timeZone", "notes", "priority", "completed"}
+    elif operation == "location.current":
+        # Where the phone is right now; nothing for the model to choose.
+        allowed = set()
     else:
         allowed = {"id", "expectedRevision"}
     if not set(value).issubset(allowed):
@@ -2908,6 +2917,8 @@ __all__ = [
     "DEVICE_TOOL_CAPABILITY",
     "DIRECTED_FRAMES_CAPABILITY",
     "DEVICE_TOOL_OPERATIONS",
+    "DEVICE_TOOL_READ_OPERATIONS",
+    "DEVICE_TOOL_KINDS",
     "HEALTH_TYPES",
     "MAX_DEVICE_TOOL_PAYLOAD_BYTES",
     "MAX_DEVICE_TOOL_ARGUMENT_BYTES",

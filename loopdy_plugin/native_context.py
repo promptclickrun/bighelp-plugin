@@ -189,18 +189,21 @@ def _native_features(
     try:
         from .native_device_tools import (
             CAPABILITY as device_tools_capability,
+            LOCATION_CAPABILITY as device_location_capability,
             available as device_tools_available,
         )
         if profile is not None and device_tools_available(profile):
-            features.append(device_tools_capability)
+            features.extend((device_tools_capability, device_location_capability))
         else:
-            skip(device_tools_capability,
-                 "no unique lifecycle-owned middleware registration matches the "
-                 "verified serving profile (missing profile/registration, "
-                 "namespace/profile mismatch, or stale generations). "
-                 "Restart `hermes serve` and check the middleware registration warnings.")
+            reason = ("no unique lifecycle-owned middleware registration matches the "
+                      "verified serving profile (missing profile/registration, "
+                      "namespace/profile mismatch, or stale generations). "
+                      "Restart `hermes serve` and check the middleware registration warnings.")
+            skip(device_tools_capability, reason)
+            skip(device_location_capability, reason)
     except ImportError:
         skip("native-device-tools-v1", "native device-tool support is unimportable.")
+        skip("native-device-location-v1", "native device-tool support is unimportable.")
     from .room_activity import CAPABILITY, activity_hub
     if activity_hub().available:
         features.append(CAPABILITY)

@@ -117,12 +117,22 @@ only the reaction.
 
 ## iPhone tools
 
-`iphone_calendar`, `iphone_reminders` and `iphone_health` work only after the
-user turns each one on in bighelp, and only while the app is open. If the phone
-isn't available you get a clear "phone unavailable" result: say so rather than
-guessing. Health is read-only. For calendar and reminder changes, use the exact
-`id` and `expectedRevision` from a list result, and read again before retrying
-anything uncertain.
+`iphone_calendar`, `iphone_reminders`, `iphone_health` and `iphone_location`
+work only after the user turns each one on in bighelp, and only while the app is
+open. If the phone isn't available you get a clear "phone unavailable" result:
+say so rather than guessing. Health is read-only. For calendar and reminder
+changes, use the exact `id` and `expectedRevision` from a list result, and read
+again before retrying anything uncertain.
+
+`iphone_location` with `operation: "current"` returns where the phone is now:
+`latitude`, `longitude`, `horizontalAccuracyMeters`, `timestamp`, `precise` and,
+when Apple can name it, a `place` (street, neighborhood, city, region, country,
+postalCode). Call it only when the user's request needs where they are, like
+"what's good to eat near me?". iOS may ask the user to share their precise
+location; if they keep it approximate, `precise` is false, there's no street, and
+the fix is only good to about `horizontalAccuracyMeters`: treat it as a rough
+area and say so. Don't keep or repeat the coordinates beyond what the answer
+needs.
 
 ## More
 
