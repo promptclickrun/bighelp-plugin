@@ -49,6 +49,12 @@ MAX_REASON = 120
 MAX_READ_BATCH = 200
 RATINGS = {"down": -1, "none": 0, "up": 1}
 MAX_APPROVALS = 1_000
+# How long the agent remembers your answer to an idea. A "not now" blocks the
+# same offer for this long, then the idea may come back.
+ANSWER_MEMORY_SECONDS = 30 * 24 * 3600
+MAX_ANSWERED = 30
+# What the app sends when someone taps Let's do it on an idea.
+_LETS_DO_IT = re.compile(r"Yes, go ahead with this idea: \u201c(.{1,200})\u201d\.\s*\Z", re.S)
 _ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _IMAGE_TYPES = (
     (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
@@ -126,6 +132,13 @@ class BoardStore:
                     UPDATE items SET rating=1 WHERE liked=1;
                     UPDATE items SET read=1;
                 """)
+            if "answer" not in columns:
+                # Your answer to an idea: yes (Let's do it), goal (Make it a goal) or
+                # not now. Ideas hidden before this have no answer; we can't know which.
+                db.executescript("""
+                    ALTER TABLE items ADD COLUMN answer TEXT NOT NULL DEFAULT '';
+                    ALTER TABLE items ADD COLUMN answered REAL NOT NULL DEFAULT 0;
+                """)
 
     @contextmanager
     def _db(self):
@@ -171,9 +184,14 @@ class BoardStore:
             item_id = uuid.uuid4().hex
         image_rows = self._store_images(item_id, images)
         with self._db() as db:
-            existing = db.execute("SELECT kind, created FROM items WHERE id=?", (item_id,)).fetchone()
+            existing = db.execute("SELECT kind, created, answer, answered FROM items WHERE id=?",
+                                  (item_id,)).fetchone()
             if existing and existing["kind"] != kind:
                 raise BoardError("That id belongs to a different kind of item.")
+            if (existing and existing["answer"] == "not now"
+                    and now - existing["answered"] < ANSWER_MEMORY_SECONDS):
+                raise BoardError("The user said not now to this idea recently. Don't offer it again yet; "
+                                 "offer something different.")
             created = existing["created"] if existing else now
             db.execute("""INSERT INTO items(id,kind,title,body,icon,section,status,note,links,images,source,created,updated)
                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -181,7 +199,10 @@ class BoardStore:
                             icon=excluded.icon, section=excluded.section, status=excluded.status,
                             note=excluded.note, links=excluded.links,
                             images=CASE WHEN excluded.images='[]' THEN items.images ELSE excluded.images END,
-                            source=excluded.source, dismissed=0, updated=excluded.updated""",
+                            source=excluded.source,
+                            answer=CASE WHEN items.dismissed=1 THEN '' ELSE items.answer END,
+                            answered=CASE WHEN items.dismissed=1 THEN 0 ELSE items.answered END,
+                            dismissed=0, updated=excluded.updated""",
                        (item_id, kind, title, body, icon, section, status, note,
                         json.dumps(link_rows), json.dumps(image_rows), source, created, now))
             self._prune(db, kind)
@@ -204,9 +225,11 @@ class BoardStore:
 
     def set_flags(self, item_id: str, *, liked: bool | None = None, dismissed: bool | None = None,
                   status: str | None = None, rating: str | None = None, reason: str | None = None,
-                  read: bool | None = None) -> dict:
+                  read: bool | None = None, now: float | None = None) -> dict:
         """What the person did with an item in the app. ``liked`` is the older
-        app's heart; it maps onto the thumbs rating."""
+        app's heart; it maps onto the thumbs rating. Hiding an idea is its "not
+        now" (unless they already said yes); hiding a Feed post or goal is just
+        clearing it."""
         if rating is not None and rating not in RATINGS:
             raise BoardError("rating must be up, down or none.")
         with self._db() as db:
@@ -225,12 +248,18 @@ class BoardStore:
                 next_reason = ""
             if score != -1:
                 next_reason = ""
-            db.execute("""UPDATE items SET liked=?, rating=?, reason=?, read=?, dismissed=?, status=?, updated=?
-                          WHERE id=?""", (
+            now = time.time() if now is None else now
+            answer, answered = row["answer"], row["answered"]
+            if row["kind"] == "idea" and dismissed is True and not row["dismissed"] and not answer:
+                answer, answered = "not now", now
+            elif dismissed is False and answer == "not now":
+                answer, answered = "", 0
+            db.execute("""UPDATE items SET liked=?, rating=?, reason=?, read=?, dismissed=?, status=?, answer=?,
+                          answered=?, updated=? WHERE id=?""", (
                 int(score == 1), score, next_reason,
                 int(row["read"] if read is None else read),
                 int(row["dismissed"] if dismissed is None else dismissed),
-                row["status"] if status is None else status, time.time(), item_id))
+                row["status"] if status is None else status, answer, answered, now, item_id))
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
 
     def mark_read(self, item_ids: list[str], *, read: bool = True) -> int:
@@ -253,8 +282,33 @@ class BoardStore:
             raise BoardError("No idea has that id.")
         goal = self.publish("goal", title=row["title"], body=row["body"], icon=row["icon"], section="goal",
                             source=row["source"] or "From an idea", now=now)
+        self._answer(item_id, "goal", now)
         self.set_flags(item_id, dismissed=True)
         return goal
+
+    def accept_idea(self, title: str, *, now: float | None = None) -> bool:
+        """Records a Let's do it: the newest idea on the board with that title."""
+        with self._db() as db:
+            row = db.execute("""SELECT id FROM items WHERE kind='idea' AND dismissed=0 AND title=?
+                                ORDER BY created DESC LIMIT 1""", (title.strip(),)).fetchone()
+        if row is None:
+            return False
+        self._answer(row["id"], "yes", now)
+        return True
+
+    def _answer(self, item_id: str, answer: str, now: float | None) -> None:
+        with self._db() as db:
+            db.execute("UPDATE items SET answer=?, answered=? WHERE id=? AND kind='idea'",
+                       (answer, time.time() if now is None else now, item_id))
+
+    def answered_ideas(self, *, now: float | None = None, limit: int = MAX_ANSWERED) -> list[dict]:
+        """Ideas the person answered that are off the board now, newest first,
+        from the last ``ANSWER_MEMORY_SECONDS``. Feed and goals never appear."""
+        since = (time.time() if now is None else now) - ANSWER_MEMORY_SECONDS
+        with self._db() as db:
+            rows = db.execute("""SELECT * FROM items WHERE kind='idea' AND dismissed=1 AND answer!=''
+                                 AND answered>=? ORDER BY answered DESC LIMIT ?""", (since, limit)).fetchall()
+        return [self._item(row) for row in rows]
 
     def remove(self, item_id: Any) -> bool:
         item_id = _clean(item_id, 64, field="id", required=True)
@@ -360,7 +414,7 @@ class BoardStore:
             "links": json.loads(row["links"]), "images": images, "source": row["source"],
             "liked": row["rating"] == 1, "dismissed": bool(row["dismissed"]),
             "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
-            "read": bool(row["read"]),
+            "read": bool(row["read"]), "answer": row["answer"] or "none",
             "createdAt": int(row["created"]), "updatedAt": int(row["updated"]),
         }
 
@@ -489,7 +543,8 @@ TOOL_DESCRIPTION = (
     "'goal' adds or updates a Goal (section 'tracking' for things you watch, 'goal' for the user's "
     "own goals) with a short status note; 'update_goal' changes a goal's note or marks it done; "
     "'list' shows recent items with the user's rating (up/down), reason and read state, so you can "
-    "update rather than duplicate and post more of what they rate up; 'remove' deletes one. "
+    "update rather than duplicate and post more of what they rate up, plus 'answered': ideas the user "
+    "said yes, goal or not now to in the last 30 days; 'remove' deletes one. "
     "Only publish what the user asked you to surface. Never create schedules or posts on your own "
     "initiative; see the bighelp-feed-and-ideas skill."
 )
@@ -541,11 +596,17 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
         elif action == "list":
             kind = args.get("kind")
             items = store.items((kind,) if kind in KINDS else KINDS, limit=30, include_dismissed=False)
-            # The person's thumbs, reasons and read state tell the agent what's worth posting.
-            return json.dumps({"items": [{key: item[key] for key in
-                               ("id", "kind", "title", "section", "status", "note", "source", "createdAt",
-                                "rating", "reason", "read")}
-                               for item in items]})
+            answered = store.answered_ideas() if kind in (None, "idea") else []
+            # The person's thumbs, reasons, read state and answers to ideas tell the
+            # agent what's worth offering.
+            return json.dumps({
+                "items": [{key: item[key] for key in
+                           ("id", "kind", "title", "section", "status", "note", "source", "createdAt",
+                            "rating", "reason", "read", "answer")} for item in items],
+                "answered": [{"id": item["id"], "title": item["title"], "section": item["section"],
+                              "answer": item["answer"], "rating": item["rating"], "reason": item["reason"]}
+                             for item in answered],
+            })
         elif action == "remove":
             return json.dumps({"removed": store.remove(args.get("id"))})
         else:
@@ -622,6 +683,9 @@ class ActivityRecorder:
         with self._lock:
             if hook == "pre_llm_call":
                 message = payload.get("user_message")
+                accepted = _LETS_DO_IT.match(message) if isinstance(message, str) else None
+                if accepted and key not in self._turns:
+                    self._store_getter().accept_idea(accepted.group(1))
                 if key not in self._turns:
                     self._turns[key] = {"request": _first_sentence(message, 200) if isinstance(message, str)
                                         else "", "tools": [], "response": ""}

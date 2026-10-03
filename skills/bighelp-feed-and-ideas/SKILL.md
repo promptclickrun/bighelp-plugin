@@ -64,9 +64,25 @@ and `read`. Check it before a scheduled run posts:
 - Post more of what they rate up: the same topics, sources and format.
 - Cut back on what they rate down, and act on the reason: drop an irrelevant
   topic, post less often, skip what they already knew, or move the time.
-- Items the user deleted never appear in `list`; don't post them again.
+- Feed posts the user deleted never appear in `list`. Deleting a post usually
+  just means they read it, so it isn't a thumbs down; don't post it again.
 - Unread items mean the user hasn't looked yet. Don't pile more on top of a
   long unread stretch; one good post beats several.
+
+## Learn from the user's answers to ideas
+
+Each idea in `items` has an `answer`: `yes` (they tapped Let's do it), or `none`.
+`list` also returns `answered`: ideas from the last 30 days that are off the
+board, each with an `answer`:
+
+- `yes`: they wanted it. Offer more like it, and follow up on the work.
+- `goal`: they made it one of their goals. It's in Goals now; keep that goal's
+  note current instead of offering the idea again.
+- `not now`: they turned it down. Don't offer it again (the board refuses the
+  same `id` for 30 days), and don't re-word it under a new id. If several
+  `not now` answers share a `section` or theme, offer less of that.
+
+Before each run that posts ideas, check `answered` together with the thumbs.
 
 ## When the user replies from the app
 

@@ -47,3 +47,22 @@ to thumbs up. Hiding (`dismissed`) is the app's delete and can be undone; hidden
 items never reach the agent's `list`, which returns rating, reason and read so
 the agent can post more of what the user rates up. Boards from before 2.19.0
 keep their likes as thumbs up and start fully read.
+
+### Answers to ideas
+
+Ideas also carry `answer`: `yes` (Let's do it), `goal` (Make it a goal), `not now`
+(hidden) or `none`. The plugin records them without an app change:
+
+- **Let's do it** sends the chat message `Yes, go ahead with this idea: “<title>”.`;
+  the board's `pre_llm_call` observer marks the newest visible idea with that
+  title `yes`.
+- **Make it a goal** (`board/promote`) marks the idea `goal`.
+- **Not now** and Delete (`board/update` with `dismissed: true`) mark an idea
+  `not now`, unless it was already answered. Undo clears it. Hiding Feed posts
+  and goals records nothing: deleting a read post is just clearing it.
+
+The agent's `list` returns `answer` on each idea and an `answered` list: hidden
+ideas answered in the last 30 days (up to 30). Publishing an idea with the id of
+a `not now` from the last 30 days fails with a message telling the agent to offer
+something else; after that, re-publishing brings it back with no answer. Ideas
+hidden before this change have no answer.
