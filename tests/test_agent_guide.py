@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -47,6 +48,27 @@ class AgentGuideTests(unittest.TestCase):
         self.assertIn("MEDIA:", brief)
         self.assertIn('deliver "local"', brief)
         self.assertIn('skill_view("loopdy:bighelp")', brief)
+
+    def test_agents_in_hermes_own_folder_save_files_where_bighelp_shows_them(self) -> None:
+        # Hosted Hermes starts chats in its own folder; bighelp's Workspace shows the
+        # workspace folder in it, so the agent is told to put the user's files there.
+        from loopdy_plugin import workspace_root
+        workspace = workspace_root.Workspace(Path("/opt/data/workspace"), workspace_root.HERMES_WORKSPACE, True)
+        session = {"platform": "bighelp", "profile_name": "default", "cwd": "/opt/data"}
+        with patch.object(workspace_root, "resolve", return_value=workspace) as resolve:
+            brief = agent_guide.prompt_section(session)
+            resolve.assert_called_once_with("default")
+            self.assertIn("/opt/data/workspace", brief)
+            self.assertTrue(brief.endswith(agent_guide.CHAT_BRIEF_GUIDE))
+            # A chat already working there, or elsewhere by choice, is left alone.
+            self.assertNotIn("/opt/data/workspace", agent_guide.prompt_section({**session, "cwd": "/opt/data/workspace/site"}))
+            self.assertNotIn("/opt/data/workspace", agent_guide.prompt_section({**session, "platform": "telegram"}))
+        own = workspace_root.Workspace(Path("/srv/garden"), "config")
+        with patch.object(workspace_root, "resolve", return_value=own):
+            self.assertNotIn("/srv/garden", agent_guide.prompt_section(session))
+        with patch.object(workspace_root, "resolve", side_effect=RuntimeError("no host")):
+            self.assertTrue(agent_guide.prompt_section(session).startswith(agent_guide.CHAT_BRIEF))
+        self.assertTrue(agent_guide.prompt_section({"platform": "bighelp"}).startswith(agent_guide.CHAT_BRIEF))
 
     def test_card_answers_arrive_as_the_next_message(self) -> None:
         # bighelp sends a form's answers and a picked option to the agent as the user's next message.
