@@ -3,7 +3,7 @@
   "label": "bighelp",
   "description": "The bighelp app's routes on this Hermes host: native features, notifications and approvals.",
   "icon": "MessageSquare",
-  "version": "3.4.2",
+  "version": "3.4.3",
   "tab": {
     "path": "/bighelp",
     "position": "end",
