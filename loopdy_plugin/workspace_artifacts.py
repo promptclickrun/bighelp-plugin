@@ -35,6 +35,10 @@ CAPABILITY = "native-workspace-files-v1"
 # it reads the agent's own write_file/patch calls and MEDIA deliveries, then
 # adds a shallow look at the top folders for anything made another way.
 RECENT_CAPABILITY = "native-workspace-recent-v1"
+# The agent's files are found in Hermes' workspace folder when Hermes runs the
+# agent in its own folder (hosted Hermes). Without it the app says to update or
+# restart, not to set terminal.cwd.
+HERMES_HOME_CAPABILITY = "native-workspace-hermes-home-v1"
 RECENT_LIMIT = 300
 RECENT_HISTORY_ROWS = 3_000
 RECENT_SHALLOW_DEPTH = 2
@@ -163,6 +167,16 @@ def _is_hidden(info: os.stat_result, hidden: frozenset[tuple[int, int]]) -> bool
     return stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) in hidden
 
 
+def _is_secret(workspace: workspace_root.Workspace, parts: tuple[str, ...]) -> bool:
+    """Hermes' credential files, in a workspace inside Hermes' own folder."""
+    return workspace.in_hermes_folder and any(workspace_root.is_secret_name(part) for part in parts)
+
+
+def _refuse_secret(workspace: workspace_root.Workspace, parts: tuple[str, ...]) -> None:
+    if _is_secret(workspace, parts):
+        raise NativeAPIError(403, "path_outside_workspace", "The requested path is outside the configured workspace.")
+
+
 @contextmanager
 def _opened(root: Path, parts: tuple[str, ...], *, directory: bool,
             hidden: frozenset[tuple[int, int]] = frozenset()) -> Iterator[int | Path]:
@@ -245,6 +259,7 @@ def _list(workspace: workspace_root.Workspace, parts: tuple[str, ...], profile_i
           hidden: frozenset[tuple[int, int]] = frozenset()) -> dict[str, Any]:
     root = workspace.root
     entries: list[dict[str, Any]] = []
+    _refuse_secret(workspace, parts)
     with _opened(root, parts, directory=True, hidden=hidden) as opened:
         try:
             names = sorted(os.listdir(opened))
@@ -254,6 +269,8 @@ def _list(workspace: workspace_root.Workspace, parts: tuple[str, ...], profile_i
             raise NativeAPIError(413, "directory_too_large", "The workspace directory exceeds the row limit.")
         for name in names:
             if not isinstance(name, str) or name in {"", ".", ".."} or os.sep in name or (os.altsep and os.altsep in name):
+                continue
+            if _is_secret(workspace, (name,)):
                 continue
             try:
                 if isinstance(opened, int):
@@ -357,7 +374,8 @@ def _agent_written_paths(profile_id: str) -> list[tuple[float, str]]:
 
 
 def _confined_entry(root: Path, raw_path: str,
-                    hidden: frozenset[tuple[int, int]] = frozenset()) -> tuple[tuple[str, ...], dict[str, Any]] | None:
+                    hidden: frozenset[tuple[int, int]] = frozenset(),
+                    hide_secrets: bool = False) -> tuple[tuple[str, ...], dict[str, Any]] | None:
     """A workspace entry for an absolute path that still resolves inside the root."""
     try:
         candidate = Path(raw_path).expanduser()
@@ -368,6 +386,8 @@ def _confined_entry(root: Path, raw_path: str,
     except (OSError, RuntimeError, ValueError):
         return None
     if not parts or any(part.startswith(".") for part in parts) or _skip_recent_file(parts[-1]):
+        return None
+    if hide_secrets and any(workspace_root.is_secret_name(part) for part in parts):
         return None
     try:
         with _opened(root, parts, directory=False, hidden=hidden) as descriptor:
@@ -382,7 +402,8 @@ def _confined_entry(root: Path, raw_path: str,
 
 
 def _shallow_newest(root: Path, deadline: float,
-                    hidden: frozenset[tuple[int, int]] = frozenset()) -> list[tuple[tuple[str, ...], dict[str, Any]]]:
+                    hidden: frozenset[tuple[int, int]] = frozenset(),
+                    hide_secrets: bool = False) -> list[tuple[tuple[str, ...], dict[str, Any]]]:
     """Files in the top folders, opened O_NOFOLLOW relative to their parent."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     found: list[tuple[tuple[str, ...], dict[str, Any]]] = []
@@ -401,6 +422,8 @@ def _shallow_newest(root: Path, deadline: float,
                     if name == ".git":
                         is_repository = True
                     if not name or name.startswith(".") or os.sep in name or (os.altsep and os.altsep in name):
+                        continue
+                    if hide_secrets and workspace_root.is_secret_name(name):
                         continue
                     try:
                         info = item.stat(follow_symlinks=False)
@@ -459,10 +482,10 @@ def _recent(workspace: workspace_root.Workspace, profile_id: str,
     for timestamp, raw_path in _agent_written_paths(profile_id):
         if len(ranked) >= RECENT_LIMIT:
             break
-        confined = _confined_entry(root, raw_path, hidden)
+        confined = _confined_entry(root, raw_path, hidden, workspace.in_hermes_folder)
         if confined is not None and confined[0] not in ranked:
             ranked[confined[0]] = (timestamp, confined[1])
-    for parts, projected in _shallow_newest(root, deadline, hidden):
+    for parts, projected in _shallow_newest(root, deadline, hidden, workspace.in_hermes_folder):
         if parts not in ranked:
             ranked[parts] = (projected["created"] or projected["mtime"], projected)
     newest = heapq.nlargest(RECENT_LIMIT, ranked.values(), key=lambda row: row[0])
@@ -481,6 +504,7 @@ def _recent(workspace: workspace_root.Workspace, profile_id: str,
 def _read(workspace: workspace_root.Workspace, parts: tuple[str, ...], profile_id: str,
           hidden: frozenset[tuple[int, int]] = frozenset()) -> dict[str, Any]:
     root = workspace.root
+    _refuse_secret(workspace, parts)
     with _opened(root, parts, directory=False, hidden=hidden) as opened:
         try:
             if isinstance(opened, int):

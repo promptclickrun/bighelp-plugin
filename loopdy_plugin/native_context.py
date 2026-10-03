@@ -226,15 +226,18 @@ def _native_features(
     try:
         from .workspace_artifacts import CAPABILITY as workspace_files_capability
         from .workspace_artifacts import RECENT_CAPABILITY as workspace_recent_capability
+        from .workspace_artifacts import HERMES_HOME_CAPABILITY as workspace_home_capability
         from .workspace_artifacts import available as workspace_files_available
         if workspace_files_available():
-            features.extend((workspace_files_capability, workspace_recent_capability))
+            features.extend((workspace_files_capability, workspace_recent_capability, workspace_home_capability))
         else:
             skip(workspace_files_capability, "workspace file availability checks failed.")
             skip(workspace_recent_capability, "workspace file availability checks failed.")
+            skip(workspace_home_capability, "workspace file availability checks failed.")
     except ImportError:
         skip("native-workspace-files-v1", "workspace file support is unimportable.")
         skip("native-workspace-recent-v1", "workspace file support is unimportable.")
+        skip("native-workspace-hermes-home-v1", "workspace file support is unimportable.")
     try:
         from .agent_board import CAPABILITY as board_capability
         from .agent_board import FEEDBACK_CAPABILITY as board_feedback_capability
