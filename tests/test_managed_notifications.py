@@ -434,6 +434,47 @@ class ManagedNotificationTests(unittest.TestCase):
             with self.assertRaises(ManagedNotificationError): reopened.enrollment(self.grant_id)
         finally: reopened.close()
 
+    def wakes(self):
+        return [json.loads(raw) for method, path, raw, _ in self.calls if path.endswith("/wake")]
+
+    def test_the_phone_is_woken_to_renew_its_sign_in_every_few_hours(self):
+        # A rotating sign-in (the Nous Portal's lasts a day) must be renewed while bighelp is closed.
+        self.service.queue_sign_in_wakes(); self.service.drain_pending()
+        self.assertEqual(self.wakes(), [{"reason": "renew-sign-in", "version": 1}])
+        self.assertTrue(self.calls[-1][1].endswith(f"/{self.grant_id}/wake"))
+        self.now += 3600
+        self.service.queue_sign_in_wakes(); self.service.drain_pending()
+        self.assertEqual(len(self.wakes()), 1, "one wake per interval")
+        self.now += 8 * 3600
+        self.grant["expiresAt"] = self.now + 3600
+        with self.service._db() as db:
+            db.execute("UPDATE grants SET expires=?", (self.now + 3600,))
+        self.service.queue_sign_in_wakes(); self.service.drain_pending()
+        self.assertEqual(len(self.wakes()), 2)
+
+    def test_a_phone_without_a_content_key_is_not_woken(self):
+        with self.service._db() as db:
+            db.execute("DELETE FROM recipients")
+        self.service.queue_sign_in_wakes(); self.service.drain_pending()
+        self.assertEqual(self.wakes(), [])
+
+    def test_a_service_without_wakes_never_costs_the_phone_its_alerts(self):
+        original = self.transport
+        def older_service(method, path, raw, headers):
+            if path.endswith("/wake"):
+                self.calls.append((method, path, raw, headers))
+                raise ManagedNotificationError("notification_route_unknown", 404)
+            return original(method, path, raw, headers)
+        self.service.transport = older_service
+        self.service.queue_sign_in_wakes(); self.service.drain_pending()
+        self.now += 120
+        self.service.drain_pending()
+        self.assertEqual(len(self.wakes()), 1, "a refused wake isn't retried until the next interval")
+        self.assertEqual(self.service.enrollment(self.grant_id)["grant"]["grantId"], self.grant_id)
+        self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-a",failed=True,error="provider failed",platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()],["session.failed"])
+
     def test_vendor_preference_authority_is_not_duplicated_in_plugin_policy(self):
         self.service.preference_policy=lambda event,device:{"suppression":"quiet_hours","sound":False}
         payload=dict(profile="default",session_id="native-session",turn_id="turn-a",completed=True,platform="desktop")

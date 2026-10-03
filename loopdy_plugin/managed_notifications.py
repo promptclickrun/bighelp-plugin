@@ -60,6 +60,10 @@ _APPROVAL_TTL_SECONDS = 60
 _APPROVAL_LIMIT = 4096
 _APPROVAL_HOOKS = ("pre_approval_request", "post_approval_response")
 _ACTIVITY_REFRESH_SECONDS = 60
+# A rotating sign-in (the Nous Portal's lasts a day) runs out if bighelp stays closed.
+# Waking the phone this often gives it more than one chance to renew before then.
+_SIGN_IN_WAKE_SECONDS = 8 * 3600
+_SIGN_IN_WAKE_PATH = "/wake"
 _ACTIONS = {
     "thinking": "Your agent is working", "waiting": "Your agent needs attention",
     "using_tool": "Your agent is working", "delegating": "Agents are working",
@@ -1081,7 +1085,7 @@ class ManagedNotifications:
 
     def _run(self):
         while not self._stop.is_set():
-            try: self.drain_pending()
+            try: self.queue_sign_in_wakes(); self.drain_pending()
             except (ValueError, OSError, sqlite3.Error): logger.warning("Managed notification journal unavailable")
             # Short wait: another Hermes process may have queued the alert (this process
             # owns the sender), and its wake-up doesn't reach this thread.
@@ -1117,6 +1121,18 @@ class ManagedNotifications:
         return (grant["profile"] == attention["profile"] and _APPROVAL_EVENT in grant["eventTypes"]
                 and bytes(current["raw"]) == bytes(row["raw"])
                 and current["session_ref"] == session_reference(attention["profile"], attention["session_id"]))
+
+    def queue_sign_in_wakes(self):
+        """A quiet push every few hours asks each enrolled phone to renew its sign-in.
+        One per grant per interval: the interval is in the intent ID."""
+        now = int(self.clock())
+        interval = now // _SIGN_IN_WAKE_SECONDS
+        raw = canonical_json_bytes({"version": 1, "reason": "renew-sign-in"})
+        with self._db() as db:
+            db.execute("INSERT OR IGNORE INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref) "
+                       "SELECT 'wake:'||g.grant_id||':'||?,g.grant_id,?,?,?,'pending',?,'' FROM grants g "
+                       "JOIN recipients r USING(grant_id) WHERE g.state='active' AND g.expires>?",
+                       (interval, _SIGN_IN_WAKE_PATH, raw, now + 3600, now, now))
 
     def drain_pending(self):
         """Bounded durable retry, exposed for main-owned no-send composition tests."""
@@ -1170,6 +1186,12 @@ class ManagedNotifications:
             if result.get("status") not in ("accepted", "duplicate") or not isinstance(result.get("deliveryId"), str):
                 raise ManagedNotificationError("notification_delivery_unconfirmed", 503)
         except ManagedNotificationError as error:
+            if row["path"] == _SIGN_IN_WAKE_PATH:
+                # A wake is a nicety: one refused (a service without wakes answers 404)
+                # waits for the next interval and never retires the phone's alerts.
+                with self._db() as db:
+                    db.execute("UPDATE pending SET state='failed',attempts=attempts+1 WHERE intent_id=? AND state='sending'", (row["intent_id"],))
+                return
             if error.status in (403, 404):
                 self.remove(row["grant_id"])
             else:
