@@ -1,4 +1,4 @@
-"""Authenticated bighelp iPhone Health, Calendar and Reminders tool bridge."""
+"""Authenticated bighelp iPhone Health, Calendar, Reminders and Location tool bridge."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ from .naming import TOOLSET
 from .inbound_dispatch import ReplyRoute, current_reply_route, current_turn_lease
 
 from .link_contracts import (
+    DEVICE_TOOL_KINDS,
     DEVICE_TOOL_OPERATIONS,
+    DEVICE_TOOL_READ_OPERATIONS,
     DIRECTED_FRAMES_CAPABILITY,
     HEALTH_TYPES,
     MAX_DEVICE_TOOL_ARGUMENT_BYTES,
@@ -26,7 +28,7 @@ from .link_contracts import (
 )
 
 
-CAPABILITIES = ("health", "calendar", "reminders")
+CAPABILITIES = DEVICE_TOOL_KINDS
 MAX_PENDING_DEVICE_TOOLS = 128
 MAX_DEVICE_TOOL_OUTCOMES = 256
 MAX_STATUS_ENTRIES = 32
@@ -493,10 +495,10 @@ class DeviceToolBridge:
         result: dict[str, Any],
         operation: str,
     ) -> None:
-        # Reads may contain private health, calendar, or reminder values. They
-        # are returned to the active caller only and never retained for a
-        # later retry. Mutation replay retains only reconciliation metadata.
-        if operation.endswith(".read") or operation.endswith(".list"):
+        # Reads may contain private health, calendar, reminder or location
+        # values. They are returned to the active caller only and never retained
+        # for a later retry. Mutation replay retains only reconciliation metadata.
+        if operation in DEVICE_TOOL_READ_OPERATIONS:
             return
         safe = dict(result)
         payload = result.get("payload")
@@ -638,7 +640,11 @@ def _mutation_properties() -> dict[str, Any]:
     }
 
 
-def _handler(*, bridge: DeviceToolBridge | None, fixed_operation: str | None = None, tool_prefix: str | None = None):
+_EDIT_OPERATIONS = frozenset({"list", "create", "update", "delete"})
+
+
+def _handler(*, bridge: DeviceToolBridge | None, fixed_operation: str | None = None, tool_prefix: str | None = None,
+             operations: frozenset[str] = _EDIT_OPERATIONS):
     async def handle(payload: Any, **kwargs: Any) -> str:
         if bridge is None:
             raise ValueError("verified iPhone tool context is unavailable")
@@ -651,8 +657,11 @@ def _handler(*, bridge: DeviceToolBridge | None, fixed_operation: str | None = N
         arguments = dict(payload)
         if operation is None:
             selected = arguments.pop("operation", None)
-            if not isinstance(selected, str) or selected not in {"list", "create", "update", "delete"}:
+            if not isinstance(selected, str) or selected not in operations:
                 raise ValueError("iPhone tool operation is invalid")
+            if operations is not _EDIT_OPERATIONS and arguments:
+                # Location takes no arguments; the schema says so too.
+                raise ValueError("iPhone tool arguments are invalid")
             operation = selected
         elif "operation" in arguments:
             raise ValueError("iPhone tool operation is invalid")
@@ -700,6 +709,7 @@ def register(ctx: Any, *, bridge: DeviceToolBridge | None = None) -> None:
     )
     calendar_schema = _strict_object(_list_properties("calendarIDs"), ["operation"])
     reminder_schema = _strict_object(_list_properties("listIDs"), ["operation"])
+    location_schema = _strict_object({"operation": {"type": "string", "enum": ["current"]}}, ["operation"])
     definitions = (
         (
             "iphone_health",
@@ -718,6 +728,12 @@ def register(ctx: Any, *, bridge: DeviceToolBridge | None = None) -> None:
             "List reminders on an authenticated iPhone with Reminders permission enabled, then use an exact returned id and expectedRevision for changes. If a write is uncertain, reconcile by reading before retrying and never blindly repeat it.",
             reminder_schema,
             _handler(bridge=bridge, tool_prefix="reminders"),
+        ),
+        (
+            "iphone_location",
+            "Get where the user is right now from their iPhone: latitude, longitude, horizontal accuracy in meters, the time of the fix and the nearby address. Works only after the user turns on Location for this host in bighelp, while the app is open in the foreground. Call it only when the request needs where they are, like places nearby. If precise is false the user kept approximate location: treat it as a rough area of about horizontalAccuracyMeters and don't name a street.",
+            location_schema,
+            _handler(bridge=bridge, tool_prefix="location", operations=frozenset({"current"})),
         ),
     )
     for name, description, schema, handler in definitions:
