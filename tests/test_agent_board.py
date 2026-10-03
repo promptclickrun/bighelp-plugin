@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 from loopdy_plugin.agent_board import (
-    ActivityRecorder, BoardError, BoardStore, MAX_ITEMS_PER_KIND, handle_tool, tool_category,
+    ANSWER_MEMORY_SECONDS, ActivityRecorder, BoardError, BoardStore, MAX_ITEMS_PER_KIND, handle_tool,
+    tool_category,
 )
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 32
@@ -55,12 +56,59 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual([idea["title"] for idea in self.store.items(("idea",))], ["Audit Google access now"])
 
     def test_dismissed_items_hide_and_republishing_restores(self):
-        item = self.store.publish("idea", title="Sleep check-in", item_id="sleep")
+        item = self.store.publish("goal", title="Package watch", section="tracking", item_id="pkg")
         self.store.set_flags(item["id"], dismissed=True, liked=True)
-        self.assertEqual(self.store.items(("idea",)), [])
-        self.assertTrue(self.store.items(("idea",), include_dismissed=True)[0]["liked"])
-        self.store.publish("idea", title="Sleep check-in", item_id="sleep")
-        self.assertEqual(len(self.store.items(("idea",))), 1)
+        self.assertEqual(self.store.items(("goal",)), [])
+        self.assertTrue(self.store.items(("goal",), include_dismissed=True)[0]["liked"])
+        self.store.publish("goal", title="Package watch", section="tracking", item_id="pkg")
+        self.assertEqual(len(self.store.items(("goal",))), 1)
+
+    def test_not_now_reaches_the_agent_and_blocks_the_same_offer(self):
+        self.store.publish("idea", title="Fitness plan", section="Health", item_id="fit", now=1_000)
+        self.store.set_flags("fit", dismissed=True)
+        listed = json.loads(handle_tool({"action": "list", "kind": "idea"}, self.store))
+        self.assertEqual(listed["items"], [], "Not now still takes it off the board")
+        answered = listed["answered"]
+        self.assertEqual([(row["id"], row["answer"], row["section"]) for row in answered],
+                         [("fit", "not now", "Health")])
+        refused = json.loads(handle_tool({"action": "idea", "id": "fit", "title": "Fitness plan"}, self.store))
+        self.assertIn("not now", refused["error"])
+        self.assertEqual(self.store.items(("idea",)), [], "Re-offering under the same id stays hidden")
+        # Undo in the app clears the answer.
+        self.store.set_flags("fit", dismissed=False)
+        self.assertEqual(self.store.items(("idea",))[0]["answer"], "none")
+
+    def test_not_now_expires_after_thirty_days(self):
+        self.store.publish("idea", title="Fitness plan", item_id="fit")
+        self.store.set_flags("fit", dismissed=True, now=1_000)
+        later = 1_000 + ANSWER_MEMORY_SECONDS + 1
+        self.assertEqual(self.store.answered_ideas(now=later), [])
+        again = self.store.publish("idea", title="Fitness plan", item_id="fit", now=later)
+        self.assertEqual((again["dismissed"], again["answer"]), (False, "none"))
+
+    def test_feed_deletes_are_just_clearing_and_never_count_as_answers(self):
+        post = self.store.publish("feed", title="Morning brief")
+        self.store.set_flags(post["id"], dismissed=True)
+        listed = json.loads(handle_tool({"action": "list"}, self.store))
+        self.assertEqual((listed["items"], listed["answered"]), ([], []))
+
+    def test_lets_do_it_marks_the_idea_yes(self):
+        self.store.publish("idea", title="Draft a late-fee clause", item_id="fee")
+        self.store.publish("idea", title="Plan a trip", item_id="trip")
+        recorder = ActivityRecorder(lambda: self.store)
+        recorder.observe("pre_llm_call", session_id="s1", turn_id="t1",
+                         user_message="Yes, go ahead with this idea: \u201cDraft a late-fee clause\u201d.")
+        by_id = {row["id"]: row for row in json.loads(handle_tool({"action": "list", "kind": "idea"},
+                                                                   self.store))["items"]}
+        self.assertEqual((by_id["fee"]["answer"], by_id["trip"]["answer"]), ("yes", "none"))
+        # Clearing a finished idea afterwards keeps the yes.
+        self.store.set_flags("fee", dismissed=True)
+        self.assertEqual(self.store.answered_ideas()[0]["answer"], "yes")
+
+    def test_make_it_a_goal_is_remembered_as_an_answer(self):
+        self.store.publish("idea", title="Sleep by 11", item_id="sleep")
+        self.store.promote_idea("sleep")
+        self.assertEqual([(row["id"], row["answer"]) for row in self.store.answered_ideas()], [("sleep", "goal")])
 
     def test_each_kind_is_capped(self):
         for index in range(MAX_ITEMS_PER_KIND + 3):
@@ -128,6 +176,7 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual((goal["kind"], goal["title"], goal["icon"], goal["status"]), ("goal", "Sleep by 11", "🌙", "active"))
         self.assertEqual(goal["section"], "goal")
         self.assertEqual(self.store.items(("idea",)), [], "The idea moved to Goals")
+        self.assertEqual(self.store.publish("idea", title="Sleep by 11", item_id="later")["answer"], "none")
         with self.assertRaises(BoardError):
             self.store.promote_idea(goal["id"])
 
