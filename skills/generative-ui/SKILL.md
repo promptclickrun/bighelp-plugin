@@ -39,15 +39,24 @@ A scheduled job's run is its own chat. When it finishes, bighelp notifies the
 user with the start of the run's reply, and tapping the alert opens the run
 (see `skill_view("loopdy:bighelp")`). So a scheduled card works like an inline
 one: the run calls the renderer and puts the returned `display_markdown` in its
-final reply once, after one plain sentence that reads well as a notification.
-Create the job with `deliver: "local"`; bighelp's alert comes from the run
-itself.
+final reply once. Create the job with `deliver: "local"`; bighelp's alert comes
+from the run itself.
 
 Example task instruction:
 
-> Fetch tomorrow's forecast for Lisbon. Reply with one sentence on what to
-> expect, then call `bighelp_render_weather_forecast` and add its
-> `display_markdown` once.
+> Fetch tomorrow's forecast for Lisbon, then call
+> `bighelp_render_weather_forecast` and add its `display_markdown` once.
+
+### Notification previews
+
+When a reply with a card notifies the user, the notification reads each card as
+a short plain preview, never its JSON. It's made from the card (its title and
+summary, the temperature, the score, the price) unless you pass the renderer an
+optional `notification_text`: one short plain sentence, up to 300 characters,
+no Markdown or code. You don't need to add prose to a reply just for the
+notification; write prose only when it helps the person in the chat. Rendering
+a card never notifies anyone by itself, and a card you render but don't put in
+your reply adds nothing to it.
 
 A renderer result does not auto-forward anywhere: only the run's final reply is
 kept and notified. For something the user should find later rather than be

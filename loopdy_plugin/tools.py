@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .card_previews import NOTIFICATION_TEXT_FIELD, NOTIFICATION_TEXT_HELP, NOTIFICATION_TEXT_SCHEMA
+from .card_previews import without_notification_text
 from .naming import CARD_SCHEMA, GENERATIVE_UI_SCHEMA, TOOLSET, card_input
 from .generative_ui import (
     V2_COMPONENTS,
@@ -32,6 +34,7 @@ def _parameters(component):
     elif component in ("list", "timeline"):
         key = "items" if component == "list" else "steps"
         fields[key] = {"type": "array", "maxItems": 20}
+    fields[NOTIFICATION_TEXT_FIELD] = NOTIFICATION_TEXT_SCHEMA
     return {"type": "object", "properties": fields, "additionalProperties": False}
 
 
@@ -40,7 +43,8 @@ def _handler(tool_name):
         if not isinstance(payload, dict):
             raise ValueError("renderer arguments must be an object")
         return json.dumps(
-            rendered_card_delivery(render_envelope(tool_name, card_input(payload))),
+            rendered_card_delivery(
+                render_envelope(tool_name, card_input(without_notification_text(payload)))),
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
@@ -71,6 +75,7 @@ def _v2_parameters(component: str) -> dict[str, Any]:
         "title": _text(120),
         "subtitle": _text(240),
         "data": _v2_data_schema(component),
+        NOTIFICATION_TEXT_FIELD: NOTIFICATION_TEXT_SCHEMA,
     }
     required = ["schema", "version", "component", "title", "data"]
     if component != "form":
@@ -88,7 +93,8 @@ def _card_parameters() -> dict[str, Any]:
     portable = json.loads(schema_path.read_text(encoding="utf-8"))
     return {
         "type": portable["type"],
-        "properties": {**portable["properties"], "schema": {"const": CARD_SCHEMA}},
+        "properties": {**portable["properties"], "schema": {"const": CARD_SCHEMA},
+                       NOTIFICATION_TEXT_FIELD: NOTIFICATION_TEXT_SCHEMA},
         "required": portable["required"],
         "additionalProperties": portable["additionalProperties"],
         "$defs": portable["$defs"],
@@ -97,7 +103,8 @@ def _card_parameters() -> dict[str, Any]:
 
 def _card_handler(now: Callable[[], datetime]):
     def handle(payload, **_kwargs):
-        return canonical_card_json(rendered_card_delivery(render_card(card_input(payload), now=now())))
+        return canonical_card_json(rendered_card_delivery(
+            render_card(card_input(without_notification_text(payload)), now=now())))
 
     return handle
 
@@ -181,7 +188,7 @@ def _v2_handler(
         created = now()
         value = render_v2_envelope(
             tool_name,
-            card_input(payload),
+            card_input(without_notification_text(payload)),
             now=created,
             profile=profile,
             session_id=str(kwargs.get("session_id") or ""),
@@ -291,6 +298,7 @@ def _template_render_handler(
     now: Callable[[], datetime],
 ):
     def handle(payload, **_kwargs):
+        payload = without_notification_text(payload)
         if not isinstance(payload, dict) or set(payload) != {"template_id", "parameters"}:
             raise ValueError("template render arguments are invalid")
         template_id = payload.get("template_id")
@@ -529,7 +537,7 @@ _MISSING_TEMPLATE_PARAMETER = object()
 def _template_tool_description(action: str) -> str:
     delivery = (
         " The tool call alone does not display a rendered card: include the returned "
-        "display_markdown exactly once in the assistant answer."
+        "display_markdown exactly once in the assistant answer." + NOTIFICATION_TEXT_HELP
         if action == "Render" else ""
     )
     return (
@@ -654,7 +662,7 @@ def register(
                     "when it is visible in the current tool list. When Hermes has "
                     "progressively disclosed it and it is absent, use the official "
                     "tool_search, tool_describe, and tool_call bridge to invoke this "
-                    "exact renderer; do not substitute or wrap another tool."
+                    "exact renderer; do not substitute or wrap another tool." + NOTIFICATION_TEXT_HELP
                 ),
                 "parameters": _parameters(component),
             },
@@ -674,7 +682,7 @@ def register(
                     "directly when it is visible in the current "
                     "tool list. When Hermes has progressively disclosed it and it is absent, use "
                     "the official tool_search, tool_describe, and tool_call bridge to invoke this "
-                    "exact renderer; do not substitute or wrap another tool."
+                    "exact renderer; do not substitute or wrap another tool." + NOTIFICATION_TEXT_HELP
                 ),
                 "parameters": _v2_parameters(component),
             },
@@ -700,7 +708,7 @@ def register(
                 "and tool_call bridge to invoke this exact renderer; do not substitute or "
                 "wrap another tool. The tool call alone does not display the card: include the returned "
                 "display_markdown exactly once in the assistant answer. In a scheduled job, do the same in the "
-                "run's final reply, after one plain sentence the user's notification can show."
+                "run's final reply." + NOTIFICATION_TEXT_HELP
             ),
             "parameters": _card_parameters(),
         },
@@ -772,6 +780,7 @@ def register(
                             "maxProperties": 32,
                             "additionalProperties": True,
                         },
+                        NOTIFICATION_TEXT_FIELD: NOTIFICATION_TEXT_SCHEMA,
                     },
                     ["template_id", "parameters"],
                 ),

@@ -34,6 +34,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from .card_previews import reply_preview
 from .reactions import REACTION_SCHEMA
 from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
 from .sealed_alerts import seal_alert, seal_avatar
@@ -892,7 +893,9 @@ class ManagedNotifications:
                     payload.get("assistant_response"), history=payload.get("conversation_history"),
                     autonomous=scheduled or payload.get("platform") in _AUTONOMOUS_PLATFORMS,
                     group_chat=payload.get("platform") == _GROUP_CHAT_PLATFORM)
-                response_text = self._rich_text(reply) if reply else ""
+                # Cards in the reply read as words, never as their JSON (card_previews.py).
+                response_text = (self._rich_text(reply_preview(reply, payload.get("conversation_history")))
+                                 if reply else "")
             except ManagedNotificationError:
                 response_text = ""
             if response_text:

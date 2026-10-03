@@ -60,10 +60,12 @@ class LoopdyCardToolTests(unittest.TestCase):
     def test_generic_renderer_parameters_match_the_canonical_input_schema(self) -> None:
         context = self.context()
         portable = json.loads(SCHEMA.read_text(encoding="utf-8"))
-        # Agents write "bighelp.card"; the portable (app-facing) contract keeps its name.
+        # Agents write "bighelp.card"; the portable (app-facing) contract keeps its name. The
+        # optional notification preview is a tool argument only: it never enters the card.
         expected = {
             "type": portable["type"],
-            "properties": {**portable["properties"], "schema": {"const": "bighelp.card"}},
+            "properties": {**portable["properties"], "schema": {"const": "bighelp.card"},
+                           "notification_text": {"type": "string", "maxLength": 300}},
             "required": portable["required"],
             "additionalProperties": portable["additionalProperties"],
             "$defs": portable["$defs"],

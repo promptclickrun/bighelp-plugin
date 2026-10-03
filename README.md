@@ -85,8 +85,9 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
 - **Inline card in the active chat:** return the card as part of the current reply.
   Do not use the notification channel just to answer the current chat.
 - **Proactive or scheduled card** (shown later in the app): a scheduled job (with `deliver: "local"`) calls the
-  card tool and puts its `display_markdown` in the run's final reply, after one plain sentence. bighelp notifies
-  the user with that reply. A card tool result does not auto-forward to a later message.
+  card tool and puts its `display_markdown` in the run's final reply. bighelp notifies the user with that reply,
+  each card read as a short plain preview (the tool's optional `notification_text`, or one made from the card).
+  A card tool result does not auto-forward to a later message, and rendering never notifies anyone by itself.
   Never script or reconstruct a card.
 - Cards are display-only. Everything shown is embedded in the card, and opening one makes no network request.
 
