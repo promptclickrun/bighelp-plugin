@@ -1,0 +1,38 @@
+{
+  "schema": "loopdy.card",
+  "version": 1,
+  "title": "Rain this evening",
+  "spoken_summary": "Steady rain in Sample Bay this evening, 54 degrees with a light wind.",
+  "data_sources": [],
+  "root": "card",
+  "elements": {
+    "card": {
+      "type": "card",
+      "props": { "title": "Sample Bay", "subtitle": "Rain until about 9 PM" },
+      "background": { "scene": "rain", "intensity": "moderate", "time_of_day": "dusk" },
+      "children": ["now"]
+    },
+    "now": {
+      "type": "hstack",
+      "props": { "spacing": "medium", "alignment": "leading" },
+      "children": ["temperature", "wind"]
+    },
+    "temperature": {
+      "type": "metric",
+      "props": {
+        "label": "Now",
+        "value": { "literal": 54 },
+        "format": { "style": "integer" }
+      },
+      "children": []
+    },
+    "wind": {
+      "type": "metric",
+      "props": {
+        "label": "Wind",
+        "value": { "literal": "8 mph" }
+      },
+      "children": []
+    }
+  }
+}

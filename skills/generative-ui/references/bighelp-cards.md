@@ -29,6 +29,16 @@ Every element has a unique ID, a catalog `type`, bounded `props`, and legal `chi
 
 Colors are semantic: `primary`, `secondary`, `positive`, `warning`, `negative`, `accent`, `neutral`. Spacing and typography are finite tokens. Image names are an app-owned allowlist.
 
+### Weather background
+
+A `card` element can show animated weather behind its content. Put `background` beside `props` (never inside them), and only on a `card`:
+
+```json
+{"type":"card","props":{"title":"Sample Bay"},"background":{"scene":"rain","intensity":"heavy","time_of_day":"night"},"children":["now"]}
+```
+
+`scene` is required: `none`, `clear`, `partly_cloudy`, `overcast`, `rain`, `thunderstorm`, `snow`, `fog`, `wind`. `intensity` is `light`, `moderate` (default) or `heavy`; `time_of_day` is `day` (default), `dusk` or `night`. Use it only when the card is about the weather and the scene matches the conditions you looked up. No other keys are allowed. Older apps show the card without the weather.
+
 ## Values and expressions
 
 A value must be a literal in this static-only release:

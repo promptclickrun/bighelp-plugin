@@ -86,7 +86,7 @@ cross-field rules that JSON Schema alone cannot express.
 
 Version 1 recognizes exactly the following component types. Every element has
 `type`, `props`, and `children`; unknown types, props, and enum values fail
-validation.
+validation. A `card` may also carry a `background` (see Weather backgrounds).
 
 | Type | Purpose | Allowed props | Children |
 |---|---|---|---|
@@ -112,6 +112,37 @@ Colors are limited to `primary`, `secondary`, `positive`, `warning`, `negative`,
 RGB values, font names, font sizes, frames, coordinates, blur radii, arbitrary
 SF Symbol names, or SwiftUI modifiers. Version 1 images are bundled symbols or
 assets only; remote image decoding is not supported.
+
+## Weather backgrounds
+
+A `card` element may carry an optional animated weather background. It sits
+beside `props`, not inside them:
+
+```json
+"card": {
+  "type": "card",
+  "props": { "title": "Sample Bay" },
+  "background": { "scene": "rain", "intensity": "moderate", "time_of_day": "dusk" },
+  "children": ["now"]
+}
+```
+
+- `scene` (required): `none`, `clear`, `partly_cloudy`, `overcast`, `rain`,
+  `thunderstorm`, `snow`, `fog` or `wind`.
+- `intensity` (optional, the app uses `moderate`): `light`, `moderate`, `heavy`.
+- `time_of_day` (optional, the app uses `day`): `day`, `dusk`, `night`.
+
+The validator rejects (`invalid_background`) a background on any other element
+type, one written inside `props`, extra keys inside it, a missing `scene`, and
+values that aren't short lowercase names. An unknown but well-formed name is
+kept, and each render logs one warning naming the field (never the value): a
+newer app may know the name, and the app draws a plain gradient for names it
+doesn't. The canonical document keeps exactly what the agent wrote, so defaults
+never change a card's hash, and cards without a background hash as before.
+
+App builds from before backgrounds ignore element keys they don't know, so they
+show the same card without the weather. That's why `background` isn't a prop:
+those builds reject unknown props.
 
 ## Bindings, expressions, and formatting
 
