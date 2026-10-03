@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import mimetypes
 import re
 import sqlite3
 import threading
@@ -33,6 +34,9 @@ CAPABILITY = "native-agent-board-v1"
 FEEDBACK_CAPABILITY = "native-agent-board-feedback-v1"
 # Goals carry one of GOAL_CATEGORIES; the app groups them and starts new ones by category.
 GOAL_CATEGORIES_CAPABILITY = "native-agent-board-goal-categories-v1"
+# Feed posts carry host files by reference; the app fetches them through the
+# attachment routes (``attachments/board``), never by path.
+FILES_CAPABILITY = "native-agent-board-files-v1"
 TOOL_NAME = "bighelp_board"
 KINDS = ("feed", "idea", "goal")
 GOAL_SECTIONS = ("tracking", "goal")
@@ -47,6 +51,9 @@ MAX_SECTION = 60
 MAX_IMAGES = 6
 MAX_LINKS = 8
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_FILES = 10
+# The same cap as a file an agent sends in chat (``MEDIA:``).
+MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_ITEMS_PER_KIND = 500
 MAX_ACTIVITY = 1_000
 MAX_REASON = 120
@@ -158,6 +165,9 @@ class BoardStore:
             if "category" not in columns:
                 # Goals from before categories have none; the app shows them under Other.
                 db.execute("ALTER TABLE items ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+            if "files" not in columns:
+                # Host paths the post refers to, with the name, type and size shown in the app.
+                db.execute("ALTER TABLE items ADD COLUMN files TEXT NOT NULL DEFAULT '[]'")
 
     @contextmanager
     def _db(self):
@@ -175,7 +185,8 @@ class BoardStore:
 
     def publish(self, kind: str, *, title: Any, body: Any = "", icon: Any = "", section: Any = "",
                 links: Any = None, images: Any = None, source: Any = "", item_id: Any = None,
-                note: Any = "", status: Any = None, category: Any = None, now: float | None = None) -> dict:
+                note: Any = "", status: Any = None, category: Any = None, files: Any = None,
+                now: float | None = None) -> dict:
         if kind not in KINDS:
             raise BoardError("kind must be feed, idea or goal.")
         now = time.time() if now is None else now
@@ -197,6 +208,10 @@ class BoardStore:
             status = ""
             category = ""
         link_rows = self._links(links)
+        if files is not None and kind != "feed":
+            raise BoardError("Only Feed posts carry files.")
+        # None keeps an updated post's files; a list (even empty) replaces them.
+        file_rows = None if files is None else [{**row, "added": now} for row in self._files(files)]
         if item_id is not None:
             item_id = _clean(item_id, 64, field="id", required=True)
             if not _ITEM_ID.fullmatch(item_id):
@@ -205,7 +220,7 @@ class BoardStore:
             item_id = uuid.uuid4().hex
         image_rows = self._store_images(item_id, images)
         with self._db() as db:
-            existing = db.execute("SELECT kind, created, answer, answered FROM items WHERE id=?",
+            existing = db.execute("SELECT kind, created, answer, answered, files FROM items WHERE id=?",
                                   (item_id,)).fetchone()
             if existing and existing["kind"] != kind:
                 raise BoardError("That id belongs to a different kind of item.")
@@ -214,20 +229,24 @@ class BoardStore:
                 raise BoardError("The user said not now to this idea recently. Don't offer it again yet; "
                                  "offer something different.")
             created = existing["created"] if existing else now
+            if file_rows is None:
+                file_rows = json.loads(existing["files"]) if existing else []
             db.execute("""INSERT INTO items(id,kind,title,body,icon,section,status,note,links,images,source,category,
-                                            created,updated)
-                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                            files,created,updated)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(id) DO UPDATE SET title=excluded.title, body=excluded.body,
                             icon=excluded.icon, section=excluded.section, status=excluded.status,
                             note=excluded.note, links=excluded.links,
                             images=CASE WHEN excluded.images='[]' THEN items.images ELSE excluded.images END,
                             source=excluded.source,
                             category=CASE WHEN excluded.category='' THEN items.category ELSE excluded.category END,
+                            files=excluded.files,
                             answer=CASE WHEN items.dismissed=1 THEN '' ELSE items.answer END,
                             answered=CASE WHEN items.dismissed=1 THEN 0 ELSE items.answered END,
                             dismissed=0, updated=excluded.updated""",
                        (item_id, kind, title, body, icon, section, status, note,
-                        json.dumps(link_rows), json.dumps(image_rows), source, category, created, now))
+                        json.dumps(link_rows), json.dumps(image_rows), source, category,
+                        json.dumps(file_rows), created, now))
             self._prune(db, kind)
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
 
@@ -371,6 +390,56 @@ class BoardStore:
             raise BoardError("That image is not stored on this computer.")
         return kind[0], data
 
+    def file_reference(self, item_id: str, index: int) -> tuple[str, int]:
+        """The host path a Feed post refers to and when the agent attached it, for
+        the attachment routes only. Attaching the same path again may mean a
+        rewritten file; a thumbs up or read state doesn't."""
+        with self._db() as db:
+            row = db.execute("SELECT files FROM items WHERE id=? AND kind='feed'", (item_id,)).fetchone()
+        if row is None:
+            raise BoardError("That post no longer exists.")
+        files = json.loads(row["files"])
+        if not isinstance(index, int) or not 0 <= index < len(files):
+            raise BoardError("That post has no such file.")
+        return files[index]["path"], int(files[index].get("added", 0))
+
+    @staticmethod
+    def _files(files: Any) -> list[dict]:
+        """Host files a post refers to. Each goes through Hermes' own delivery policy,
+        the one ``MEDIA:`` files in chat get (no credentials, system folders or
+        Hermes' own secrets; strict hosts only allow their media folders), and is
+        checked again when the app fetches it."""
+        if not isinstance(files, list) or len(files) > MAX_FILES:
+            raise BoardError(f"files must be a list of at most {MAX_FILES} file paths.")
+        try:
+            from gateway.platforms.base import BasePlatformAdapter
+        except ImportError:
+            raise BoardError("This Hermes host can't attach files to posts.") from None
+        from .attachments import _safe_filename
+        rows: list[dict] = []
+        for index, raw in enumerate(files):
+            if not isinstance(raw, str) or not raw.strip() or len(raw) > 4_096:
+                raise BoardError("Each file is an absolute file path on this computer.")
+            raw = raw.strip()
+            # The app gets what a MEDIA: line would deliver, so a path that line can't carry is refused here.
+            parsed = BasePlatformAdapter.extract_media("MEDIA:" + raw)[0]
+            safe = (BasePlatformAdapter.validate_media_delivery_path(raw)
+                    if Path(raw).expanduser().is_absolute() and len(parsed) == 1 else None)
+            if safe is None:
+                raise BoardError(f"File {index + 1} can't be shared: it isn't a file on this computer, "
+                                 "or it's in a private folder.")
+            if any(row["path"] == safe for row in rows):
+                continue
+            size = Path(safe).stat().st_size
+            if size == 0:
+                raise BoardError(f"File {index + 1} is empty.")
+            if size > MAX_FILE_BYTES:
+                raise BoardError(f"File {index + 1} is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
+            name = _safe_filename(Path(safe).name)
+            rows.append({"path": safe, "name": name,
+                         "mimeType": mimetypes.guess_type(name)[0] or "application/octet-stream", "size": size})
+        return rows
+
     @staticmethod
     def _links(links: Any) -> list[dict]:
         if links in (None, ""):
@@ -439,6 +508,9 @@ class BoardStore:
             "id": row["id"], "kind": row["kind"], "title": row["title"], "body": row["body"],
             "icon": row["icon"], "section": row["section"], "status": row["status"], "note": row["note"],
             "links": json.loads(row["links"]), "images": images, "source": row["source"],
+            # Names, types and sizes only: the path stays on the host.
+            "files": [{"index": index, "fileName": file["name"], "mimeType": file["mimeType"],
+                       "byteCount": file["size"]} for index, file in enumerate(json.loads(row["files"]))],
             "liked": row["rating"] == 1, "dismissed": bool(row["dismissed"]),
             "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
             "read": bool(row["read"]), "answer": row["answer"] or "none", "category": row["category"],
@@ -566,7 +638,8 @@ def session_titles(profile: str, session_ids: list[str]) -> dict[str, str]:
 
 TOOL_DESCRIPTION = (
     "Publish to the user's bighelp app. Actions: 'post' adds a Feed post (a briefing, news item or "
-    "update with optional images and links); 'idea' proposes something you could do for the user; "
+    "update with optional images, links and files the user can open, save and share), or updates the "
+    "post with that id; 'idea' proposes something you could do for the user; "
     "'goal' adds or updates a Goal (section 'tracking' for things you watch, 'goal' for the user's "
     "own goals) with a short status note and a category; 'update_goal' changes a goal's note or category, "
     "or marks it done; "
@@ -583,7 +656,7 @@ TOOL_PARAMETERS = {
     "properties": {
         "action": {"type": "string", "enum": ["post", "idea", "goal", "update_goal", "list", "remove"]},
         "id": {"type": "string", "maxLength": 64,
-               "description": "Stable id to update an existing goal or idea instead of adding a new one."},
+               "description": "Stable id to update an existing post, goal or idea instead of adding a new one."},
         "title": {"type": "string", "maxLength": MAX_TITLE},
         "body": {"type": "string", "maxLength": MAX_BODY,
                  "description": "Markdown. Keep Feed posts to a short paragraph; ideas explain the offer."},
@@ -597,6 +670,10 @@ TOOL_PARAMETERS = {
                                     "when none fits."},
         "images": {"type": "array", "maxItems": MAX_IMAGES, "items": {"type": "string"},
                    "description": "Absolute image file paths on this computer or https URLs."},
+        "files": {"type": "array", "maxItems": MAX_FILES, "items": {"type": "string"},
+                  "description": "Posts: absolute paths of files on this computer to attach (PDFs, pictures, "
+                                 "documents; 25 MB each). Updating a post without files keeps its files; "
+                                 "an empty list removes them."},
         "links": {"type": "array", "maxItems": MAX_LINKS, "items": {"type": "object", "properties": {
             "url": {"type": "string"}, "title": {"type": "string"}}, "required": ["url"]}},
         "kind": {"type": "string", "enum": list(KINDS), "description": "For list: which items to show."},
@@ -613,7 +690,8 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
     try:
         if action == "post":
             item = store.publish("feed", title=args.get("title"), body=args.get("body"), icon=args.get("icon"),
-                                 links=args.get("links"), images=args.get("images"), source=args.get("source"))
+                                 links=args.get("links"), images=args.get("images"), source=args.get("source"),
+                                 files=args.get("files"), item_id=args.get("id"))
         elif action == "idea":
             item = store.publish("idea", title=args.get("title"), body=args.get("body"), icon=args.get("icon"),
                                  section=args.get("section"), links=args.get("links"),
@@ -634,7 +712,9 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
             return json.dumps({
                 "items": [{key: item[key] for key in
                            ("id", "kind", "title", "section", "status", "note", "category", "source",
-                            "createdAt", "rating", "reason", "read", "answer")} for item in items],
+                            "createdAt", "rating", "reason", "read", "answer")}
+                          | ({"files": [file["fileName"] for file in item["files"]]} if item["files"] else {})
+                          for item in items],
                 "answered": [{"id": item["id"], "title": item["title"], "section": item["section"],
                               "answer": item["answer"], "rating": item["rating"], "reason": item["reason"]}
                              for item in answered],
@@ -645,8 +725,11 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
             raise BoardError("action must be post, idea, goal, update_goal, list or remove.")
     except BoardError as error:
         return json.dumps({"error": str(error)})
-    return json.dumps({"ok": True, "id": item["id"], "kind": item["kind"],
-                       "shownIn": {"feed": "Feed", "idea": "Ideas", "goal": "Goals"}[item["kind"]]})
+    result = {"ok": True, "id": item["id"], "kind": item["kind"],
+              "shownIn": {"feed": "Feed", "idea": "Ideas", "goal": "Goals"}[item["kind"]]}
+    if item["files"]:
+        result["files"] = len(item["files"])
+    return json.dumps(result)
 
 
 # MARK: Hooks
