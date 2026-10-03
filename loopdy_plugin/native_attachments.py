@@ -67,6 +67,13 @@ class _Recent(BaseModel):
     limit: StrictInt = Field(ge=1, le=MAX_RECENT_MEDIA)
 
 
+class _Board(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    itemId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    index: StrictInt = Field(ge=0, le=9)
+
+
 def available() -> bool:
     try:
         from gateway.platforms.base import BasePlatformAdapter  # noqa: F401
@@ -267,6 +274,43 @@ def recent(body: _Recent) -> dict[str, Any]:
     return {"items": items}
 
 
+def _board_store(profile: str):
+    from .agent_board import store_for_profile
+    return store_for_profile(profile)
+
+
+def _profile_exists(profile: str) -> bool:
+    from hermes_cli.profiles import profile_exists
+    return profile_exists(profile)
+
+
+def board(body: _Board) -> dict[str, Any]:
+    """One file a Feed post refers to, as an opaque attachment ID for ``fetch``.
+
+    The phone names a post and a position, never a path. The path must be one the
+    agent attached to that post (``bighelp_board``), and it goes through the same
+    gateway delivery policy and attachment store as a ``MEDIA:`` file in chat, at
+    fetch time, so a file the policy refuses now, or one that moved, isn't served.
+    """
+    from .agent_board import BoardError
+    if not _profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    try:
+        path, version = _board_store(body.agentId).file_reference(body.itemId, body.index)
+    except BoardError:
+        raise NativeAPIError(404, "attachment_unavailable", "The attachment is unavailable.") from None
+    # Keyed by the post's version: an updated post may point at a rewritten file.
+    [result] = attachment_store().resolve(
+        profile=body.agentId, session_id="board",
+        items=[{"id": f"{body.itemId}:{body.index}:{version}", "text": "MEDIA:" + path}],
+    )
+    if not result["attachments"]:
+        raise NativeAPIError(404, "attachment_unavailable", "The attachment is unavailable.")
+    attachment = result["attachments"][0]
+    return {"attachment": {"id": attachment["id"], "fileName": attachment["name"],
+                           "mimeType": attachment["mime_type"], "byteCount": attachment["size"]}}
+
+
 def fetch(body: _Fetch) -> dict[str, Any]:
     attachment = attachment_store().read(profile=body.agentId, attachment_id=body.attachmentId)
     if attachment is None:
@@ -291,7 +335,7 @@ async def request(operation: str, http_request: Request, *, auth_module) -> Resp
     request_id = auth_module._precondition(http_request, owner)
     if CAPABILITY not in owner.features:
         raise NativeAPIError(503, "attachments_unavailable", "Native attachments are unavailable.")
-    model = {"resolve": _Resolve, "fetch": _Fetch, "recent": _Recent}.get(operation)
+    model = {"resolve": _Resolve, "fetch": _Fetch, "recent": _Recent, "board": _Board}.get(operation)
     if model is None:
         raise NativeAPIError(404, "unknown_operation", "The attachment operation is unknown.")
     body = await auth_module._body(http_request, model)
@@ -299,7 +343,10 @@ async def request(operation: str, http_request: Request, *, auth_module) -> Resp
         raise NativeAPIError(422, "invalid_request", "The profile is invalid.")
     if operation == "recent" and MEDIA_CAPABILITY not in owner.features:
         raise NativeAPIError(503, "media_unavailable", "Recent agent media is unavailable.")
-    worker = {"resolve": resolve, "fetch": fetch, "recent": recent}[operation]
+    from .agent_board import FILES_CAPABILITY
+    if operation == "board" and FILES_CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "board_files_unavailable", "Files on Feed posts are unavailable.")
+    worker = {"resolve": resolve, "fetch": fetch, "recent": recent, "board": board}[operation]
     try:
         result = await run_in_threadpool(worker, body)
     except (ValueError, sqlite3.Error):

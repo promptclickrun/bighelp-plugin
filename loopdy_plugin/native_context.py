@@ -268,6 +268,11 @@ def _native_features(
     except ImportError:
         skip("native-agent-attachments-v1", "native attachment support is unimportable.")
         skip("native-agent-media-v1", "native attachment support is unimportable.")
+    # Files on Feed posts ride the attachment routes, so they need both.
+    if "native-agent-board-v1" in features and "native-agent-attachments-v1" in features:
+        features.append("native-agent-board-files-v1")
+    else:
+        skip("native-agent-board-files-v1", "the agent board or native attachments are unavailable.")
     from .host_restart import CAPABILITY as restart_capability, available as restart_available
     if restart_available():
         features.append(restart_capability)

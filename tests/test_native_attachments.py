@@ -125,5 +125,82 @@ class RecentMediaTests(unittest.TestCase):
         self.assertEqual(na.recent(na._Recent(agentId="default", limit=5)), {"items": []})
 
 
+class BoardFileTests(unittest.TestCase):
+    """Files a Feed post refers to reach the app through the same store and chunks as chat files."""
+
+    def setUp(self):
+        from loopdy_plugin.agent_board import BoardStore
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name).resolve()
+        self.pdf = root / "Trip plan.pdf"
+        self.pdf.write_bytes(b"%PDF-1.4\n" + b"y" * 5000)
+        self.board = BoardStore(root / "board")
+        self.post = self.board.publish("feed", title="Lisbon", files=[str(self.pdf)], item_id="lisbon")
+        na._store = AttachmentStore(root / "a.sqlite3")
+        self.addCleanup(setattr, na, "_store", None)
+        for target, value in (("_board_store", self.board), ("_profile_exists", True)):
+            p = patch.object(na, target, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def resolve(self, item_id="lisbon", index=0):
+        return na.board(na._Board(agentId="default", itemId=item_id, index=index))
+
+    def test_a_posts_file_resolves_to_an_opaque_id_and_downloads_in_chunks(self):
+        attachment = self.resolve()["attachment"]
+        self.assertEqual((attachment["fileName"], attachment["mimeType"], attachment["byteCount"]),
+                         ("Trip plan.pdf", "application/pdf", 5009))
+        self.assertNotIn(self.tmp.name, repr(attachment))
+        na.MAX_CHUNK_BYTES, saved = 2048, na.MAX_CHUNK_BYTES
+        self.addCleanup(setattr, na, "MAX_CHUNK_BYTES", saved)
+        data, offset = b"", 0
+        while offset is not None:
+            chunk = na.fetch(na._Fetch(agentId="default", attachmentId=attachment["id"], offset=offset))
+            data += base64.b64decode(chunk["data"])
+            offset = chunk["nextOffset"]
+        self.assertEqual(data, self.pdf.read_bytes())
+        with self.assertRaises(na.NativeAPIError):
+            na.fetch(na._Fetch(agentId="other", attachmentId=attachment["id"], offset=0))
+
+    def test_only_files_a_post_refers_to_and_the_policy_allows(self):
+        for item_id, index in (("lisbon", 1), ("missing", 0)):
+            with self.subTest(item_id=item_id, index=index), self.assertRaises(na.NativeAPIError) as raised:
+                self.resolve(item_id, index)
+            self.assertEqual(raised.exception.code, "attachment_unavailable")
+        idea = self.board.publish("idea", title="Not a post", item_id="idea")
+        with self.assertRaises(na.NativeAPIError):
+            self.resolve(idea["id"], 0)
+        # Checked again on every fetch: a file the policy refuses now isn't served.
+        from gateway.platforms.base import BasePlatformAdapter
+        with patch.object(BasePlatformAdapter, "validate_media_delivery_path", return_value=None), \
+                self.assertRaises(na.NativeAPIError):
+            self.resolve()
+
+    def test_reattaching_serves_the_new_file_and_a_missing_one_is_unavailable(self):
+        first = self.resolve()["attachment"]
+        # Rating or reading a post doesn't copy its files again.
+        self.board.set_flags("lisbon", rating="up", read=True)
+        self.assertEqual(self.resolve()["attachment"]["id"], first["id"])
+        self.pdf.write_bytes(b"%PDF-1.4\n" + b"z" * 100)
+        self.board.publish("feed", title="Lisbon, updated", files=[str(self.pdf)], item_id="lisbon",
+                           now=self.post["updatedAt"] + 60)
+        second = self.resolve()["attachment"]
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(second["byteCount"], 109)
+        gone = self.pdf.with_name("gone.pdf")
+        gone.write_bytes(b"%PDF-1.4\n")
+        self.board.publish("feed", title="Moved", files=[str(gone)], item_id="moved")
+        gone.unlink()
+        with self.assertRaises(na.NativeAPIError):
+            self.resolve("moved", 0)
+
+    def test_requests_are_strict(self):
+        for bad in ({"itemId": "../x", "index": 0}, {"itemId": "lisbon", "index": 10},
+                    {"itemId": "lisbon", "index": "0"}, {"itemId": "lisbon", "index": 0, "path": "/etc"}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                na._Board(agentId="default", **bad)
+
+
 if __name__ == "__main__":
     unittest.main()
