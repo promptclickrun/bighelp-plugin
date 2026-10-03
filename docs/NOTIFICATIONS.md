@@ -43,6 +43,29 @@ copy, including the phone's content key.
 Each alert shows the agent's name, picture and the start of its message (up to 1,600 characters). Event IDs
 are stable (`<grantId>:<sha256>`), so a retry never produces a second alert.
 
+### Cards in a reply
+
+A card reaches the chat as a `loopdy-card` fence of JSON inside the agent's reply. The alert never shows that
+JSON: each card reads as a short plain preview where it sits, and the reply's own words stay as they are
+([`card_previews.py`](../loopdy_plugin/card_previews.py)). A reply with several cards is still one alert.
+
+- **Authored:** a renderer call can carry an optional `notification_text` (plain text, at most 300 characters).
+  It stays out of the card, so the card and its hash are unchanged and older apps see nothing new. The preview
+  is found by the card's exact identity: the reply's card must match that renderer call's result, by canonical
+  JSON, in the same chat's Hermes history. A card rendered but not sent lends nothing, and nothing is kept
+  outside Hermes' history.
+- **Made from the card:** otherwise the preview comes from the card's own fields: a generic card's title and
+  `spoken_summary`, a forecast's temperature and conditions, a score, a price, a checklist's progress, or a
+  card's title and description. Identifiers, form requests, job prompts and other internal fields are never
+  read.
+- **Neutral:** a card the app wouldn't draw (unknown, edited or broken JSON, a fence that never closes) reads
+  "Sent a card.".
+
+Card previews change only the alert's text. Which turns alert, who gets them, their timing and their count are
+unchanged, rendering a card never sends anything by itself, and tapping the alert opens the same chat. Replies
+without a card alert exactly as before. A preview is plain text, at most 300 characters per card and eight
+cards per alert, inside the alert's usual 1,600-character and 2,300-byte limits.
+
 A reply, task or helper alert goes out from the Hermes process that ran the turn as soon as the reply is saved.
 One Hermes process also owns a background sender that retries anything that didn't go out; both claim each alert
 before sending, so it's sent once. Approval alerts wait a short grace period and stay with that sender.

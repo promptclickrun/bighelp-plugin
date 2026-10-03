@@ -171,7 +171,7 @@ The main contract limits are:
 | Hermes agent and plugin | User intent, embedded Card values, canonicalization, validation, content hash | Device credentials or executable Card code |
 | bighelp app | Card, embedded values, native rendering | Executable code supplied by a Card or live Card source traffic |
 | Third-party Card source host | Nothing in build 3 | Device IP, Card values, credentials, or transcript |
-| bighelp notification service | Nothing: cards are never sent through notifications | Card content or live source traffic |
+| bighelp notification service | An end-to-end sealed alert whose text may include a short plain preview of a card in the reply ([Notifications](NOTIFICATIONS.md#cards-in-a-reply)); it can't read it | Card content, card JSON or live source traffic |
 | Template catalog and stores | Reviewed template data, metadata, integrity values, parameters, and install state | Native executable extensions or automatic permission expansion |
 
 Build 3 makes no third-party Card request, so opening a Card does not disclose a

@@ -54,6 +54,10 @@ its own shows nothing.
 | Any other static layout | `bighelp_render_card` |
 | A saved card template | `bighelp_search_card_templates`, `bighelp_get_card_template`, `bighelp_render_card_template` |
 
+When a reply with a card notifies the user, the card reads as a short plain
+preview made from it. To word it yourself, pass the renderer an optional
+`notification_text` (one short sentence). Rendering never notifies anyone.
+
 Cards hold only the values you put in them: no live data, code, HTML or
 secrets. Current-data cards need their source and time. Payload rules and
 examples: `skill_view("loopdy:generative-ui")`.
@@ -83,7 +87,8 @@ they turned on notifications for this agent (Settings, Notifications). So:
    notification shows the start of that reply, so put the important words
    first ("Time to call the dentist, they close at 5.").
    - To skip a run with nothing worth saying, reply `[SILENT]`.
-   - For a card, start with one plain sentence, then the card's `display_markdown`.
+   - For a card, put the card's `display_markdown` in the reply. The notification
+     reads the card as a short preview on its own, so it needs no extra sentence.
 4. If the job needs bighelp tools (for example `bighelp_board` for a Feed
    post), and you give it its own `enabled_toolsets`, include `bighelp`.
 5. Show the job with `bighelp_render_automation` if it helps: the user can pause,
