@@ -395,6 +395,24 @@ class ManagedNotificationTests(unittest.TestCase):
             self.chat_turn("turn-a","Reply with [SILENT] when there's nothing new.",prompt={"display_kind":"hidden"})
         self.assertEqual(self.alerts(),[("session.completed","Reply with [SILENT] when there's nothing new.")])
 
+    def test_a_group_chat_pass_sends_no_alert(self):
+        # Regression: Hermes' group chat rules tell an agent with nothing to add to reply "(pass)".
+        # The room shows nothing for it, but the phone got a push reading "(pass)".
+        with self.hermes_rules():
+            for turn,reply in (("turn-a","(pass)"),("turn-b","pass"),("turn-c"," ( PASS ). "),("turn-d","Pass.")):
+                self.chat_turn(turn,reply,platform="bot_room")
+        self.assertEqual(self.alerts(),[])
+        with self.hermes_rules():
+            self.chat_turn("turn-e","I'd pass on the first plan; the second one is cheaper.",platform="bot_room")
+        self.assertEqual(self.alerts(),[("session.completed","I'd pass on the first plan; the second one is cheaper.")])
+
+    def test_pass_outside_a_group_chat_is_an_answer(self):
+        # Only group chat turns are told to pass; anywhere else "Pass." is what the agent said.
+        with self.hermes_rules():
+            self.chat_turn("turn-a","Pass.")
+            self.chat_turn("turn-b","(pass)",platform="bighelp")
+        self.assertEqual(self.alerts(),[("session.completed","Pass."),("session.completed","(pass)")])
+
     def test_webhook_run_uses_the_loose_rule(self):
         with self.hermes_rules():
             self.chat_turn("turn-a","[SILENT]\n\nNothing new this tick.",platform="webhook")
