@@ -553,6 +553,40 @@ async def live_alerts_ack(request: Request) -> Response:
     return _response({"settled": settled}, owner, request_id)
 
 
+class _QuietHours(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    grantId: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    enabled: StrictBool
+    startMinute: StrictInt = Field(ge=0, le=1439)
+    endMinute: StrictInt = Field(ge=0, le=1439)
+    timeZone: str = Field(min_length=1, max_length=64)
+
+
+def _quiet_hours(body: _QuietHours) -> dict:
+    from .managed_notifications import ManagedNotificationError, get_managed_notifications
+    try:
+        return get_managed_notifications().set_quiet_hours(
+            body.grantId, enabled=body.enabled, start_minute=body.startMinute,
+            end_minute=body.endMinute, time_zone=body.timeZone)
+    except ManagedNotificationError as error:
+        raise NativeAPIError(error.status, error.code, "The Quiet Hours request was refused.") from None
+
+
+@router.post("/notifications/quiet-hours")
+async def notification_quiet_hours(request: Request) -> Response:
+    """This device's Quiet Hours for its notification grant (bighelp app: Settings › Notifications)."""
+    from .quiet_hours import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "quiet_hours_unavailable", "Quiet Hours aren't available on this host.")
+    body = await _body(request, _QuietHours)
+    value = await run_in_threadpool(_quiet_hours, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
 class _Usage(_Body):
     refresh: StrictBool = False
 
