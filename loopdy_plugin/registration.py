@@ -225,6 +225,13 @@ def register(
     from .people import register as register_people
     register_people(ctx)
     register_legacy_toolset_alias()
+    # Workflow runs live in their own coordinator; after a reboot it starts again here when runs wait for it.
+    if os.environ.get("HERMES_SESSION_SOURCE") != "workflow":
+        try:
+            from .workflow_api import ensure_on_start
+            ensure_on_start()
+        except ImportError:
+            logger.debug("bighelp workflows unavailable")
 
     ctx.register_platform(
         name="loopdy",
