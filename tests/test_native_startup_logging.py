@@ -23,6 +23,7 @@ PROCESS_FEATURES = (
     "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
     "native-host-restart-v1",
     "native-provider-usage-v1", "native-provider-sign-in-v1", "native-workflows-v1",
+    "native-live-alerts-v1",
 )
 WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
 
@@ -70,8 +71,11 @@ class NativeStartupLoggingTests(unittest.TestCase):
                               available=Mock(return_value=True))
         self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[15],
                                 probe=Mock(return_value=None))
+        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[16],
+                                  available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
+                   self.live_alerts,
                    module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
@@ -116,6 +120,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.usage.available.return_value = False
         self.sign_in.available.return_value = False
         self.workflows.probe.return_value = "hermes_update_needed"
+        self.live_alerts.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
         expected = PROCESS_FEATURES[:2]

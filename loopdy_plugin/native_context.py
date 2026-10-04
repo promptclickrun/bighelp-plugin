@@ -316,4 +316,9 @@ def _native_features(
             }.get(reason, "the workflow store can't be opened."))
     except ImportError:
         skip("native-workflows-v1", "workflow support is unimportable.")
+    from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
+    if live_alerts_available():
+        features.append(live_alerts_capability)
+    else:
+        skip(live_alerts_capability, "the notification journal needs a POSIX host and Hermes' home helpers.")
     return profile, tuple(features)

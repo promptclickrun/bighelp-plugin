@@ -34,6 +34,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from . import live_alerts
 from .card_previews import reply_preview
 from .reactions import REACTION_SCHEMA
 from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
@@ -293,6 +294,7 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS preferences(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, peer_chats INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
+            db.executescript(live_alerts.SCHEMA)
 
     @contextmanager
     def _db(self):
@@ -882,6 +884,8 @@ class ManagedNotifications:
                 db.execute("INSERT INTO events VALUES(?,?,?,?)",
                            (event_id, grant["grantId"], canonical_json_bytes(detail).decode(), now))
                 due = now + _APPROVAL_GRACE_SECONDS if approval else now
+                # A device with bighelp open gets it directly first; the push waits for its ack.
+                due = live_alerts.offer(db, grant["grantId"], event_id, due, self.clock())
                 db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref) VALUES(?,?,?,?,?,'pending',?,?)",
                            (event_id, grant["grantId"], "/events", raw, expires, due, reference))
                 if not approval:
@@ -1202,8 +1206,14 @@ class ManagedNotifications:
     def _send_now(self, intent_ids: list[str]):
         """Sends alerts this process just queued. The claim below lets exactly one
         sender (this one or the owner's drain) deliver each; approvals never come here."""
-        now = int(self.clock())
         try:
+            # Alerts offered to a device with bighelp open wait for its ack; the rest go first.
+            waiting = live_alerts.offered(self, intent_ids)
+            if waiting and len(waiting) < len(intent_ids):
+                self._send_now([intent for intent in intent_ids if intent not in waiting])
+                intent_ids = waiting
+            live_alerts.await_acks(self, intent_ids)
+            now = int(self.clock())
             with self._db() as db:
                 marks = ",".join("?" * len(intent_ids))
                 rows = db.execute(f"SELECT p.* FROM pending p JOIN grants g USING(grant_id) WHERE p.intent_id IN ({marks}) AND p.state='pending' AND p.next_attempt<=? AND p.expires>? AND g.state='active' AND g.expires>? ORDER BY p.intent_id", (*intent_ids, now, now, now)).fetchall()

@@ -167,6 +167,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.workflow_api import available as workflows_available
         if workflows_available():
             expected.append("native-workflows-v1")
+        from loopdy_plugin.live_alerts import available as live_alerts_available
+        if live_alerts_available():
+            expected.append("native-live-alerts-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

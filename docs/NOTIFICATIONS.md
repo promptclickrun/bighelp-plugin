@@ -105,6 +105,59 @@ canonical "Bot Chat" session. Replies, failures and helper results there alert o
 Peer chats in bighelp (`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`);
 it starts off. A question or approval in a peer chat still alerts, since it needs the person.
 
+## Instant alerts while bighelp is open
+
+A push can take 10 seconds or more to arrive. While bighelp is open on a device, the device gets its alerts
+straight from the host instead, in about one second. Locked and background devices get pushes as before.
+
+1. While bighelp is in front (on a Mac, while it runs), the device holds a long request on
+   `POST /api/plugins/loopdy/native/alerts/listen`. The host then records in the notification journal that this
+   device is live. All Hermes processes use the same journal, so an alert from any process reaches the request.
+2. When a turn queues an alert for a live device, the host gives it to that request. It is the same sealed
+   alert that the push carries, so nothing new leaves the host unencrypted.
+3. The device decides what to show. It shows nothing for the chat on screen, and it never tells the host which
+   chat that is. It shows all other alerts like a push, then acks them on `POST …/native/alerts/ack`.
+4. An ack in one second settles the alert, and the host never sends it to the notification service. Without an
+   ack (the device went to the background, or the connection dropped), the host sends the push as before.
+   Questions and approvals keep their grace period: the host offers them only when the push would start.
+5. Both copies have the same event ID. When a push arrives for an alert that the device already showed, the
+   device puts the push in Notification Center only and removes the first copy. You see one alert.
+
+The device asks for this only when `/native/context` lists `native-live-alerts-v1`.
+
+### Routes
+
+All three routes need the native context headers (`If-Match`, `X-Loopdy-Request-ID`). Each names the device's
+grants on this host: `grants` is a list of 1 to 8 `{"grantId", "recipientKeyId"}`. A grant counts only when it
+is active and `recipientKeyId` is the ID of the content key the device registered for it.
+
+`alerts/listen` takes `{"listenerId", "grants", "waitSeconds", "knownAvatars"}`:
+
+- `listenerId` is a UUID that the device makes for each run of its listener.
+- `waitSeconds` is 0 to 25.
+- `knownAvatars` lists up to 32 SHA-256 hashes of agent pictures that the device has already.
+
+The host answers when an alert is there, when the wait ends, or when a newer request from the same device takes
+the grants. The answer is `{"alerts": [...], "grantIds": [...], "ackWindowMilliseconds": 1000}`:
+
+- Each alert is `{"grantId", "agentId", "eventId", "eventType", "sessionReference", "turnId", "occurredAt",
+  "sealed", "avatar"}`. `sealed` is the v2 envelope.
+- `avatar` has the `sha256` of the encrypted picture. It also has the picture as `data` when the device does not
+  have it and it fits.
+- An answer holds at most 8 alerts and 1,000,000 bytes. The host gives each alert to a listener one time.
+
+`alerts/ack` takes `{"grants", "eventIds"}` (1 to 32 event IDs). The answer is `{"settled": [...]}`: the alerts
+that the host will not send as pushes. A push that started already is not in the list.
+
+`alerts/stop` takes `{"listenerId", "grants"}`. The answer is `{"stopped": true}`. The device sends it when
+bighelp goes to the background, so that the host sends its next alerts as pushes immediately.
+
+Errors: `live_alerts_not_enrolled` (404) when no grant counts, `live_alerts_busy` (429) when 32 grants are live
+on the host, and `live_alerts_unavailable` (503).
+
+A device stays live for the wait it asked for plus 10 seconds, so that the next request can follow. After that,
+or after `alerts/stop`, the host sends its alerts as pushes immediately.
+
 ## End-to-end encryption
 
 With a registered content key, the host seals each alert's title, text and avatar for that phone
