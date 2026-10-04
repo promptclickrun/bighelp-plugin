@@ -641,19 +641,19 @@ _MISSING_MODULE = re.compile(r"No module named '([A-Za-z_][A-Za-z0-9_.]{0,100})'
 def stderr_summary(tail: bytes) -> str:
     """One fixed sentence about why a worker stopped, built from its error output but never quoting it.
 
-    Only a Python error's class name and a missing module's name get through; paths and messages don't.
+    Only a missing module's name or a Python error's class name gets through; paths and messages don't.
     """
     lines = [line.strip() for line in tail.decode("utf-8", "replace").splitlines() if line.strip()]
     for line in reversed(lines):
-        match = _ERROR_LINE.match(line)
-        if match is None:
-            continue
-        name = match.group(1).rsplit(".", 1)[-1]
-        missing = _MISSING_MODULE.search(match.group(2) or "")
-        if name in ("ModuleNotFoundError", "ImportError") and missing:
+        # `python -m` reports a missing package as "Error while finding module specification … (ModuleNotFoundError:
+        # No module named 'hermes_cli')", so look inside the line too.
+        missing = _MISSING_MODULE.search(line)
+        if missing:
             return f"Hermes couldn't load the Python module {missing.group(1)}."
-        return f"Hermes stopped with {name}."
-    return "Hermes stopped before it started the turn." if lines else "Hermes stopped without saying why."
+        match = _ERROR_LINE.match(line)
+        if match is not None:
+            return f"Hermes stopped with {match.group(1).rsplit('.', 1)[-1]}."
+    return "Hermes printed an error before the turn began." if lines else "Hermes gave no error output."
 
 
 def read_tail(path: Path, limit: int) -> bytes | None:

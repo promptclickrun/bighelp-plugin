@@ -409,7 +409,7 @@ class Coordinator:
             if _empty(output_path):
                 # It never got going: say why, from its error output, without quoting it.
                 explain = f"{runner.stderr_summary(stderr_tail)} (exit code {exit_code})"
-                message = f"{stage['title']} stopped before it started. {explain}"
+                message = f"{stage['title']} stopped before its turn began. {explain}"
             self._attempt_failed(attempt, "agent_exit", message, explain=explain)
             return
         reply = report.get("reply") if report is not None and isinstance(report.get("reply"), str) else None

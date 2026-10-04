@@ -101,6 +101,34 @@ class RealProcessTests(unittest.TestCase):
         detail = self.engine.detail(run_id)
         self.assertEqual(detail["signoff"]["artifact"]["bytes"], len(b"# Note\n\nFrom the fake."))
 
+    def test_text_runner_hands_off_through_stdout(self):
+        """An older Hermes: no stream-json and no turn report, only the final reply on stdout."""
+        script = self.engine.home / "old-hermes.py"
+        script.write_text(textwrap.dedent('''\
+            import json, sys
+            args = sys.argv[1:]
+            json.dump(args, open("argv.json", "w"))
+            brief = open(args[args.index("--query-file") + 1], encoding="utf-8").read()
+            assert "bighelp-handoff" in brief
+            print('Done.\\n```bighelp-handoff\\n{"outputs": {"note": {"content": "# Note\\\\n\\\\nPlain."}}}\\n```')
+            print("session_id: 20260101_000000_abcdef")
+        '''))
+        older = frozenset({"cli", "source", "toolsets", "query", "query_file", "quiet"})
+        self.engine.coordinator.hermes = [sys.executable, str(script)]
+        self.engine.coordinator.features, self.engine.coordinator.mode = older, "text"
+        run_id = self.workflow("Write a short note.")
+        self.wait_for(lambda: self.engine.state(run_id)[0] in ("waiting_for_you", "failed"))
+        detail = self.engine.detail(run_id)
+        self.assertEqual(detail["state"], "waiting_for_you", detail.get("failure"))
+        attempt = detail["stages"][0]["attempts"][0]
+        self.assertEqual((attempt["state"], attempt["tokens"]), ("accepted", None))
+        folder = self.engine.store.runs_dir / run_id / "write" / "1-1"
+        self.assertEqual(json.loads((folder / "argv.json").read_text()),
+                         ["-p", "writer", "--cli", "chat", "--source", "workflow", "--toolsets", "todo",
+                          "--query-file", "brief.md", "-Q"])
+        self.assertFalse((folder / "stream.jsonl").exists())
+        self.assertEqual(detail["signoff"]["artifact"]["bytes"], len(b"# Note\n\nPlain."))
+
     def test_time_limit_stops_the_whole_process_group(self):
         run_id = self.workflow("MODE:sleep Wait.")
         folder = self.engine.store.runs_dir / run_id / "write" / "1-1"
@@ -214,6 +242,90 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(sorted(env), ["HERMES_HOME", "HERMES_PROFILE", "HERMES_QUIET_TURN_REPORT_FILE",
                                        "HERMES_SESSION_SOURCE", "HOME", "PATH", "PYTHONUTF8", "TERMINAL_CWD"])
         self.assertEqual(env["HERMES_HOME"], "/h/profiles/w")
+
+    def test_module_form_worker_gets_the_import_path_pinned(self):
+        env = runner.worker_env({"PATH": "/bin"}, home=Path("/h"), profile="w", attempt_dir=Path("/r/a"),
+                                import_path=["/opt/hermes-agent", "/opt/deps/site-packages", "/opt/hermes-agent"])
+        self.assertEqual(env["PYTHONPATH"], "/opt/hermes-agent" + os.pathsep + "/opt/deps/site-packages")
+        self.assertNotIn("PYTHONPATH", runner.worker_env({"PYTHONPATH": "/elsewhere"}, home=Path("/h"), profile="w",
+                                                         attempt_dir=Path("/r/a")))
+        self.assertNotIn(runner.REPORT_ENV, runner.worker_env({}, home=Path("/h"), profile="w",
+                                                              attempt_dir=Path("/r/a"), report=False))
+
+    def test_hermes_command_follows_kanbans_order(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as folder:
+            launcher = Path(folder) / "hermes"
+            launcher.write_text("#!/bin/sh\n")
+            launcher.chmod(0o755)
+            self.assertEqual(runner.hermes_argv({"HERMES_BIN": str(launcher)}), [str(launcher)])
+            self.assertEqual(runner.hermes_argv({"HERMES_BIN": "hermes", "PATH": folder}), [str(launcher)])
+            self.assertEqual(runner.hermes_argv({"HERMES_BIN": "hermes", "PATH": "."}), runner.module_argv())
+            self.assertEqual(runner.hermes_argv({"PATH": folder}, importable=True), runner.module_argv())
+            self.assertEqual(runner.hermes_argv({"PATH": folder}, importable=False), [str(launcher)])
+            self.assertEqual(runner.hermes_argv({"PATH": "/nowhere"}, importable=False), runner.module_argv())
+
+    def test_only_flags_this_hermes_has_are_passed(self):
+        full = runner.worker_argv(["hermes"], "w", [], runner.FULL_FEATURES)
+        self.assertEqual(full, ["hermes", "-p", "w", "--cli", "chat", "--source", "workflow", "--toolsets", "todo",
+                                "--query-file", "brief.md", "--format", "stream-json"])
+        # Hermes 0.21.1 to 0.21.3: no stream-json and no turn report, so a plain quiet turn.
+        older = frozenset({"cli", "source", "toolsets", "query", "query_file", "quiet"})
+        self.assertEqual(runner.runner_mode(older), "text")
+        self.assertEqual(runner.worker_argv(["hermes"], "w", ["web"], older),
+                         ["hermes", "-p", "w", "--cli", "chat", "--source", "workflow", "--toolsets", "web",
+                          "--query-file", "brief.md", "-Q"])
+        oldest = frozenset({"toolsets", "query"})
+        self.assertEqual(runner.worker_argv(["hermes"], "w", [], oldest, query="Brief text"),
+                         ["hermes", "-p", "w", "chat", "--toolsets", "todo", "-q", "Brief text"])
+        self.assertEqual(runner.text_query("Small brief"), "Small brief")
+        self.assertIn("brief.md", runner.text_query("x" * (runner.MAX_INLINE_QUERY_BYTES + 1)))
+        self.assertEqual(runner.decode_features(runner.encode_features(older)), older)
+        self.assertEqual(runner.decode_features("none"), frozenset())
+        self.assertEqual(runner.decode_features("toolsets,unknown"), frozenset({"toolsets"}))
+
+    def test_flags_are_read_from_help_when_the_parser_cant_be(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as folder:
+            script = Path(folder) / "old-hermes.py"
+            script.write_text(textwrap.dedent('''\
+                import sys
+                assert sys.argv[1:] == ["chat", "--help"]
+                print("usage: hermes chat [-h] [-q QUERY] [-t TOOLSETS] [--source SOURCE] [-Q]")
+                print("  -q QUERY, --query QUERY  Query to run")
+                print("  -t TOOLSETS, --toolsets TOOLSETS  Comma-separated toolsets to enable")
+                print("  --cli                    Force the classic REPL")
+            '''))
+            found = runner._help_features([sys.executable, str(script)], {"PATH": "/usr/bin:/bin"})
+        self.assertEqual(found, frozenset({"query", "toolsets", "source", "quiet", "cli"}))
+        self.assertEqual(runner.runner_mode(found), "text")
+        with patch.object(runner, "_parser_features", return_value=None), \
+                patch.object(runner, "_help_features", return_value=None):
+            self.assertEqual(runner.detect_hermes_features(["hermes"], []), frozenset())
+
+    def test_this_hermes_has_the_stream_runner(self):
+        features = runner.detect_hermes_features()
+        self.assertEqual(runner.runner_mode(features), "stream")
+        self.assertTrue({"cli", "source", "toolsets", "query"} <= features)
+
+    def test_stderr_is_bounded_and_summarized_without_quoting_it(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as folder:
+            path = Path(folder) / "stderr.log"
+            path.write_bytes(b"x" * 70_000 + b"\nlast line\n")
+            tail = runner.trim_stderr(path)
+            self.assertEqual(len(tail), runner.STDERR_TAIL_BYTES)
+            self.assertEqual(path.stat().st_size, runner.STDERR_TAIL_BYTES)
+            with open(path, "ab") as handle:
+                handle.write(b"more\n")
+            self.assertEqual(runner.trim_stderr(path, above=runner.STDERR_TAIL_BYTES)[-5:], b"more\n")
+            self.assertEqual(runner.trim_stderr(Path(folder) / "missing"), b"")
+        missing = (b"/opt/private/bin/python3: Error while finding module specification for 'hermes_cli.main' "
+                   b"(ModuleNotFoundError: No module named 'hermes_cli')\n")
+        self.assertEqual(runner.stderr_summary(missing), "Hermes couldn't load the Python module hermes_cli.")
+        crash = (b"Traceback (most recent call last):\n  File \"/Users/someone/secret/run.py\", line 3\n"
+                 b"yaml.scanner.ScannerError: token=sk-proj-ABCDEFGHIJKLMNOPQRSTUV in /Users/someone/x\n")
+        self.assertEqual(runner.stderr_summary(crash), "Hermes stopped with ScannerError.")
+        self.assertEqual(runner.stderr_summary(b"something odd in /Users/someone\n"),
+                         "Hermes printed an error before the turn began.")
+        self.assertEqual(runner.stderr_summary(b""), "Hermes gave no error output.")
 
     def test_profile_homes_follow_hermes_rules(self):
         with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as folder:
