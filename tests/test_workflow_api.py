@@ -18,6 +18,13 @@ VECTORS = Path(__file__).resolve().parents[1] / "fixtures" / "contracts" / "work
 PREFIX = native_fixtures.PREFIX + "/workflows/"
 # Keys a response leaves out when they don't apply (docs/WORKFLOWS.md marks them with ?).
 OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey"}
+# Fields v2 added to v1 responses: the v1 vectors stay as they were, and apps ignore fields they don't know.
+ADDED_IN_V2 = frozenset({"pinned", "source", "updatedAt", "mode"})
+
+
+V2_VECTORS = {"draft-save-new.json", "draft-save-v2.json", "validate-v2.json", "pin.json", "unarchive.json",
+              "list-v2.json", "get-v2.json", "templates-save.json", "templates-list-v2.json",
+              "templates-use-yours.json", "templates-delete.json", "status-v2.json", "runs-get-text-runner.json"}
 
 
 def vector(name: str) -> dict:
@@ -34,20 +41,20 @@ def kind(value):
     return type(value).__name__
 
 
-def assert_shape(test, expected, actual, path="response"):
+def assert_shape(test, expected, actual, path="response", added=frozenset()):
     """Same keys (apart from optional ones) and the same JSON types, all the way down."""
     if isinstance(expected, dict) and isinstance(actual, dict):
         if path.endswith(".definition") or path.endswith(".inputs") or path.endswith(".value"):
             return
         missing = set(expected) - set(actual) - OPTIONAL
-        extra = set(actual) - set(expected) - OPTIONAL
+        extra = set(actual) - set(expected) - OPTIONAL - added
         test.assertEqual((missing, extra), (set(), set()), path)
         for key in set(expected) & set(actual):
-            assert_shape(test, expected[key], actual[key], f"{path}.{key}")
+            assert_shape(test, expected[key], actual[key], f"{path}.{key}", added)
     elif isinstance(expected, list) and isinstance(actual, list):
         if expected:
             for index, item in enumerate(actual):
-                assert_shape(test, expected[0], item, f"{path}[{index}]")
+                assert_shape(test, expected[0], item, f"{path}[{index}]", added)
     elif kind(expected) is not None and kind(actual) is not None:
         test.assertEqual(kind(expected), kind(actual), path)
 
@@ -79,7 +86,8 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store")
         value = response.json()
         if vector_name is not None:
-            assert_shape(self, vector(vector_name)["response"], value)
+            assert_shape(self, vector(vector_name)["response"], value,
+                         added=frozenset() if vector_name in V2_VECTORS else ADDED_IN_V2)
         return value
 
     def error(self, path, body, status, code):
@@ -97,7 +105,7 @@ class WorkflowRouteTests(unittest.TestCase):
     def test_every_route_matches_the_vectors(self):
         status = self.ok("status", {}, "status.json")
         self.assertEqual((status["coordinator"]["state"], status["slots"]["total"], status["runner"]),
-                         ("offline", 2, {"available": True}))
+                         ("offline", 2, {"available": True, "mode": "stream"}))
         self.assertEqual(self.ok("templates/list", {}, "templates-list.json")["templates"][0]["id"],
                          "research-draft-review")
         used = self.ok("templates/use", {"templateId": "research-draft-review", "name": "Weekly newsletter"},

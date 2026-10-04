@@ -5,7 +5,8 @@ time. Nothing ever retries by itself: when a stage ends in a way nobody can know
 attention and the person decides.
 
 Start it with `ensure_coordinator()`: the plugin calls that at registration and after every workflow change. It
-launches `python -m loopdy_plugin.workflow_coordinator` through launchd or systemd so it outlives the dashboard.
+launches `python -m loopdy_plugin.workflow_coordinator` through launchd or systemd, or as a detached process where
+neither exists (a container), so it outlives the dashboard.
 """
 from __future__ import annotations
 
@@ -53,20 +54,38 @@ def _enough_memory() -> bool:
         return True
 
 
+def _empty(path: Path) -> bool:
+    try:
+        return os.lstat(path).st_size == 0
+    except OSError:
+        return True
+
+
 class Coordinator:
     def __init__(self, store: WorkflowStore, *, host: Any | None = None, clock: Callable[[], float] | None = None,
                  hermes: list[str] | None = None, environ: dict[str, str] | None = None,
-                 hermes_root: Path | None = None, memory_ok: Callable[[], bool] = _enough_memory):
+                 hermes_root: Path | None = None, memory_ok: Callable[[], bool] = _enough_memory,
+                 import_path: list[str] | None = None, features: frozenset[str] | None = None):
         self.store = store
         self.host = host if host is not None else runner.OSProcessHost()
         self.clock = clock or store.clock
-        self.hermes = hermes or runner.hermes_argv()
         self.environ = dict(os.environ if environ is None else environ)
+        self.hermes = hermes or runner.hermes_argv(self.environ, importable=bool(import_path) or None)
         self.hermes_root = Path(hermes_root) if hermes_root is not None else store.root.parents[2]
         self.memory_ok = memory_ok
-        self.import_root = runner.hermes_import_root() if self.hermes[1:3] == ["-m", "hermes_cli.main"] else None
+        # Module-form workers need Hermes' import path pinned: the launching process hands it over, because a
+        # bundled bare interpreter finds `hermes_cli` only in-process. A launcher (HERMES_BIN) owns its imports.
+        if not runner.is_module_argv(self.hermes):
+            self.import_path: list[str] = []
+        elif import_path is not None:
+            self.import_path = list(import_path)
+        else:
+            self.import_path = runner.hermes_import_path()
+        self.features = runner.FULL_FEATURES if features is None else frozenset(features)
+        self.mode = runner.runner_mode(self.features)
         self.epoch: int | None = None
         self.live: dict[str, runner.LiveText] = {}
+        self.coarse: dict[str, int] = {}
         self.report_seen: dict[str, float] = {}
         self.last_prune = 0.0
         self.idle_since: float | None = None
@@ -212,7 +231,8 @@ class Coordinator:
                                 f"We don't know how {stage['title']} ended.")
             self._with_run(attempt["run_id"], settle)
             return
-        offset = self._read_stream(attempt, attempt["stream_offset"])
+        stream = attempt["runner"] == "stream"
+        offset = self._read_stream(attempt, attempt["stream_offset"]) if stream else 0
         own = self.host.owns(pid)
         exit_code = self.host.poll(pid) if own else None
         if own:
@@ -223,6 +243,9 @@ class Coordinator:
         now = self.now()
         report = runner.read_report(directory / "report.json", pid)
         if alive:
+            runner.trim_stderr(directory / "stderr.log")
+            if not stream:
+                self._coarse(attempt, now)
             with self.store.read() as connection:
                 run = connection.execute("SELECT cancel_requested FROM runs WHERE id=?",
                                          (attempt["run_id"],)).fetchone()
@@ -243,7 +266,8 @@ class Coordinator:
                     self._stop(attempt, "linger")
             return
         self.report_seen.pop(attempt["id"], None)
-        self._read_stream(attempt, offset, final=True)
+        if stream:
+            self._read_stream(attempt, offset, final=True)
         self._ended(attempt, exit_code if own else None, report)
 
     def _stop(self, attempt: sqlite3.Row, reason: str) -> None:
@@ -280,18 +304,46 @@ class Coordinator:
             if counted is not None:
                 connection.execute("UPDATE attempts SET tokens_in=?, tokens_out=? WHERE id=?",
                                    (counted[0], counted[1], attempt["id"]))
-            if lines:
-                last = connection.execute("SELECT COALESCE(MAX(seq), 0) FROM live_lines WHERE attempt_id=?",
-                                          (attempt["id"],)).fetchone()[0]
-                connection.executemany(
-                    "INSERT INTO live_lines (attempt_id, seq, at, kind, text) VALUES (?, ?, ?, ?, ?)",
-                    [(attempt["id"], last + index + 1, now, kind, text) for index, (kind, text) in enumerate(lines)])
-                connection.execute("DELETE FROM live_lines WHERE attempt_id=? AND seq<=?",
-                                   (attempt["id"], last + len(lines) - MAX_LIVE_LINES))
+            self._add_lines(connection, attempt["id"], lines, now)
         return offset
+
+    @staticmethod
+    def _add_lines(connection: sqlite3.Connection, attempt_id: str, lines: list[tuple[str, str]], now: float) -> None:
+        if not lines:
+            return
+        last = connection.execute("SELECT COALESCE(MAX(seq), 0) FROM live_lines WHERE attempt_id=?",
+                                  (attempt_id,)).fetchone()[0]
+        connection.executemany(
+            "INSERT INTO live_lines (attempt_id, seq, at, kind, text) VALUES (?, ?, ?, ?, ?)",
+            [(attempt_id, last + index + 1, now, kind, text) for index, (kind, text) in enumerate(lines)])
+        connection.execute("DELETE FROM live_lines WHERE attempt_id=? AND seq<=?",
+                           (attempt_id, last + len(lines) - MAX_LIVE_LINES))
+
+    def _coarse(self, attempt: sqlite3.Row, now: float) -> None:
+        """The text runner has no stream: say it started, then once a minute that it still works."""
+        minutes = max(0, int((now - attempt["launched_at"]) // 60))
+        last = self.coarse.get(attempt["id"])
+        if last is not None and minutes <= last:
+            return
+        self.coarse[attempt["id"]] = minutes
+        with self.store.transaction() as connection:
+            if last is None:
+                if connection.execute("SELECT 1 FROM live_lines WHERE attempt_id=? LIMIT 1",
+                                      (attempt["id"],)).fetchone() is not None:
+                    return
+                lines = [("init", "Started. This Hermes shows no live steps, so the result comes at the end.")]
+            else:
+                lines = [("text", f"Still working ({minutes} min).")]
+            self._add_lines(connection, attempt["id"], lines, now)
 
     def _ended(self, attempt: sqlite3.Row, exit_code: int | None, report: dict | None) -> None:
         self.live.pop(attempt["id"], None)
+        self.coarse.pop(attempt["id"], None)
+        directory = Path(attempt["dir"])
+        # Keep only the last 4 KB of what the worker wrote to stderr. It stays in the attempt folder.
+        stderr_tail = runner.trim_stderr(directory / "stderr.log", above=runner.STDERR_TAIL_BYTES)
+        stream = attempt["runner"] == "stream"
+        output_path = directory / ("stream.jsonl" if stream else "reply.txt")
         reason = attempt["stop_reason"]
         if reason == "linger" and report is not None:
             exit_code, reason = report["exit_code"], None
@@ -338,6 +390,9 @@ class Coordinator:
             stages = json.loads(run["stages_json"])
             connection.execute("UPDATE attempts SET state='checking_output', exit_code=? WHERE id=?",
                                (exit_code, attempt["id"]))
+            if not stream:
+                self._add_lines(connection, attempt["id"],
+                                [("result", "Finished." if exit_code == 0 else "Ended with an error.")], now)
             stage_state(stages, attempt["stage_key"], "checking_output", now)
             update_run(connection, run, now, state="checking_output", stages_json=model.canonical_json(stages))
             add_event(connection, run["id"], now, "stage_checking", f"Checking what {stage['title']} handed off.",
@@ -349,11 +404,20 @@ class Coordinator:
             return
         definition, stage = result
         if exit_code != 0:
-            self._attempt_failed(attempt, "agent_exit", f"{stage['title']} stopped with an error.")
+            message = f"{stage['title']} stopped with an error."
+            explain = None
+            if _empty(output_path):
+                # It never got going: say why, from its error output, without quoting it.
+                explain = f"{runner.stderr_summary(stderr_tail)} (exit code {exit_code})"
+                message = f"{stage['title']} stopped before it started. {explain}"
+            self._attempt_failed(attempt, "agent_exit", message, explain=explain)
             return
         reply = report.get("reply") if report is not None and isinstance(report.get("reply"), str) else None
-        if reply is None:
-            reply = self._last_result_text(Path(attempt["dir"]) / "stream.jsonl")
+        if reply is None and stream:
+            reply = self._last_result_text(output_path)
+        elif reply is None:
+            data = runner.read_tail(output_path, runner.MAX_REPORT_BYTES)
+            reply = data.decode("utf-8", "replace") if data is not None else None
         try:
             outputs = parse_outputs(reply or "", stage["outputs"], attempt_dir=Path(attempt["dir"]),
                                     stage_title=stage["title"])
@@ -414,8 +478,10 @@ class Coordinator:
                 return record.get("text") if isinstance(record.get("text"), str) else None
         return None
 
-    def _attempt_failed(self, attempt: sqlite3.Row, code: str, message: str) -> None:
+    def _attempt_failed(self, attempt: sqlite3.Row, code: str, message: str, *, explain: str | None = None) -> None:
         def change(connection, run, definition, now):
+            if explain is not None:
+                add_event(connection, run["id"], now, "agent_error", explain, attempt["stage_key"], attempt["number"])
             row = connection.execute("SELECT tokens_in, tokens_out FROM attempts WHERE id=?",
                                      (attempt["id"],)).fetchone()
             connection.execute("UPDATE attempts SET state='failed', outcome_code=?, ended_at=? WHERE id=?",
@@ -635,15 +701,17 @@ class Coordinator:
         runner.write_private(directory / "brief.md", brief.encode("utf-8"))
         attempt_id = new_id("att")
         minutes = model.stage_minutes(definition, stage)
+        stream = self.mode == "stream"
 
         def launched(connection, fresh, definition, now):
             if fresh["state"] not in from_states or fresh["version"] != run["version"] or fresh["cancel_requested"]:
                 return False
             connection.execute(
                 "INSERT INTO attempts (id, run_id, stage_key, iteration, number, state, agent_id, coordinator_epoch, "
-                "launched_at, deadline_at, dir) VALUES (?, ?, ?, ?, ?, 'launched', ?, ?, ?, ?, ?)",
+                "launched_at, deadline_at, dir, runner, tokens_known) "
+                "VALUES (?, ?, ?, ?, ?, 'launched', ?, ?, ?, ?, ?, ?, ?)",
                 (attempt_id, fresh["id"], stage["key"], iteration, number, agent, self.epoch, now,
-                 now + minutes * 60, str(directory)))
+                 now + minutes * 60, str(directory), self.mode, 1 if stream else 0))
             stages = json.loads(fresh["stages_json"])
             stage_state(stages, stage["key"], "launched", now, start=True, iteration=iteration)
             update_run(connection, fresh, now, state="launched", stage_key=stage["key"], next_stage=None,
@@ -655,11 +723,16 @@ class Coordinator:
 
         if not self._with_run(run["id"], launched):
             return False
-        argv = runner.worker_argv(self.hermes, agent, stage["tools"])
+        argv = runner.worker_argv(self.hermes, agent, stage["tools"], self.features, query=runner.text_query(brief))
         env = runner.worker_env(self.environ, home=home, profile=agent, attempt_dir=directory,
-                                import_root=self.import_root)
+                                import_path=self.import_path, report=stream)
         try:
-            pid = self.host.spawn(argv, env=env, cwd=directory, stdout_path=directory / "stream.jsonl")
+            if "toolsets" not in self.features:
+                # Without --toolsets the agent would get every tool it has, messaging included.
+                raise ValueError("this Hermes can't limit a stage's tools")
+            pid = self.host.spawn(argv, env=env, cwd=directory,
+                                  stdout_path=directory / ("stream.jsonl" if stream else "reply.txt"),
+                                  stderr_path=directory / "stderr.log")
         except (OSError, ValueError, StoreUnavailable):
             def failed(connection, fresh, definition, now):
                 connection.execute("UPDATE attempts SET state='failed', outcome_code='spawn_failed', ended_at=? "
@@ -778,31 +851,68 @@ def _launcher_env() -> dict[str, str]:
 
 
 def service_manager() -> str | None:
+    """launchd or systemd where they exist; otherwise (a container, a hosted Hermes) a detached process."""
     if os.name != "posix":
         return None
     system = platform.system()
     if system == "Darwin" and shutil.which("launchctl"):
         return "launchd"
-    if system == "Linux" and shutil.which("systemd-run"):
+    if system == "Linux" and shutil.which("systemd-run") and _systemd_user_available():
         return "systemd"
-    return None
+    return "detached"
 
 
-def launch_service(root: Path) -> bool:
-    """Start `python -m loopdy_plugin.workflow_coordinator` under launchd or systemd so it outlives us."""
-    manager = service_manager()
+def _systemd_user_available() -> bool:
+    """`systemd-run --user` needs a user manager; containers often ship the binary without one."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return os.path.exists(os.path.join(runtime, "systemd", "private")) or bool(
+        os.environ.get("DBUS_SESSION_BUS_ADDRESS"))
+
+
+# Detached coordinators this process started, so their exits are collected (no zombies).
+_detached: list[subprocess.Popen] = []
+
+
+def coordinator_command(root: Path, *, environ: dict[str, str] | None = None) -> list[str]:
+    """`env -i … python -m loopdy_plugin.workflow_coordinator …` with what the coordinator can't find itself.
+
+    Hermes may run on a bundled bare interpreter that knows Hermes' folder only in-process, so this process
+    resolves how to start Hermes, its import path and the chat flags it has, and hands them over.
+    """
+    environ = dict(os.environ if environ is None else environ)
+    plugin_root = str(Path(__file__).resolve().parents[1])
+    import_path = runner.hermes_import_path()
+    hermes = runner.hermes_argv(environ, importable=bool(import_path) or runner.hermes_import_root() is not None)
+    features = runner.detect_hermes_features(hermes, import_path)
+    env_tool = shutil.which("env") or "/usr/bin/env"
+    python_path = os.pathsep.join(dict.fromkeys([plugin_root, *import_path]))
+    command = [env_tool, "-i", f"PATH={environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}",
+               f"HOME={Path.home()}", f"HERMES_HOME={root.parents[2]}", "LANG=C.UTF-8", "PYTHONUTF8=1",
+               f"PYTHONPATH={python_path}"]
+    for key in ("HERMES_BIN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+        if environ.get(key):
+            command.append(f"{key}={environ[key]}")
+    command += [sys.executable, "-m", "loopdy_plugin.workflow_coordinator", "--data-root", str(root),
+                "--hermes-features", runner.encode_features(features)]
+    if runner.is_module_argv(hermes):
+        command += ["--hermes-path", os.pathsep.join(import_path)]
+    else:
+        command += ["--hermes-bin", hermes[0]]
+    return command
+
+
+def launch_service(root: Path, *, manager: str | None = None) -> bool:
+    """Start the coordinator under launchd or systemd, or as a detached process, so it outlives us."""
+    manager = manager or service_manager()
     if manager is None:
         return False
-    plugin_root = str(Path(__file__).resolve().parents[1])
     label = service_label(root)
-    env_tool = shutil.which("env") or "/usr/bin/env"
-    command = [env_tool, "-i", f"PATH={os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}",
-               f"HOME={Path.home()}", f"HERMES_HOME={root.parents[2]}", "LANG=C.UTF-8", "PYTHONUTF8=1",
-               f"PYTHONPATH={plugin_root}"]
-    for key in ("HERMES_BIN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
-        if os.environ.get(key):
-            command.append(f"{key}={os.environ[key]}")
-    command += [sys.executable, "-m", "loopdy_plugin.workflow_coordinator", "--data-root", str(root)]
+    try:
+        command = coordinator_command(root)
+    except Exception:
+        return False
+    if manager == "detached":
+        return _launch_detached(command)
     if manager == "launchd":
         launchctl = shutil.which("launchctl")
         subprocess.run([launchctl, "remove", label], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -815,9 +925,30 @@ def launch_service(root: Path) -> bool:
     try:
         result = subprocess.run(full, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 timeout=15, check=False, env=_launcher_env())
+        if result.returncode == 0:
+            return True
     except (OSError, subprocess.SubprocessError):
+        pass
+    # The service manager refused (no user session, for example): a detached process still works.
+    return _launch_detached(command)
+
+
+def _launch_detached(command: list[str]) -> bool:
+    """No service manager here: a child in its own session, so it lives on when the dashboard restarts.
+
+    The coordinator's flock and the ledger's launch time stop a second one, and it exits after ten idle
+    minutes like the managed ones. A container restart ends it; its running stage then needs attention.
+    """
+    for process in list(_detached):
+        if process.poll() is not None:
+            _detached.remove(process)
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True, cwd="/")
+    except (OSError, ValueError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0
+    _detached.append(process)
+    return True
 
 
 def ensure_coordinator(root: Path, *, launcher: Callable[[Path], bool] | None = None,
@@ -847,11 +978,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bighelp-workflow-coordinator")
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--service-label")
+    parser.add_argument("--hermes-path")
+    parser.add_argument("--hermes-bin")
+    parser.add_argument("--hermes-features")
     args = parser.parse_args(argv)
     stop = threading.Event()
     for name in ("SIGTERM", "SIGINT", "SIGHUP"):
         signal.signal(getattr(signal, name), lambda *_: stop.set())
-    coordinator = Coordinator(WorkflowStore(Path(args.data_root)))
+    import_path = None if args.hermes_path is None else [item for item in args.hermes_path.split(os.pathsep) if item]
+    coordinator = Coordinator(
+        WorkflowStore(Path(args.data_root)), hermes=[args.hermes_bin] if args.hermes_bin else None,
+        import_path=import_path,
+        features=None if args.hermes_features is None else runner.decode_features(args.hermes_features))
     try:
         if coordinator.acquire():
             try:

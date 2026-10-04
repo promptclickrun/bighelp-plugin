@@ -17,12 +17,16 @@ from starlette.concurrency import run_in_threadpool
 
 from .native_api import _NativeRoute, _body, _precondition, _response
 from .native_context import NativeAPIError, PROFILE_ID, native_context
-from .workflow_runner import REPORT_ENV
+from . import workflow_runner as runner
 from .workflow_store import HostFacts, Mutation, WorkflowError, WorkflowStore, root_for_home
 
 
 logger = logging.getLogger(__name__)
 CAPABILITY = "native-workflows-v1"
+# Graph edits, layout, your templates, pin and unarchive (docs/WORKFLOWS.md, "Version 2").
+EDIT_CAPABILITY = "native-workflows-edit-v1"
+# Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
+REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)
 _PROBE_SECONDS = 30.0
 _probe_cache: dict[str, tuple[float, str | None]] = {}
@@ -41,37 +45,28 @@ def workflows_root() -> Path:
 
 
 @functools.lru_cache(maxsize=1)
-def _chat_flags_present() -> bool:
-    """The worker command needs these Hermes chat flags (Hermes 0.21.4 and later)."""
-    try:
-        from hermes_cli._parser import build_top_level_parser
-        parser, _subparsers, chat = build_top_level_parser()
-    except Exception:
-        return False
-    top = {option for action in parser._actions for option in action.option_strings}
-    flags = {option for action in chat._actions for option in action.option_strings}
-    # `-p` is read before argparse (Hermes' PRE_ARGPARSE_INHERITED_FLAGS), so it isn't in either parser.
-    return "--cli" in top | flags and {"--query-file", "--format", "--source", "--toolsets"} <= flags
+def hermes_features() -> frozenset[str]:
+    """The chat flags and turn report this Hermes has, read once per process."""
+    return runner.detect_hermes_features()
+
+
+def runner_mode() -> str:
+    """`stream` (Hermes 0.21.4 and later) or `text` (a plain `chat -q` turn, for older Hermes)."""
+    return runner.runner_mode(hermes_features())
 
 
 def probe() -> str | None:
-    """None when workflows can run on this computer, else a fixed reason code."""
+    """None when workflows can run on this computer, else one of REASONS."""
     from .workflow_coordinator import service_manager
-    if os.name != "posix":
+    if os.name != "posix" or service_manager() is None:
         return "not_posix"
-    if service_manager() is None:
-        return "service_manager_missing"
-    try:
-        from hermes_cli.quiet_single_query import TURN_REPORT_FILE_ENV
-    except ImportError:
-        return "hermes_update_needed"
-    if TURN_REPORT_FILE_ENV != REPORT_ENV or not _chat_flags_present():
-        return "hermes_update_needed"
     try:
         from hermes_cli.profiles import profile_exists  # noqa: F401
         from hermes_constants import get_default_hermes_root, get_process_hermes_home  # noqa: F401
     except ImportError:
         return "profile_helpers_missing"
+    if not hermes_features() & {"query", "query_file"}:
+        return "chat_runner_missing"
     try:
         root = workflows_root()
         cached = _probe_cache.get(str(root))
@@ -101,7 +96,7 @@ def _host_facts() -> HostFacts:
         known = validate_toolset
     except Exception:
         known = None
-    return HostFacts(profile_exists=profile_exists, toolset_known=known)
+    return HostFacts(profile_exists=profile_exists, toolset_known=known, tool_scope="toolsets" in hermes_features())
 
 
 def ensure_on_start() -> None:
@@ -198,6 +193,19 @@ class _Use(_Strict):
     name: str | None = Field(default=None, min_length=1, max_length=80)
 
 
+class _TemplateBody(_Strict):
+    templateId: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+class _SaveTemplate(_WorkflowBody):
+    name: str = Field(min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class _Pin(_WorkflowBody):
+    pinned: StrictBool
+
+
 # MARK: Operations
 
 def _status(store: WorkflowStore, body: _Empty, mutation: Mutation) -> dict:
@@ -205,9 +213,10 @@ def _status(store: WorkflowStore, body: _Empty, mutation: Mutation) -> dict:
     ensure_coordinator(store.root)
     value = store.status()
     reason = probe()
-    value.update({"survivesAppClose": True,
-                  "runner": {"available": True} if reason is None else {"available": False, "reason": reason},
-                  "hostName": host_name()})
+    runner_value: dict[str, Any] = {"available": True} if reason is None else {"available": False, "reason": reason}
+    if reason is None:
+        runner_value["mode"] = runner_mode()
+    value.update({"survivesAppClose": True, "runner": runner_value, "hostName": host_name()})
     return value
 
 
@@ -274,13 +283,28 @@ def _read(store, body: _Read, mutation):
     return store.read_artifact(body.runId, body.sha256, body.offset, body.length)
 
 
+def _unarchive(store, body: _WorkflowBody, mutation):
+    return store.unarchive(body.workflowId, mutation)
+
+
+def _pin(store, body: _Pin, mutation):
+    return store.pin(body.workflowId, body.pinned, mutation)
+
+
 def _templates(store, body: _Empty, mutation):
-    from .workflow_model import template_summaries
-    return {"templates": template_summaries()}
+    return store.list_templates()
 
 
 def _use(store, body: _Use, mutation):
     return store.use_template(body.templateId, body.name, _host_facts(), mutation)
+
+
+def _save_template(store, body: _SaveTemplate, mutation):
+    return store.save_template(body.workflowId, body.name, body.description, mutation)
+
+
+def _delete_template(store, body: _TemplateBody, mutation):
+    return store.delete_template(body.templateId, mutation)
 
 
 # path: (body, operation, starts work)
@@ -293,6 +317,8 @@ _ROUTES: dict[str, tuple[type[BaseModel], Callable[..., dict], bool]] = {
     "publish": (_Publish, _publish, False),
     "bind": (_Bind, _bind, False),
     "archive": (_WorkflowBody, _archive, False),
+    "unarchive": (_WorkflowBody, _unarchive, False),
+    "pin": (_Pin, _pin, False),
     "runs/start": (_Start, _start, True),
     "runs/list": (_Runs, _runs, False),
     "runs/get": (_RunBody, _run, False),
@@ -302,6 +328,8 @@ _ROUTES: dict[str, tuple[type[BaseModel], Callable[..., dict], bool]] = {
     "artifacts/read": (_Read, _read, False),
     "templates/list": (_Empty, _templates, False),
     "templates/use": (_Use, _use, False),
+    "templates/save": (_SaveTemplate, _save_template, False),
+    "templates/delete": (_TemplateBody, _delete_template, False),
 }
 
 

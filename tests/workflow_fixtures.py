@@ -19,6 +19,36 @@ INPUTS = {"topic": "How small teams use checklists", "audience": "New team leads
 DRAFT = "# Checklists for small teams\n\n" + "A checklist keeps the team on track. " * 40
 
 
+def graph_definition() -> dict:
+    """schemaVersion 2: the list order isn't the run order. Research, draft, review, then your sign-off."""
+    return {
+        "schemaVersion": 2, "name": "Newsletter with a loop", "description": "Draft until the review passes.",
+        "roles": [{"key": "researcher", "label": "Researcher"}, {"key": "writer", "label": "Writer"},
+                  {"key": "reviewer", "label": "Reviewer"}],
+        "inputs": [{"key": "topic", "label": "Topic", "type": "text", "required": True}],
+        "limits": {"stageMinutes": 20, "maxRevisions": 2},
+        "stages": [
+            {"key": "research", "kind": "agent", "title": "Research the topic", "role": "researcher",
+             "instructions": "Research the topic.", "tools": ["web"], "uses": ["inputs.topic"],
+             "outputs": [{"name": "brief", "type": "markdown_file"}], "next": "draft"},
+            {"key": "signoff", "kind": "signoff", "title": "Your sign-off", "file": "draft.draft", "next": None},
+            {"key": "draft", "kind": "agent", "title": "Write the draft", "role": "writer",
+             "instructions": "Write the draft.", "uses": ["research.brief"],
+             "outputs": [{"name": "draft", "type": "markdown_file"}, {"name": "word_count", "type": "number"}]},
+            {"key": "review", "kind": "agent", "title": "Review the draft", "role": "reviewer",
+             "instructions": "Review the draft.", "uses": ["draft.draft"],
+             "outputs": [{"name": "decision", "type": "decision", "values": ["pass", "changes"]},
+                         {"name": "notes", "type": "notes"}]},
+            {"key": "review_decision", "kind": "decision", "title": "Pass or send back", "on": "review.decision",
+             "pass": "signoff", "changes": {"goTo": "draft", "maxRevisions": 1}},
+        ],
+        "layout": {"inputs": {"x": 0, "y": 0},
+                   "stages": {"research": {"x": 0, "y": 120}, "draft": {"x": 0, "y": 240.5},
+                              "review": {"x": 0, "y": 360}, "review_decision": {"x": 0, "y": 480},
+                              "signoff": {"x": -220, "y": 600}}},
+    }
+
+
 class Clock:
     def __init__(self, start: float = 1_800_000_000.0):
         self.value = start
@@ -45,12 +75,15 @@ class FakeHost:
         self.fail_spawn = False
 
     # ProcessHost methods
-    def spawn(self, argv, *, env, cwd, stdout_path):
+    def spawn(self, argv, *, env, cwd, stdout_path, stderr_path=None):
         if self.fail_spawn:
             raise OSError("spawn refused")
         self.next_pid += 1
         process = FakeProcess(self.next_pid, list(argv), dict(env), cwd, start=self.next_pid * 10)
+        process.stdout_path, process.stderr_path = Path(stdout_path), stderr_path
         Path(stdout_path).touch()
+        if stderr_path is not None:
+            Path(stderr_path).touch()
         self.processes[process.pid] = process
         return process.pid
 
@@ -106,9 +139,22 @@ class FakeHost:
         if exit:
             process.alive, process.code = False, exit_code
 
-    def crash(self, pid, code=1):
+    def crash(self, pid, code=1, stderr=b""):
         process = self.processes[pid]
+        if stderr and process.stderr_path is not None:
+            with open(process.stderr_path, "ab") as handle:
+                handle.write(stderr)
         process.alive, process.code = False, code
+
+    def reply_text(self, pid, outputs=None, *, text=None, exit_code=0, exit=True):
+        """What the text runner sees: the final reply on stdout, no stream and no report."""
+        process = self.processes[pid]
+        if text is None:
+            text = "Here is my work.\n\n```bighelp-handoff\n" + json.dumps({"outputs": outputs}) + "\n```\n"
+        with open(process.stdout_path, "a", encoding="utf-8") as handle:
+            handle.write(text)
+        if exit:
+            process.alive, process.code = False, exit_code
 
 
 def make_home(test) -> Path:
@@ -204,4 +250,4 @@ def no_launch(_root) -> bool:
     return True
 
 
-__all__ = ["Engine", "FakeHost", "Clock", "make_home", "host_facts", "no_launch", "workflow_coordinator"]
+__all__ = ["graph_definition", "Engine", "FakeHost", "Clock", "make_home", "host_facts", "no_launch", "workflow_coordinator"]
