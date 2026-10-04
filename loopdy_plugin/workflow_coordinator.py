@@ -148,7 +148,8 @@ class Coordinator:
                     return
                 if self._idle(idle_exit):
                     return
-            except StoreUnavailable:
+            except (StoreUnavailable, WorkflowError, OSError, sqlite3.Error, ValueError, KeyError):
+                # One bad pass must not stop every run; the next pass starts from the ledger again.
                 pass
             stop.wait(TICK_SECONDS)
 

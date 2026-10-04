@@ -106,7 +106,7 @@ every state. The app keeps byte-for-byte copies.
 | Path | Request | Response |
 | --- | --- | --- |
 | `status` | `{}` | `{coordinator: {state: "online"\|"starting"\|"offline", heartbeatAt, epoch}, slots: {used, total}, survivesAppClose: true, runner: {available, reason?}, hostName}` |
-| `list` | `{includeArchived?}` | `{workflows: [{id, name, revision, draftVersion, hasDraft, stageCount, needsSetupRoles, valid, archived, lastRunAt}], waiting: [RunSummary], active: [RunSummary]}` |
+| `list` | `{includeArchived?}` | `{workflows: [{id, name, revision, draftVersion, hasDraft, stageCount, needsSetupRoles, valid, archived, lastRunAt}], waiting: [RunSummary], active: [RunSummary]}` (`active`: planned, working and needs-attention runs, newest first) |
 | `get` | `{workflowId, revision?: <number> or "draft"}` (default `"draft"`) | `{workflow: {id, name, revision, latestRevision, draftVersion, archived, definition, bindings: [{role, agentId, approvedAt}]}, validation}` |
 | `draft/save` | `{workflowId?, baseDraftVersion, definition}` (no `workflowId` and `baseDraftVersion: 0` makes a new workflow) | `{workflowId, draftVersion, validation}` |
 | `validate` | `{workflowId}` | `{validation}` |
@@ -114,7 +114,7 @@ every state. The app keeps byte-for-byte copies.
 | `bind` | `{workflowId, role, agentId}` (`null` unbinds) | `{workflowId, bindings}` |
 | `archive` | `{workflowId}` | `{workflowId, archived: true}` |
 | `runs/start` | `{workflowId, revision, inputs, clientRunToken, sample: false}` | `{run: RunSummary}` |
-| `runs/list` | `{workflowId?, filter: "all"\|"active"\|"for_you"\|"attention", before?, limit?}` (limit 1 to 50, default 20) | `{runs: [RunSummary], hasMore, cursor}` |
+| `runs/list` | `{workflowId?, filter: "all"\|"active"\|"for_you"\|"attention", before?, limit?}` (limit 1 to 50, default 20; `before` is the last response's `cursor`) | `{runs: [RunSummary], hasMore, cursor}` (newest first; `cursor` is null when there are no runs) |
 | `runs/get` | `{runId}` | `{run: RunDetail}` |
 | `runs/events` | `{runId, after, limit?}` (limit 1 to 200, default 100) | `{events: [{seq, at, kind, stageKey, attempt, text}], cursor, hasMore}` |
 | `runs/control` | `{runId, action: "pause"\|"resume"\|"cancel"\|"retry", expectedVersion}` | `{run: RunSummary}` |
@@ -129,7 +129,7 @@ every state. The app keeps byte-for-byte copies.
 definition has no errors; only a valid draft can be published. `host` is true when it can also run on this
 computer now: every role has an agent that exists and every tool is known. A run needs both.
 
-Issue codes: `name_missing`, `no_stages`, `role_unknown`, `role_unused` (warning), `use_unknown`, `use_forward`,
+Issue codes: `name_missing`, `no_stages`, `duplicate_key`, `role_unknown`, `role_unused` (warning), `use_unknown`, `use_forward`,
 `tool_not_allowed`, `tool_terminal` (warning), `no_outputs`, `instructions_missing`, `choices_missing`,
 `decision_source`, `decision_values`, `goto_invalid`, `pass_invalid`, `check_target`, `check_range`,
 `signoff_file`, and for this computer `role_unbound`, `agent_missing`, `toolset_unknown`.

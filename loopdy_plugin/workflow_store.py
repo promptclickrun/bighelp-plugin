@@ -35,6 +35,8 @@ HEARTBEAT_FRESH_SECONDS = 10
 LAUNCH_GRACE_SECONDS = 20
 MAX_READ_LENGTH = 98_304
 INLINE_TEXT_BYTES = 2048
+MAX_ATTEMPTS_SHOWN = 10
+DETAIL_BUDGET_BYTES = 160 * 1024
 ACTIVE_STATES = ("launched", "running", "checking_output", "accepted")
 LIVE_ATTEMPT_STATES = ("launched", "running", "checking_output")
 TERMINAL_STATES = ("succeeded", "failed", "cancelled")
@@ -782,7 +784,8 @@ class WorkflowStore:
     def has_work(self) -> bool:
         with self.read() as connection:
             return connection.execute(
-                f"SELECT 1 FROM runs WHERE state IN ('planned',{_ACTIVE}) LIMIT 1").fetchone() is not None
+                f"SELECT 1 FROM runs WHERE (state='planned' AND pause_requested=0) OR state IN ({_ACTIVE}) "
+                "LIMIT 1").fetchone() is not None
 
     # MARK: Projections
 
@@ -849,7 +852,7 @@ class WorkflowStore:
                 "iteration": current.get("iteration", 1), "state": current.get("state", "pending"),
                 "minutes": model.stage_minutes(definition, stage) if agent else None,
                 "startedAt": iso(current.get("startedAt")), "endedAt": iso(current.get("endedAt")),
-                "attempts": attempts.get(stage["key"], []),
+                "attempts": attempts.get(stage["key"], [])[-MAX_ATTEMPTS_SHOWN:],
             })
         latest: dict[tuple[str, str], sqlite3.Row] = {}
         history: dict[tuple[str, str], list[sqlite3.Row]] = {}
@@ -876,10 +879,18 @@ class WorkflowStore:
                     "iteration": row["iteration"], "decision": row["decision"], "notes": row["notes"],
                     "artifactSha256": row["artifact_sha256"], "decidedAt": iso(row["decided_at"]),
                 } for row in connection.execute(
-                    "SELECT * FROM approvals WHERE run_id=? AND stage_key=? ORDER BY id", (run["id"], stage["key"]))]
+                    "SELECT * FROM approvals WHERE run_id=? AND stage_key=? ORDER BY id", (run["id"], stage["key"]))][-20:]
                 value["signoff"] = signoff
         value["tokens"] = {"in": run["tokens_in"], "out": run["tokens_out"]}
         value["allowedActions"] = allowed_actions(run)
+        if len(model.canonical_json(value).encode("utf-8")) > DETAIL_BUDGET_BYTES:
+            # Values stay readable through artifacts/read; the detail must fit one response.
+            for output in value["outputs"]:
+                output.pop("value", None)
+            if "signoff" in value:
+                value["signoff"]["reviewNotes"] = [
+                    {"severity": note["severity"], "text": note["text"][:280]}
+                    for note in value["signoff"]["reviewNotes"][:20]]
         return value
 
 

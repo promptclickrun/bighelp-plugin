@@ -50,7 +50,8 @@ def _chat_flags_present() -> bool:
         return False
     top = {option for action in parser._actions for option in action.option_strings}
     flags = {option for action in chat._actions for option in action.option_strings}
-    return {"-p", "--cli"} <= top | flags and {"--query-file", "--format", "--source", "--toolsets"} <= flags
+    # `-p` is read before argparse (Hermes' PRE_ARGPARSE_INHERITED_FLAGS), so it isn't in either parser.
+    return "--cli" in top | flags and {"--query-file", "--format", "--source", "--toolsets"} <= flags
 
 
 def probe() -> str | None:
