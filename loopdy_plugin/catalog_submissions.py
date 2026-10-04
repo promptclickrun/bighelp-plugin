@@ -44,9 +44,9 @@ SUBMIT_TOOL = "bighelp_submit_catalog_template"
 SCHEMA = "bighelp.catalog"
 
 DEFAULT_CATALOG_URL = "https://catalog.bighelp.app"
-# Public client ID of bighelp's GitHub OAuth App (device flow on, no scopes). Empty until it's registered;
+# Public client ID of bighelp's GitHub OAuth App "bighelp Template Catalog" (device flow on, no scopes);
 # BIGHELP_CATALOG_GITHUB_CLIENT_ID overrides it.
-GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_ID = "Ov23liuVeD1RItWCWtV2"
 GITHUB_DEVICE_URL = "https://github.com/login/device/code"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
