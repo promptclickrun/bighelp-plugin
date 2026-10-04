@@ -302,4 +302,18 @@ def _native_features(
         features.append(sign_in_capability)
     else:
         skip(sign_in_capability, "sign-ins need a POSIX terminal and public profile helpers.")
+    try:
+        from .workflow_api import CAPABILITY as workflows_capability, probe as workflows_probe
+        reason = workflows_probe()
+        if reason is None:
+            features.append(workflows_capability)
+        else:
+            skip(workflows_capability, {
+                "not_posix": "workflows need a POSIX host.",
+                "service_manager_missing": "workflows need launchctl (macOS) or systemd-run (Linux).",
+                "hermes_update_needed": "this Hermes lacks the turn report or the chat runner flags.",
+                "profile_helpers_missing": "public profile helpers are unimportable.",
+            }.get(reason, "the workflow store can't be opened."))
+    except ImportError:
+        skip("native-workflows-v1", "workflow support is unimportable.")
     return profile, tuple(features)
