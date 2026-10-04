@@ -98,6 +98,13 @@ key) with a quiet push: `POST /v1/notifications/host-grants/<grantId>/wake` with
 six hours. The app then renews its sign-in to each computer it isn't connected to. A refused wake (an older
 service answers 404) waits for the next interval and never removes the phone's enrollment.
 
+### Peer chats
+
+When agents message each other (`hermes peer dm`, or one agent DMing another), the turns land in Hermes'
+canonical "Bot Chat" session. Replies, failures and helper results there alert only phones that turned on
+Peer chats in bighelp (`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`);
+it starts off. A question or approval in a peer chat still alerts, since it needs the person.
+
 ## End-to-end encryption
 
 With a registered content key, the host seals each alert's title, text and avatar for that phone

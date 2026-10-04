@@ -32,6 +32,10 @@ class SessionBody(VersionedBody):
     enabled: StrictBool
 
 
+class PreferencesBody(VersionedBody):
+    peerChats: StrictBool
+
+
 class WorkBody(VersionedBody):
     profile: str = Field(pattern=_PROFILE)
     sessionId: str = Field(pattern=_ID)
@@ -92,6 +96,17 @@ def recipient_key(grant_id: str, body: RecipientKeyBody):
 @router.put("/enrollments/{grant_id}/sessions")
 def subscribe(grant_id: str, body: SessionBody):
     return _call(lambda: get_managed_notifications().subscribe(grant_id, body.profile, body.sessionId, body.enabled))
+
+
+@router.get("/enrollments/{grant_id}/preferences")
+def preferences(grant_id: str):
+    return _call(lambda: get_managed_notifications().preferences(grant_id))
+
+
+@router.put("/enrollments/{grant_id}/preferences")
+def set_preferences(grant_id: str, body: PreferencesBody):
+    """This phone's alert choices for the host: peer chats (agents talking to each other) start off."""
+    return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats))
 
 
 @router.post("/enrollments/{grant_id}/work")
