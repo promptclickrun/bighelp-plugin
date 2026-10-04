@@ -298,7 +298,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(found, frozenset({"query", "toolsets", "source", "quiet", "cli"}))
         self.assertEqual(runner.runner_mode(found), "text")
         with patch.object(runner, "_parser_features", return_value=None), \
-                patch.object(runner, "_help_features", return_value=None):
+                patch.object(runner, "_help_features", return_value=None), patch.dict(runner._detected, clear=True):
             self.assertEqual(runner.detect_hermes_features(["hermes"], []), frozenset())
 
     def test_this_hermes_has_the_stream_runner(self):

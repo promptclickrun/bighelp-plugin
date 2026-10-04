@@ -236,8 +236,18 @@ def _help_features(argv: list[str], env: dict[str, str]) -> frozenset[str] | Non
     return _features_from_flags(flags, flags, "stream-json" in text)
 
 
+_detected: dict[tuple, frozenset[str]] = {}
+
+
 def detect_hermes_features(argv: list[str] | None = None, import_path: list[str] | None = None) -> frozenset[str]:
-    """Which chat flags and turn report this Hermes has. Empty when Hermes can't be asked at all."""
+    """Which chat flags and turn report this Hermes has, asked once per process. Empty when Hermes can't be asked."""
+    key = (tuple(argv or ()), tuple(import_path or ()))
+    if key not in _detected:
+        _detected[key] = _detect(argv, import_path)
+    return _detected[key]
+
+
+def _detect(argv: list[str] | None, import_path: list[str] | None) -> frozenset[str]:
     found = _parser_features()
     if found is None:
         argv = argv or hermes_argv()
