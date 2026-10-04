@@ -92,16 +92,57 @@ def _clean(value: Any, limit: int, *, field: str, required: bool = False) -> str
     return text
 
 
+# Words people and agents use for each category, so a "Fitness" goal or one titled "Pay off the
+# card" still lands in the right section of the app. Whole words; the most matches wins.
+_CATEGORY_WORDS = {
+    "health": ("health", "healthy", "fitness", "fit", "exercise", "workout", "workouts", "running", "run",
+               "marathon", "5k", "10k", "weight", "diet", "nutrition", "sleep", "wellness", "wellbeing",
+               "meditation", "meditate", "mental", "steps", "gym", "yoga", "medical", "doctor", "sober",
+               "drinking", "smoking", "calories", "protein", "walk", "walking", "swim", "cycling"),
+    "relationships": ("relationship", "relationships", "family", "friend", "friends", "friendship",
+                      "partner", "dating", "date", "marriage", "wife", "husband", "kids", "children",
+                      "parents", "mom", "dad", "social", "community"),
+    "finance": ("finance", "finances", "financial", "money", "budget", "budgeting", "save", "saving",
+                "savings", "debt", "invest", "investing", "investment", "retirement", "spending", "income",
+                "mortgage", "loan", "credit", "taxes", "emergency fund"),
+    "career": ("career", "job", "work", "promotion", "raise", "interview", "resume", "business", "salary",
+               "startup", "client", "clients", "certification", "networking", "portfolio"),
+    "interests": ("interest", "interests", "hobby", "hobbies", "learn", "learning", "read", "reading",
+                  "books", "music", "guitar", "piano", "art", "draw", "drawing", "paint", "painting",
+                  "language", "spanish", "french", "japanese", "travel", "trip", "cooking", "cook", "garden",
+                  "gardening", "photography", "writing", "novel", "game", "games", "craft"),
+    "productivity": ("productivity", "productive", "habit", "habits", "routine", "routines", "focus",
+                     "organize", "organized", "organizing", "declutter", "inbox", "time", "schedule",
+                     "procrastination", "planning", "todo", "to-do", "chores"),
+}
+
+
+def _infer_category(*texts: Any) -> str:
+    """The category these words point to, or "" when none stands out."""
+    words = " ".join(text for text in texts if isinstance(text, str)).lower()
+    tokens = set(re.findall(r"[a-z0-9][a-z0-9-]*", words))
+    scores = {
+        category: sum(1 for word in vocabulary if (word in tokens if " " not in word else word in words))
+        for category, vocabulary in _CATEGORY_WORDS.items()
+    }
+    best = max(scores.values())
+    if best == 0:
+        return ""
+    leaders = [category for category in GOAL_CATEGORIES if scores.get(category) == best]
+    return leaders[0] if len(leaders) == 1 else ""
+
+
 def _category(value: Any) -> str:
-    """A goal's category, or "" for none. Anything outside the fixed list is refused."""
+    """A goal's category, or "" for none. A name off the list ("Fitness", "Hobbies") becomes the
+    category it means, and anything else is filed under other rather than refused."""
     if value is None:
         return ""
     if not isinstance(value, str):
         raise BoardError("category must be text.")
     category = value.strip().lower()
-    if category and category not in GOAL_CATEGORIES:
-        raise BoardError("category must be one of " + ", ".join(GOAL_CATEGORIES) + ".")
-    return category
+    if not category or category in GOAL_CATEGORIES:
+        return category
+    return _infer_category(category) or "other"
 
 
 def _image_type(head: bytes) -> tuple[str, str] | None:
@@ -199,7 +240,10 @@ class BoardStore:
         if kind == "goal":
             section = section.lower() or "goal"
             if section not in GOAL_SECTIONS:
-                raise BoardError("A goal's section must be tracking or goal.")
+                # Agents often put the category where an idea's section goes ("Health").
+                if category is None or not str(category).strip():
+                    category = section
+                section = "goal"
             status = (status or "active").lower()
             if status not in GOAL_STATUSES:
                 raise BoardError("A goal's status must be active or done.")
@@ -220,7 +264,7 @@ class BoardStore:
             item_id = uuid.uuid4().hex
         image_rows = self._store_images(item_id, images)
         with self._db() as db:
-            existing = db.execute("SELECT kind, created, answer, answered, files FROM items WHERE id=?",
+            existing = db.execute("SELECT kind, created, answer, answered, files, category FROM items WHERE id=?",
                                   (item_id,)).fetchone()
             if existing and existing["kind"] != kind:
                 raise BoardError("That id belongs to a different kind of item.")
@@ -229,6 +273,9 @@ class BoardStore:
                 raise BoardError("The user said not now to this idea recently. Don't offer it again yet; "
                                  "offer something different.")
             created = existing["created"] if existing else now
+            if kind == "goal" and not category and not (existing and existing["category"]):
+                # No category yet: the goal's own words usually say ("Run a 10k" is health).
+                category = _infer_category(title, body, note)
             if file_rows is None:
                 file_rows = json.loads(existing["files"]) if existing else []
             db.execute("""INSERT INTO items(id,kind,title,body,icon,section,status,note,links,images,source,category,
@@ -667,8 +714,9 @@ TOOL_PARAMETERS = {
         "note": {"type": "string", "maxLength": MAX_NOTE, "description": "A goal's latest status in one line."},
         "status": {"type": "string", "enum": list(GOAL_STATUSES)},
         "category": {"type": "string", "enum": list(GOAL_CATEGORIES),
-                     "description": "Goals: the one that fits best. The app groups goals by it; 'other' "
-                                    "when none fits."},
+                     "description": "Goals: always set the one that fits best (a fitness goal is "
+                                    "'health', a budget is 'finance'). The app shows each goal in that "
+                                    "category's section; 'other' only when none fits."},
         "images": {"type": "array", "maxItems": MAX_IMAGES, "items": {"type": "string"},
                    "description": "Absolute image file paths on this computer or https URLs."},
         "files": {"type": "array", "maxItems": MAX_FILES, "items": {"type": "string"},
