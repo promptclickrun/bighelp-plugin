@@ -8,9 +8,12 @@ import signal
 import sys
 import tempfile
 import textwrap
+import subprocess
 import time
 import unittest
+from unittest.mock import patch
 
+from loopdy_plugin import workflow_coordinator
 from loopdy_plugin import workflow_runner as runner
 from workflow_fixtures import Engine
 
@@ -111,6 +114,96 @@ class RealProcessTests(unittest.TestCase):
         while alive(child) and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertFalse(alive(child))
+
+
+class DetachedCoordinatorTests(unittest.TestCase):
+    """A real coordinator started the way a hosted Hermes (no launchd, no systemd) starts it.
+
+    Its interpreter is a bare venv that can't import Hermes, like the bundled Python some Hermes launchers exec with
+    Hermes' folder added only in-process. `hermes_cli` here is a fake package in a temporary folder that only the
+    launching process (this test) knows about. PATH has no `hermes` launcher, so nothing real can start.
+    """
+
+    def setUp(self):
+        for folder in ("/usr/bin", "/bin"):
+            self.assertFalse(os.path.exists(os.path.join(folder, "hermes")))
+        self.engine = Engine(self)
+        self.engine.clock.value = time.time()
+        base = self.engine.home.parent / (self.engine.home.name + "-tools")
+        base.mkdir()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(base)], check=False))
+        package = base / "fake-hermes" / "hermes_cli"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        (package / "main.py").write_text(FAKE_HERMES)
+        self.fake_root = package.parent
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(base / "bare")], check=True,
+                       capture_output=True, timeout=120)
+        self.python = str(base / "bare" / "bin" / "python")
+        probe = subprocess.run([self.python, "-c", "import importlib.util as u; print(u.find_spec('hermes_cli'))"],
+                               capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, check=True)
+        self.assertEqual(probe.stdout.strip(), "None")
+        self.processes: list[subprocess.Popen] = []
+        self.addCleanup(self.stop_all)
+
+    def stop_all(self):
+        for process in self.processes:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+            if process in workflow_coordinator._detached:
+                workflow_coordinator._detached.remove(process)
+
+    def launch(self) -> subprocess.Popen:
+        environ = {key: value for key, value in os.environ.items() if key != "HERMES_BIN"}
+        environ["PATH"] = "/usr/bin:/bin"
+        with patch.object(runner, "hermes_import_root", return_value=str(self.fake_root)), \
+                patch.object(sys, "executable", self.python), patch.dict(os.environ, environ, clear=True):
+            self.assertTrue(workflow_coordinator.launch_service(self.engine.root, manager="detached"))
+        process = workflow_coordinator._detached[-1]
+        self.processes.append(process)
+        return process
+
+    def wait_for(self, predicate, seconds: float = 30.0):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self.engine.clock.value = time.time()
+            if predicate():
+                return
+            time.sleep(0.1)
+        self.fail("timed out waiting for the coordinator")
+
+    def test_workers_get_hermes_import_path_from_the_launching_process(self):
+        store = self.engine.store
+        workflow_id = store.save_draft(None, 0, quick("Write a short note."), self.engine.facts)["workflowId"]
+        store.bind(workflow_id, "writer", "writer")
+        store.publish(workflow_id, 1, self.engine.facts)
+        run_id = store.start_run(workflow_id, 1, {}, "6f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b", False,
+                                 self.engine.facts)["run"]["id"]
+        process = self.launch()
+        working = ("planned", "launched", "running", "checking_output", "accepted")
+        self.wait_for(lambda: self.engine.state(run_id)[0] not in working)
+        detail = self.engine.detail(run_id)
+        events = [event["text"] for event in store.events(run_id, 0, 50)["events"]]
+        self.assertEqual(detail["state"], "waiting_for_you", (detail.get("failure"), events))
+        folder = store.runs_dir / run_id / "write" / "1-1"
+        seen = json.loads((folder / "argv.json").read_text())
+        self.assertIn("PYTHONPATH", seen["env"])
+        self.assertEqual(seen["argv"][:2], ["-p", "writer"])
+        self.assertIsNone(process.poll())
+
+    def test_a_second_detached_coordinator_leaves_at_once(self):
+        first = self.launch()
+        self.wait_for(lambda: self.engine.store.status()["coordinator"]["state"] == "online")
+        second = self.launch()
+        second.wait(timeout=30)
+        self.assertEqual(second.returncode, 0)
+        self.assertIsNone(first.poll())
+        self.assertEqual(self.engine.store.status()["coordinator"]["epoch"], 1)
 
 
 class HelperTests(unittest.TestCase):
