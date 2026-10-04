@@ -35,6 +35,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from . import live_alerts
+from . import quiet_hours
 from .card_previews import reply_preview
 from .reactions import REACTION_SCHEMA
 from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
@@ -292,6 +293,7 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS recipients(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, public_key TEXT NOT NULL, key_id TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS avatar_keys(grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, sha256 TEXT NOT NULL, key BLOB NOT NULL, nonce BLOB NOT NULL, PRIMARY KEY(grant_id,sha256));
                 CREATE TABLE IF NOT EXISTS preferences(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, peer_chats INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS quiet_hours(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, time_zone TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
             db.executescript(live_alerts.SCHEMA)
@@ -494,6 +496,7 @@ class ManagedNotifications:
             db.execute("DELETE FROM activities WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM recipients WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM avatar_keys WHERE grant_id=?", (grant_id,))
+            db.execute("DELETE FROM quiet_hours WHERE grant_id=?", (grant_id,))
         return {"version": 1, "state": "removed", "grantId": grant_id}
 
     def preferences(self, grant_id: str):
@@ -511,6 +514,38 @@ class ManagedNotifications:
             db.execute("INSERT INTO preferences VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET peer_chats=excluded.peer_chats",
                        (grant_id, int(peer_chats)))
         return self.preferences(grant_id)
+
+    def _quiet_window(self, grant_id: str, db=None) -> dict[str, Any] | None:
+        if db is None:
+            with self._db() as db:
+                return self._quiet_window(grant_id, db)
+        row = db.execute("SELECT * FROM quiet_hours WHERE grant_id=?", (grant_id,)).fetchone()
+        if not row:
+            return None
+        return {"enabled": bool(row["enabled"]), "startMinute": row["start_minute"],
+                "endMinute": row["end_minute"], "timeZone": row["time_zone"]}
+
+    def quiet_hours(self, grant_id: str):
+        """This device's Quiet Hours on this host, and whether they hold right now."""
+        self._grant(grant_id)
+        value = self._quiet_window(grant_id)
+        return {"version": 1, "grantId": grant_id, "quietHours": value,
+                "quietNow": quiet_hours.is_quiet(value, self.clock())}
+
+    def set_quiet_hours(self, grant_id: str, *, enabled: Any, start_minute: Any, end_minute: Any, time_zone: Any):
+        """The device sends its window with its own time zone, so "now" follows its clock."""
+        self._grant(grant_id)
+        try:
+            value = quiet_hours.window(enabled=enabled, start_minute=start_minute,
+                                       end_minute=end_minute, time_zone=time_zone)
+        except quiet_hours.QuietHoursError as error:
+            raise ManagedNotificationError(error.code, 422) from None
+        with self._db() as db:
+            db.execute("INSERT INTO quiet_hours VALUES(?,?,?,?,?) ON CONFLICT(grant_id) DO UPDATE SET "
+                       "enabled=excluded.enabled, start_minute=excluded.start_minute, "
+                       "end_minute=excluded.end_minute, time_zone=excluded.time_zone",
+                       (grant_id, int(value["enabled"]), value["startMinute"], value["endMinute"], value["timeZone"]))
+        return self.quiet_hours(grant_id)
 
     def _is_peer_chat(self, profile: str, session_id: str) -> bool:
         """Agents talking to each other: Hermes' canonical Bot Chat session."""
@@ -885,7 +920,9 @@ class ManagedNotifications:
                            (event_id, grant["grantId"], canonical_json_bytes(detail).decode(), now))
                 due = now + _APPROVAL_GRACE_SECONDS if approval else now
                 # A device with bighelp open gets it directly first; the push waits for its ack.
-                due = live_alerts.offer(db, grant["grantId"], event_id, due, self.clock())
+                # In its Quiet Hours it gets no offer, and _send_row skips the push.
+                if not quiet_hours.is_quiet(self._quiet_window(grant["grantId"], db), now):
+                    due = live_alerts.offer(db, grant["grantId"], event_id, due, self.clock())
                 db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref) VALUES(?,?,?,?,?,'pending',?,?)",
                            (event_id, grant["grantId"], "/events", raw, expires, due, reference))
                 if not approval:
@@ -1228,6 +1265,13 @@ class ManagedNotifications:
         with self._db() as db:
             claimed = db.execute("UPDATE pending SET state='sending',next_attempt=? WHERE intent_id=? AND state='pending' AND expires>? AND EXISTS(SELECT 1 FROM grants WHERE grants.grant_id=pending.grant_id AND grants.state='active' AND grants.expires>?)", (now + 30, row["intent_id"], now, now)).rowcount
         if claimed != 1: return
+        if row["path"] == "/events" and quiet_hours.is_quiet(self._quiet_window(row["grant_id"]), now):
+            # Quiet Hours on that device: the alert never leaves this host and is never
+            # sent later. The reply is in the chat; a question or approval waits there.
+            with self._db() as db:
+                db.execute("UPDATE pending SET state='quiet' WHERE intent_id=? AND state='sending'", (row["intent_id"],))
+                db.execute("UPDATE approval_attention SET state='retired',reason='quiet_hours' WHERE event_id=? AND state='pending'", (row["intent_id"],))
+            return
         if row["path"] == "/events" and json.loads(bytes(row["raw"])).get("version") != 3:
             # An unsealed alert queued by an older plugin before the update: never send it.
             with self._db() as db:

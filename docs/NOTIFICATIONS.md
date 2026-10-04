@@ -158,6 +158,44 @@ on the host, and `live_alerts_unavailable` (503).
 A device stays live for the wait it asked for plus 10 seconds, so that the next request can follow. After that,
 or after `alerts/stop`, the host sends its alerts as pushes immediately.
 
+### Quiet Hours
+
+Each phone can set a daily window when this host sends it no alerts, such as 22:00 to 07:00. The phone keeps
+the setting and sends it to every host that notifies it, with the phone's own IANA time zone. The window
+belongs to that phone's grant, so one person's iPhone and iPad can have different windows.
+
+- **When.** Just before the host sends an alert for a grant, it reads the time on that phone's clock in
+  that time zone, so the window follows daylight saving time. The start is inside the window and the end is
+  not. A window can cross midnight. Equal start and end times make an empty window.
+- **What it skips.** Every alert in the window: replies, failures, scheduled tasks, helper results, questions
+  and approvals. The alert never reaches the notification service or BuzzKit, and a device with bighelp open
+  does not get it as an instant alert. A retry that falls in the window is skipped too.
+- **Not sent later.** Quiet means quiet: a skipped alert is marked `quiet` and is never sent, also after the
+  window ends. The reply is in the chat, and a question or approval waits there for the person.
+- **Not affected.** Live Activity updates for a turn the person started, and the silent sign-in wake below.
+- **Older apps** never send a window, so their alerts are unchanged.
+
+The phone sets the window through the native API, when the host's `/native/context` lists
+`native-notification-quiet-hours-v1`. The request needs the usual `If-Match` context ETag and a lowercase
+`X-Loopdy-Request-ID`:
+
+```http
+POST /api/plugins/loopdy/native/notifications/quiet-hours
+{"grantId": "<grant UUID>", "enabled": true, "startMinute": 1320, "endMinute": 420, "timeZone": "Europe/Berlin"}
+```
+
+`startMinute` and `endMinute` are minutes after local midnight (0 to 1439). The reply echoes the stored window
+and tells whether it holds now:
+
+```json
+{"version": 1, "grantId": "<grant UUID>", "quietNow": true,
+ "quietHours": {"enabled": true, "startMinute": 1320, "endMinute": 420, "timeZone": "Europe/Berlin"}}
+```
+
+Errors: `422 invalid_request` for a malformed body, `422 quiet_hours_time_zone_invalid` for a zone the host
+can't read, `404 notification_enrollment_inactive` for a grant that isn't active here, and
+`503 quiet_hours_unavailable` when the capability isn't listed. Removing the grant deletes its window.
+
 ## End-to-end encryption
 
 With a registered content key, the host seals each alert's title, text and avatar for that phone

@@ -321,4 +321,9 @@ def _native_features(
         features.append(live_alerts_capability)
     else:
         skip(live_alerts_capability, "the notification journal needs a POSIX host and Hermes' home helpers.")
+    from .quiet_hours import CAPABILITY as quiet_capability, available as quiet_available
+    if quiet_available():
+        features.append(quiet_capability)
+    else:
+        skip(quiet_capability, "notifications need a POSIX host that can read time zones.")
     return profile, tuple(features)

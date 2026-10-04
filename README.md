@@ -132,6 +132,8 @@ Notifications and Live Activities are opt-in per host from the app. Chat never d
 - **Instant while bighelp is open.** A phone, iPad or Mac with bighelp open gets each alert straight from the
   host, as the same sealed alert, in about a second. The device keeps quiet about the chat on screen and tells
   the host that it got the alert. Without that answer in one second, the push goes out as usual.
+- **Quiet Hours.** Each phone can set a daily window, such as 22:00 to 07:00, in its own time zone. In that
+  window your host sends that phone no notifications, and it doesn't send them later. Replies stay in the chat.
 
 More detail: [Notifications](docs/NOTIFICATIONS.md).
 

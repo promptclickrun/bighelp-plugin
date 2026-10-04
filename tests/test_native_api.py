@@ -170,6 +170,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.live_alerts import available as live_alerts_available
         if live_alerts_available():
             expected.append("native-live-alerts-v1")
+        from loopdy_plugin.quiet_hours import available as quiet_available
+        if quiet_available():
+            expected.append("native-notification-quiet-hours-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
@@ -235,6 +238,56 @@ class NativeAPITests(unittest.TestCase):
             self.assertEqual(self.client.get(PREFIX + path, headers=self.headers()).status_code, 422)
         self.assertEqual(self.client.request("GET", PREFIX + "/context", headers=self.headers(),
                                             content=b"x" * 200_000).status_code, 422)
+
+    def test_quiet_hours_are_kept_with_this_devices_notification_grant(self):
+        from loopdy_plugin.managed_notifications import ManagedNotifications
+        from loopdy_plugin.quiet_hours import available
+        if not available():
+            self.skipTest("Quiet Hours need a POSIX host with time zones")
+        grant_id = str(uuid.uuid4())
+        service = ManagedNotifications(self.home / "managed-fixture", transport=lambda *args: {})
+        self.addCleanup(service.close)
+        now = int(service.clock())
+        grant = dict(grantId=grant_id, hostKeyId=service.key_id, hostPublicKey=service.public_key,
+                     authorizationEpoch=1, profile="default", eventTypes=["session.completed"],
+                     createdAt=now - 10, expiresAt=now + 3600, revision=1, provider="buzzkit",
+                     subscriberScope="account", state="active")
+        service.transport = lambda *args: {"version": 1, "grant": grant}
+        service.enroll(grant_id, str(uuid.uuid4()))
+        lookup = patch("loopdy_plugin.managed_notifications.get_managed_notifications", return_value=service)
+        lookup.start()
+        self.addCleanup(lookup.stop)
+        night = {"grantId": grant_id, "enabled": True, "startMinute": 1320, "endMinute": 420,
+                 "timeZone": "America/Los_Angeles"}
+
+        def put(payload, headers=None):
+            return self.client.post(PREFIX + "/notifications/quiet-hours",
+                                    headers=self.headers() if headers is None else headers, json=payload)
+
+        saved = put(night)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["quietHours"], {key: night[key] for key in night if key != "grantId"})
+        self.assertEqual(saved.json()["grantId"], grant_id)
+        self.assertIsInstance(saved.json()["quietNow"], bool)
+        self.assertEqual(saved.headers["cache-control"], "no-store")
+        self.assertEqual(service.quiet_hours(grant_id)["quietHours"]["timeZone"], "America/Los_Angeles")
+        for bad in (night | {"startMinute": 1440}, night | {"endMinute": "07:00"}, night | {"enabled": 1},
+                    night | {"grantId": "not-a-grant"}, night | {"timeZone": "x" * 65}, night | {"extra": True},
+                    {key: night[key] for key in night if key != "timeZone"}):
+            with self.subTest(bad=bad):
+                self.assertEqual(put(bad).status_code, 422)
+        refused = put(night | {"timeZone": "Nowhere/Land"})
+        self.assertEqual((refused.status_code, refused.json()["error"]["code"]),
+                         (422, "quiet_hours_time_zone_invalid"))
+        unknown = put(night | {"grantId": str(uuid.uuid4())})
+        self.assertEqual((unknown.status_code, unknown.json()["error"]["code"]),
+                         (404, "notification_enrollment_inactive"))
+        headers = self.headers()
+        headers["If-Match"] = '"stale"'
+        self.assertEqual(put(night, headers).status_code, 412)
+        headers = self.headers()
+        headers.pop("X-Loopdy-Request-ID")
+        self.assertEqual(put(night, headers).status_code, 422)
 
     def test_people_speaking_records_who_writes_in_a_chat(self):
         from loopdy_plugin.people import available, store_for_profile
