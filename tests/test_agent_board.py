@@ -47,8 +47,8 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual(len(goals), 1)
         self.assertEqual((goals[0]["note"], goals[0]["status"]), ("Delivered", "done"))
         self.assertEqual(again["createdAt"], goals[0]["createdAt"])
-        with self.assertRaises(BoardError):
-            self.store.publish("goal", title="Nope", section="wishlist")
+        # A section that isn't tracking or goal is the agent naming a category; it's still a goal.
+        self.assertEqual(self.store.publish("goal", title="Wish", section="wishlist")["section"], "goal")
         with self.assertRaises(BoardError):
             self.store.publish("idea", title="Clash", item_id="pkg")
         self.store.publish("idea", title="Audit Google access", section="Security", item_id="audit")
@@ -60,9 +60,7 @@ class AgentBoardStoreTests(unittest.TestCase):
                                            "productivity", "other"))
         goal = self.store.publish("goal", title="Run a 10k", category="Health", item_id="10k")
         self.assertEqual(goal["category"], "health")
-        self.assertEqual(self.store.publish("goal", title="Inbox under 20")["category"], "")
-        with self.assertRaises(BoardError):
-            self.store.publish("goal", title="Nope", category="hobbies")
+        self.assertEqual(self.store.publish("goal", title="Call more often")["category"], "")
         with self.assertRaises(BoardError):
             self.store.publish("goal", title="Nope", category=3)
         # Republishing without one keeps it; update_goal can move it.
@@ -70,8 +68,9 @@ class AgentBoardStoreTests(unittest.TestCase):
                          "health")
         self.assertEqual(self.store.update_goal("10k", category="interests")["category"], "interests")
         self.assertEqual(self.store.update_goal("10k", note="Week 3")["category"], "interests")
-        with self.assertRaises(BoardError):
-            self.store.update_goal("10k", category="hobbies")
+        # Its words don't move a goal that already has one.
+        self.assertEqual(self.store.publish("goal", title="Run a 10k", note="Week 4", item_id="10k")["category"],
+                         "interests")
         # Only goals have one.
         self.assertEqual(self.store.publish("feed", title="News", category="health")["category"], "")
         self.assertEqual(self.store.publish("idea", title="Plan", category="health")["category"], "")
@@ -85,8 +84,24 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual(listed[0]["category"], "finance")
         moved = json.loads(handle_tool({"action": "update_goal", "id": "lisbon", "category": "other"}, self.store))
         self.assertTrue(moved["ok"])
-        self.assertIn("error", json.loads(handle_tool({"action": "goal", "title": "x", "category": "pets"},
-                                                      self.store)))
+        pets = json.loads(handle_tool({"action": "goal", "title": "x", "category": "pets", "id": "pets"},
+                                      self.store))
+        self.assertNotIn("error", pets, "Off the list is filed, not refused")
+        self.assertEqual(self.store.items(("goal",))[0]["category"], "other")
+
+    def test_a_goal_lands_in_the_category_it_means(self):
+        # The agent names a category off the list, or puts it where an idea's section goes.
+        self.assertEqual(self.store.publish("goal", title="Lift twice a week", category="Fitness")["category"],
+                         "health")
+        self.assertEqual(self.store.publish("goal", title="Guitar", category="hobbies")["category"], "interests")
+        named = self.store.publish("goal", title="Drink more water", section="Health")
+        self.assertEqual((named["section"], named["category"]), ("goal", "health"))
+        # Or names none: the goal's words say.
+        self.assertEqual(self.store.publish("goal", title="Health goal: sleep by 11")["category"], "health")
+        self.assertEqual(self.store.publish("goal", title="Pay off the credit card")["category"], "finance")
+        self.assertEqual(self.store.publish("goal", title="Get the promotion at work")["category"], "career")
+        self.assertEqual(self.store.publish("goal", title="Inbox under 20 every Friday")["category"], "productivity")
+        self.assertEqual(self.store.publish("goal", title="Something nice")["category"], "")
 
     def test_an_idea_in_a_category_section_becomes_a_goal_in_that_category(self):
         health = self.store.publish("idea", title="Walk after lunch", section="Health")
