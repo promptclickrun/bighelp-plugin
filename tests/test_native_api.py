@@ -145,7 +145,7 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.agent_board import available as board_available
         if board_available():
             expected.extend(("native-agent-board-v1", "native-agent-board-feedback-v1",
-                             "native-agent-board-goal-categories-v1"))
+                             "native-agent-board-goal-categories-v1", "native-agent-board-answers-v1"))
         from loopdy_plugin.native_attachments import available as attachments_available
         if attachments_available():
             expected.extend(("native-agent-attachments-v1", "native-agent-media-v1"))
@@ -328,6 +328,27 @@ class NativeAPITests(unittest.TestCase):
         goal = board("promote", {"agentId": "default", "itemId": idea["id"]}).json()["item"]
         self.assertEqual((goal["kind"], goal["title"]), ("goal", "Sleep by 11"))
         self.assertEqual(board("promote", {"agentId": "default", "itemId": "pkg"}).status_code, 404)
+
+        # Let's do it names the idea by id, apart from the chat message.
+        twin = store.publish("idea", title="Plan a trip", item_id="trip-a")
+        store.publish("idea", title="Plan a trip", item_id="trip-b")
+        accepted = board("accept", {"agentId": "default", "itemId": twin["id"]})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual((accepted.json()["item"]["id"], accepted.json()["item"]["answer"]), ("trip-a", "yes"))
+        self.assertEqual(accepted.headers["X-Loopdy-Request-ID"], accepted.request.headers["X-Loopdy-Request-ID"])
+        self.assertEqual(accepted.headers["Cache-Control"], "no-store")
+        self.assertEqual(board("accept", {"agentId": "default", "itemId": twin["id"]}).json()["item"]["answer"], "yes")
+        self.assertEqual({item["id"]: item["answer"] for item in store.items(("idea",))
+                          if item["id"].startswith("trip-")}, {"trip-a": "yes", "trip-b": "none"})
+        self.assertEqual(board("accept", {"agentId": "default", "itemId": "pkg"}).status_code, 404)
+        self.assertEqual(board("accept", {"agentId": "default", "itemId": "missing"}).status_code, 404)
+        self.assertEqual(board("accept", {"agentId": "default", "itemId": "../x"}).status_code, 422)
+        self.assertEqual(board("accept", {"agentId": "default", "itemId": "trip-a", "title": "x"}).status_code, 422)
+        self.assertEqual(board("accept", {"agentId": "missing-profile", "itemId": "trip-a"}).status_code, 404)
+        stale = self.headers()
+        stale["If-Match"] = '"stale"'
+        self.assertEqual(self.client.post(PREFIX + "/board/accept", headers=stale,
+                                          json={"agentId": "default", "itemId": "trip-a"}).status_code, 412)
 
     def test_a_feed_posts_files_list_resolve_and_download_without_paths(self):
         import base64

@@ -159,6 +159,31 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.store.set_flags("fee", dismissed=True)
         self.assertEqual(self.store.answered_ideas()[0]["answer"], "yes")
 
+    def test_lets_do_it_by_id_marks_that_idea_even_with_a_same_title_twin(self):
+        self.store.publish("idea", title="Plan a trip", item_id="older", now=100)
+        self.store.publish("idea", title="Plan a trip", item_id="newer", now=200)
+        item = self.store.accept_idea("older", now=300)
+        self.assertEqual((item["id"], item["answer"]), ("older", "yes"))
+        # Asking again changes nothing, not even when it was said.
+        self.store.accept_idea("older", now=400)
+        with self.store._db() as db:
+            rows = dict(db.execute("SELECT id, answered FROM items WHERE kind='idea'").fetchall())
+        self.assertEqual(rows, {"older": 300, "newer": 0})
+        # The chat message the app still sends must not mark the twin too.
+        recorder = ActivityRecorder(lambda: self.store)
+        recorder.observe("pre_llm_call", session_id="s1", turn_id="t1",
+                         user_message="Yes, go ahead with this idea: \u201cPlan a trip\u201d.")
+        by_id = {row["id"]: row["answer"] for row in self.store.items(("idea",))}
+        self.assertEqual(by_id, {"older": "yes", "newer": "none"})
+
+    def test_lets_do_it_by_id_refuses_unknown_ids_and_anything_but_ideas(self):
+        self.store.publish("feed", title="Morning brief", item_id="brief")
+        self.store.publish("goal", title="Run a 10k", item_id="run")
+        for item_id in ("brief", "run", "missing", "", None, "../x"):
+            with self.assertRaises(BoardError, msg=repr(item_id)):
+                self.store.accept_idea(item_id)
+        self.assertEqual({row["answer"] for row in self.store.items()}, {"none"})
+
     def test_make_it_a_goal_is_remembered_as_an_answer(self):
         self.store.publish("idea", title="Sleep by 11", item_id="sleep")
         self.store.promote_idea("sleep")
