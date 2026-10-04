@@ -145,6 +145,13 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema["parameters"], PEOPLE_PARAMETERS)
                 self.assertIn("not proof of identity", description)
                 continue
+            if tool_name in ("bighelp_catalog_login", "bighelp_submit_catalog_template"):
+                from loopdy_plugin import catalog_submissions
+                expected = (catalog_submissions.LOGIN_PARAMETERS if tool_name.endswith("login")
+                            else catalog_submissions.SUBMIT_PARAMETERS)
+                self.assertEqual(renderer_schema["parameters"], expected)
+                self.assertRegex(description, "Only (start a sign-in|when the user asked)")
+                continue
             if tool_name == "bighelp_marketplace_prepare_upload":
                 self.assertIn("private marketplace", description)
                 self.assertIn("cannot submit or publish", description)

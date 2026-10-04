@@ -224,6 +224,9 @@ def register(
     # Who is writing in each bighelp chat, as the app reports it.
     from .people import register as register_people
     register_people(ctx)
+    # Template Catalog submissions, after a one-time GitHub sign-in on this host.
+    from .catalog_submissions import register as register_catalog_submissions
+    register_catalog_submissions(ctx)
     register_legacy_toolset_alias()
     # Workflow runs live in their own coordinator; after a reboot it starts again here when runs wait for it.
     if os.environ.get("HERMES_SESSION_SOURCE") != "workflow":
@@ -687,6 +690,8 @@ def setup_cli(parser: Any) -> None:
     actions = parser.add_subparsers(dest="bighelp_action", required=True)
     from .wiki_cli import setup_wiki_cli
     setup_wiki_cli(actions)
+    from .catalog_submissions import setup_cli as setup_catalog_cli
+    setup_catalog_cli(actions)
 
     actions.add_parser("status", help="Show provider health and registered devices")
     direct = actions.add_parser("direct", help="Configure the private loopback transport (no activation)")
@@ -830,6 +835,10 @@ def handle_cli(
         return
     if action == "files":
         _handle_files_cli(args)
+        return
+    if action == "catalog":
+        from .catalog_submissions import handle_cli as handle_catalog_cli
+        handle_catalog_cli(args)
         return
     if action == "link":
         _handle_link_cli(args, identity_state=identity_state)
