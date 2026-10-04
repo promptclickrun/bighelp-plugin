@@ -18,6 +18,14 @@ config_schema:
       Retained legacy paired-transport preferences. The production plugin does
       not start this listener. Connect the app to the authenticated Hermes
       Tailscale address instead; no cloud pairing or public URL is required.
+  templates_allow_create_agent:
+    type: bool
+    default: false
+    label: Agents can make agents from templates
+    description: >
+      Lets agents make a new agent from a bighelp Template Catalog template
+      (bighelp_templates_create_agent). Hermes still asks you to approve each
+      one. Off by default.
 optional_env:
   - LOOPDY_HOME_TARGET
   - BIGHELP_WORKSPACE_GIT_CONFIG
@@ -78,6 +86,10 @@ provides_tools:
   - bighelp_request_secure_input
   - bighelp_board
   - bighelp_people
+  - bighelp_templates_search
+  - bighelp_templates_get
+  - bighelp_templates_fill
+  - bighelp_templates_create_agent
 platforms:
   - linux
   - macos

@@ -224,6 +224,9 @@ def register(
     # Who is writing in each bighelp chat, as the app reports it.
     from .people import register as register_people
     register_people(ctx)
+    # bighelp's Template Catalog for agents. Making an agent needs a plugin setting and the person's approval.
+    from .template_tools import register as register_template_tools
+    register_template_tools(ctx)
     register_legacy_toolset_alias()
     # Workflow runs live in their own coordinator; after a reboot it starts again here when runs wait for it.
     if os.environ.get("HERMES_SESSION_SOURCE") != "workflow":

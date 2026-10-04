@@ -2504,27 +2504,15 @@ class HermesWorkspaceBackend:
         description: str,
         instructions: str,
     ) -> None:
-        def create() -> None:
-            from hermes_cli import profiles
-            from utils import atomic_write_text
+        from .agent_profiles import create_agent_profile
 
-            path = profiles.create_profile(
-                name=agent_id,
-                no_skills=False,
-                description=description,
-            )
-            profiles.seed_profile_skills(path, quiet=True)
-            if not profiles.check_alias_collision(agent_id):
-                profiles.create_wrapper_script(agent_id)
-            profiles.set_profile_display_name(agent_id, display_name)
-            atomic_write_text(
-                path / "SOUL.md",
-                instructions,
-                preserve_mode=True,
-                create_mode=0o644,
-            )
-
-        await asyncio.to_thread(create)
+        await asyncio.to_thread(
+            create_agent_profile,
+            agent_id=agent_id,
+            display_name=display_name,
+            description=description,
+            instructions=instructions,
+        )
 
     async def _update_profile(
         self,
