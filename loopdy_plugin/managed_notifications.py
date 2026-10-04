@@ -103,6 +103,11 @@ _LEGACY_SILENCE_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY
 # agent with nothing new to add to reply "(pass)". Hermes publishes no message for a pass, so it
 # sends no alert either. The pattern is gateway/hosted_room_discussion.py's is_pass_text.
 _GROUP_CHAT_PLATFORM = "bot_room"
+# Where `hermes peer dm` and agent-to-agent DMs land: Hermes' canonical "Bot Chat" session.
+_PEER_CHAT_TITLE = "Bot Chat"
+# Replies and helper results from a peer chat alert only phones that asked for them;
+# a question or approval there still needs the person, so it always alerts.
+_PEER_QUIET_EVENTS = frozenset({"session.completed", "session.failed", "subagent.completed", "subagent.failed"})
 _GROUP_CHAT_PASS = re.compile(r"\(?\s*pass\s*\)?\.?", re.IGNORECASE)
 # Hermes' turn-end file-mutation verifier footer (run_agent.py): a "⚠️ File-mutation verifier:"
 # line plus indented "•" bullets, appended AFTER the model's final line. It is runtime machinery,
@@ -285,6 +290,7 @@ class ManagedNotifications:
                 CREATE INDEX IF NOT EXISTS approval_scope ON approval_attention(grant_id,profile,session_id,turn_id);
                 CREATE TABLE IF NOT EXISTS recipients(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, public_key TEXT NOT NULL, key_id TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS avatar_keys(grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, sha256 TEXT NOT NULL, key BLOB NOT NULL, nonce BLOB NOT NULL, PRIMARY KEY(grant_id,sha256));
+                CREATE TABLE IF NOT EXISTS preferences(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, peer_chats INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
 
@@ -334,7 +340,7 @@ class ManagedNotifications:
             clarification_loaded = bool(self._clarification_profiles)
         return {"version": 1, "hostKeyId": self.key_id, "hostPublicKey": self.public_key,
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
-                "sealedAlerts": {"version": 2},
+                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True},
                 "richLiveActivitySupported": True, "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
@@ -487,6 +493,31 @@ class ManagedNotifications:
             db.execute("DELETE FROM recipients WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM avatar_keys WHERE grant_id=?", (grant_id,))
         return {"version": 1, "state": "removed", "grantId": grant_id}
+
+    def preferences(self, grant_id: str):
+        """This phone's alert preferences for the host. Peer chats start off."""
+        self._grant(grant_id)
+        with self._db() as db:
+            row = db.execute("SELECT peer_chats FROM preferences WHERE grant_id=?", (grant_id,)).fetchone()
+        return {"version": 1, "peerChats": bool(row and row["peer_chats"])}
+
+    def set_preferences(self, grant_id: str, *, peer_chats: Any):
+        self._grant(grant_id)
+        if type(peer_chats) is not bool:
+            raise ManagedNotificationError("notification_preferences_invalid", 422)
+        with self._db() as db:
+            db.execute("INSERT INTO preferences VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET peer_chats=excluded.peer_chats",
+                       (grant_id, int(peer_chats)))
+        return self.preferences(grant_id)
+
+    def _is_peer_chat(self, profile: str, session_id: str) -> bool:
+        """Agents talking to each other: Hermes' canonical Bot Chat session."""
+        try:
+            row = self._session(profile, session_id)
+        except ManagedNotificationError:
+            return False
+        title = row.get("title")
+        return isinstance(title, str) and title.strip() == _PEER_CHAT_TITLE
 
     def _session(self, profile: str, session_id: str):
         _identifier(profile, _PROFILE); _identifier(session_id)
@@ -804,12 +835,15 @@ class ManagedNotifications:
         agent_name, avatar = self._agent_presentation(profile)
         now = int(self.clock())
         queued: list[str] = []
+        peer_chat = event_type in _PEER_QUIET_EVENTS and self._is_peer_chat(profile, session_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT g.* FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (now, profile)).fetchall()
             for row in rows:
                 grant = json.loads(row["public_json"])
                 if event_type not in grant["eventTypes"]: continue
+                if peer_chat and not db.execute("SELECT 1 FROM preferences WHERE grant_id=? AND peer_chats=1", (grant["grantId"],)).fetchone():
+                    continue
                 digest = hashlib.sha256(canonical_json_bytes(
                     [profile, session_id, turn_id, event_type, event_key])).hexdigest()
                 event_id = self._approval_event_id(grant["grantId"], profile, session_id, turn_id, tool_call_id) if approval else grant["grantId"] + ":" + digest

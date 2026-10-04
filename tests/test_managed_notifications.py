@@ -67,7 +67,8 @@ class ManagedNotificationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def get_session(self, sid):
-        return {"id":sid,"profile_name":"default"}
+        # "Bot Chat" is where `hermes peer dm` and agent-to-agent DMs land.
+        return {"id":sid,"profile_name":"default","title":"Bot Chat" if sid.startswith("peer-") else "Trip"}
 
     def transport(self, method, path, raw, headers):
         self.calls.append((method,path,raw,headers))
@@ -492,6 +493,33 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-a",failed=True,error="provider failed",platform="desktop")
         self.service.drain_pending()
         self.assertEqual([e["eventType"] for e in self.events_sent()],["session.failed"])
+
+    def test_peer_chats_stay_quiet_unless_the_phone_asks_for_them(self):
+        # Agents talking to each other (hermes peer, Bot Chat) don't alert by default.
+        self.service.observe("post_llm_call",profile="default",session_id="peer-session",turn_id="turn-a",
+                             assistant_response="Got it, I'll send the numbers over.",platform="api_server")
+        self.service.drain_pending()
+        self.assertEqual(self.events_sent(), [])
+        self.assertEqual(self.service.preferences(self.grant_id), {"version": 1, "peerChats": False})
+        self.service.set_preferences(self.grant_id, peer_chats=True)
+        self.assertEqual(self.service.preferences(self.grant_id), {"version": 1, "peerChats": True})
+        self.service.observe("post_llm_call",profile="default",session_id="peer-session",turn_id="turn-b",
+                             assistant_response="Here are the numbers.",platform="api_server")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()], ["session.completed"])
+
+    def test_peer_chats_off_still_alerts_ordinary_chats(self):
+        self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-a",
+                             assistant_response="Here is your answer.",platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()], ["session.completed"])
+
+    def test_peer_chat_preference_is_validated_and_advertised(self):
+        self.assertTrue(self.service.capabilities()["preferences"]["peerChats"])
+        with self.assertRaises(ManagedNotificationError):
+            self.service.set_preferences(self.grant_id, peer_chats="yes")
+        with self.assertRaises(ManagedNotificationError):
+            self.service.set_preferences(str(uuid.uuid4()), peer_chats=True)
 
     def test_vendor_preference_authority_is_not_duplicated_in_plugin_policy(self):
         self.service.preference_policy=lambda event,device:{"suppression":"quiet_hours","sound":False}
