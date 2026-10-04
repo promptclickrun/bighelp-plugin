@@ -24,7 +24,7 @@ from . import workflow_model as model
 from .sensitive import SENSITIVE_CREDENTIAL_RE
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_SLOTS = 2
 MAX_PLANNED = 20
 MAX_RUN_ARTIFACT_BYTES = 50 * 1024 * 1024
@@ -36,6 +36,8 @@ LAUNCH_GRACE_SECONDS = 20
 MAX_READ_LENGTH = 98_304
 INLINE_TEXT_BYTES = 2048
 MAX_ATTEMPTS_SHOWN = 10
+MAX_TEMPLATES = 100
+TEMPLATE_PREFIX = "tpl-"
 DETAIL_BUDGET_BYTES = 160 * 1024
 ACTIVE_STATES = ("launched", "running", "checking_output", "accepted")
 LIVE_ATTEMPT_STATES = ("launched", "running", "checking_output")
@@ -50,8 +52,9 @@ FILTERS = {
 }
 _ID = re.compile(r"(?:wf|run|att)_[0-9a-f]{16}\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
+_TEMPLATE_ID = re.compile(r"tpl-[0-9a-f]{16}\Z")
 _TABLES = {"workflows", "revisions", "bindings", "runs", "attempts", "artifacts", "approvals", "events",
-           "live_lines", "coordinator", "requests", "sqlite_sequence"}
+           "live_lines", "coordinator", "requests", "templates", "sqlite_sequence"}
 
 
 class WorkflowError(Exception):
@@ -72,6 +75,8 @@ class HostFacts:
     """What this computer has: used for the `host` half of validation."""
     profile_exists: Callable[[str], bool] | None = None
     toolset_known: Callable[[str], bool] | None = None
+    # False when this Hermes can't limit a chat turn's tools (`--toolsets`): agent stages can't run then.
+    tool_scope: bool = True
 
 
 @dataclass
@@ -142,11 +147,14 @@ def root_for_home(hermes_root: Path) -> Path:
     return Path(hermes_root) / "plugin-data" / "loopdy" / "workflows"
 
 
+_TEMPLATES_TABLE = """CREATE TABLE IF NOT EXISTS templates (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, definition_json TEXT NOT NULL,
+        stage_count INTEGER NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)"""
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS workflows (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, draft_json TEXT NOT NULL, draft_version INTEGER NOT NULL,
         latest_revision INTEGER, archived INTEGER NOT NULL DEFAULT 0, run_counter INTEGER NOT NULL DEFAULT 0,
-        created_at REAL NOT NULL, updated_at REAL NOT NULL)""",
+        created_at REAL NOT NULL, updated_at REAL NOT NULL, pinned INTEGER NOT NULL DEFAULT 0)""",
     """CREATE TABLE IF NOT EXISTS revisions (
         workflow_id TEXT NOT NULL, revision INTEGER NOT NULL, definition_json TEXT NOT NULL, sha256 TEXT NOT NULL,
         created_at REAL NOT NULL, PRIMARY KEY (workflow_id, revision))""",
@@ -172,7 +180,8 @@ SCHEMA = (
         coordinator_epoch INTEGER NOT NULL, launched_at REAL NOT NULL, deadline_at REAL NOT NULL, ended_at REAL,
         exit_code INTEGER, outcome_code TEXT, tokens_in INTEGER NOT NULL DEFAULT 0,
         tokens_out INTEGER NOT NULL DEFAULT 0, stream_offset INTEGER NOT NULL DEFAULT 0, stop_reason TEXT,
-        kill_at REAL, dir TEXT NOT NULL)""",
+        kill_at REAL, dir TEXT NOT NULL, runner TEXT NOT NULL DEFAULT 'stream',
+        tokens_known INTEGER NOT NULL DEFAULT 1)""",
     "CREATE INDEX IF NOT EXISTS attempts_run ON attempts(run_id, launched_at)",
     "CREATE INDEX IF NOT EXISTS attempts_state ON attempts(state)",
     """CREATE TABLE IF NOT EXISTS artifacts (
@@ -198,6 +207,14 @@ SCHEMA = (
         boot_id TEXT, heartbeat_at REAL, slots_total INTEGER NOT NULL, launched_at REAL)""",
     """CREATE TABLE IF NOT EXISTS requests (
         request_id TEXT PRIMARY KEY, op TEXT NOT NULL, response_json TEXT NOT NULL, at REAL NOT NULL)""",
+    _TEMPLATES_TABLE,
+)
+# Store version 1 (plugin 3.5.0) to 2: pins, your templates and the text runner's attempts.
+MIGRATE_1_TO_2 = (
+    "ALTER TABLE workflows ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE attempts ADD COLUMN runner TEXT NOT NULL DEFAULT 'stream'",
+    "ALTER TABLE attempts ADD COLUMN tokens_known INTEGER NOT NULL DEFAULT 1",
+    _TEMPLATES_TABLE,
 )
 
 
@@ -236,29 +253,13 @@ class WorkflowStore:
         try:
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("PRAGMA trusted_schema=OFF")
-            if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-                connection.execute("PRAGMA journal_mode=WAL")
+            self._use_wal(connection)
             connection.execute("PRAGMA synchronous=FULL")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, SCHEMA_VERSION):
+            if version not in (0, 1, SCHEMA_VERSION):
                 raise StoreUnavailable("This workflow store needs a newer bighelp plugin.")
-            if version == 0:
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    tables = {row[0] for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'")}
-                    if tables - _TABLES:
-                        raise StoreUnavailable()
-                    for statement in SCHEMA:
-                        connection.execute(statement)
-                    connection.execute(
-                        "INSERT OR IGNORE INTO coordinator (id, epoch, slots_total) VALUES (1, 0, ?)",
-                        (DEFAULT_SLOTS,))
-                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-                    connection.execute("COMMIT")
-                except BaseException:
-                    connection.execute("ROLLBACK")
-                    raise
+            if version != SCHEMA_VERSION:
+                self._migrate(connection)
         except sqlite3.Error:
             connection.close()
             raise StoreUnavailable() from None
@@ -266,6 +267,44 @@ class WorkflowStore:
             connection.close()
             raise
         return connection
+
+    @staticmethod
+    def _use_wal(connection: sqlite3.Connection) -> None:
+        """Switch a new store to WAL. The switch ignores busy_timeout, so wait here while another connection
+        (the other module copy, the coordinator) is creating the store; WAL is stored in the file once set."""
+        for _ in range(50):
+            if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+                return
+            try:
+                connection.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError:
+                time.sleep(0.1)
+        raise StoreUnavailable("The workflow store is busy. Try again.")
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            # Read again under the write lock: another process may have done this meanwhile.
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version == 0:
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if tables - _TABLES:
+                    raise StoreUnavailable()
+                for statement in SCHEMA:
+                    connection.execute(statement)
+                connection.execute("INSERT OR IGNORE INTO coordinator (id, epoch, slots_total) VALUES (1, 0, ?)",
+                                   (DEFAULT_SLOTS,))
+            elif version == 1:
+                for statement in MIGRATE_1_TO_2:
+                    connection.execute(statement)
+            if version != SCHEMA_VERSION:
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:
@@ -410,12 +449,12 @@ class WorkflowStore:
         bindings = {role: row["agent_id"] for role, row in self._bindings(connection, workflow_id).items()}
         host = host or HostFacts()
         return model.validate(definition, bindings=bindings, profile_exists=host.profile_exists,
-                              toolset_known=host.toolset_known)
+                              toolset_known=host.toolset_known, tool_scope=host.tool_scope)
 
     def list_workflows(self, include_archived: bool, host: HostFacts | None) -> dict:
         with self.read() as connection:
             rows = connection.execute(
-                "SELECT * FROM workflows WHERE archived=0 OR ? ORDER BY updated_at DESC, id",
+                "SELECT * FROM workflows WHERE archived=0 OR ? ORDER BY pinned DESC, updated_at DESC, id",
                 (1 if include_archived else 0,)).fetchall()
             workflows = []
             for row in rows[:200]:
@@ -439,6 +478,7 @@ class WorkflowStore:
                     "draftVersion": row["draft_version"], "hasDraft": has_draft,
                     "stageCount": len(current["stages"]), "needsSetupRoles": missing,
                     "valid": validation["valid"], "archived": bool(row["archived"]), "lastRunAt": iso(last),
+                    "pinned": bool(row["pinned"]),
                 })
             cache: dict = {}
             waiting = [self._summary(connection, run, cache) for run in connection.execute(
@@ -457,7 +497,8 @@ class WorkflowStore:
                 definition, number = self._definition(connection, workflow_id, revision), revision
             return {"workflow": {
                 "id": row["id"], "name": row["name"], "revision": number, "latestRevision": row["latest_revision"],
-                "draftVersion": row["draft_version"], "archived": bool(row["archived"]), "definition": definition,
+                "draftVersion": row["draft_version"], "archived": bool(row["archived"]),
+                "pinned": bool(row["pinned"]), "definition": definition,
                 "bindings": self._binding_list(connection, workflow_id, definition),
             }, "validation": self._validation(connection, workflow_id, definition, host)}
 
@@ -571,18 +612,97 @@ class WorkflowStore:
             connection.execute("UPDATE workflows SET archived=1, updated_at=? WHERE id=?", (self.now(), workflow_id))
             return self._remember(connection, mutation, "archive", {"workflowId": workflow_id, "archived": True})
 
+    def unarchive(self, workflow_id: str, mutation: Mutation | None = None) -> dict:
+        with self.mutate("unarchive", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            self._workflow(connection, workflow_id)
+            connection.execute("UPDATE workflows SET archived=0, updated_at=? WHERE id=?", (self.now(), workflow_id))
+            return self._remember(connection, mutation, "unarchive", {"workflowId": workflow_id, "archived": False})
+
+    def pin(self, workflow_id: str, pinned: bool, mutation: Mutation | None = None) -> dict:
+        with self.mutate("pin", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            self._workflow(connection, workflow_id)
+            # Pinning only reorders the list, so it leaves updated_at alone.
+            connection.execute("UPDATE workflows SET pinned=? WHERE id=?", (1 if pinned else 0, workflow_id))
+            return self._remember(connection, mutation, "pin", {"workflowId": workflow_id, "pinned": pinned})
+
+    # MARK: Templates
+
+    @staticmethod
+    def _your_template(connection: sqlite3.Connection, template_id: str) -> sqlite3.Row:
+        row = None
+        if isinstance(template_id, str) and _TEMPLATE_ID.fullmatch(template_id):
+            row = connection.execute("SELECT * FROM templates WHERE id=?", (template_id,)).fetchone()
+        if row is None:
+            raise WorkflowError(404, "template_not_found", "That template doesn't exist.")
+        return row
+
+    def list_templates(self) -> dict:
+        with self.read() as connection:
+            rows = connection.execute("SELECT * FROM templates ORDER BY updated_at DESC, id LIMIT ?",
+                                      (MAX_TEMPLATES,)).fetchall()
+        yours = []
+        for row in rows:
+            definition = json.loads(row["definition_json"])
+            yours.append({"id": row["id"], "name": row["name"], "description": row["description"],
+                          "source": "yours", "stageCount": row["stage_count"],
+                          "roles": definition.get("roles", []), "updatedAt": iso(row["updated_at"])})
+        builtin = [dict(item, source="builtin", updatedAt=None) for item in model.template_summaries()]
+        return {"templates": yours + builtin}
+
+    def save_template(self, workflow_id: str, name: str, description: str | None,
+                      mutation: Mutation | None = None) -> dict:
+        """Your template: a copy of the workflow's latest saved draft, without who does each role."""
+        name = name.strip()
+        if not name or len(name) > model.MAX_TITLE or "\x00" in name:
+            raise WorkflowError(422, "invalid_request", "Give the template a name of at most 80 characters.")
+        if description is not None and (len(description) > model.MAX_DESCRIPTION or "\x00" in description):
+            raise WorkflowError(422, "invalid_request", "The description is too long.")
+        with self.mutate("templates/save", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            row = self._workflow(connection, workflow_id)
+            if connection.execute("SELECT COUNT(*) FROM templates").fetchone()[0] >= MAX_TEMPLATES:
+                raise WorkflowError(409, "not_allowed", f"You already have {MAX_TEMPLATES} templates. Delete one first.")
+            definition = json.loads(row["draft_json"])
+            definition["name"] = name
+            if description is not None:
+                definition["description"] = description
+            now = self.now()
+            template_id = TEMPLATE_PREFIX + secrets.token_hex(8)
+            connection.execute(
+                "INSERT INTO templates (id, name, description, definition_json, stage_count, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (template_id, name, definition.get("description", ""), model.canonical_json(definition),
+                 len(definition["stages"]), now, now))
+            return self._remember(connection, mutation, "templates/save", {"templateId": template_id})
+
+    def delete_template(self, template_id: str, mutation: Mutation | None = None) -> dict:
+        if model.template(template_id) is not None:
+            raise WorkflowError(409, "not_allowed", "Built-in templates can't be deleted.")
+        with self.mutate("templates/delete", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            self._your_template(connection, template_id)
+            connection.execute("DELETE FROM templates WHERE id=?", (template_id,))
+            return self._remember(connection, mutation, "templates/delete", {"deleted": True})
+
     def use_template(self, template_id: str, name: str | None, host: HostFacts | None,
                      mutation: Mutation | None = None) -> dict:
         definition = model.template(template_id)
-        if definition is None:
+        if definition is None and not template_id.startswith(TEMPLATE_PREFIX):
             raise WorkflowError(404, "template_not_found", "That template doesn't exist.")
-        if name:
-            definition["name"] = name
-        parsed = self._parse(definition)
         with self.mutate("templates/use", mutation) as (connection, replay):
             if replay is not None:
                 return replay
-            response = self._save(connection, None, 0, parsed, host)
+            if definition is None:
+                definition = json.loads(self._your_template(connection, template_id)["definition_json"])
+            if name:
+                definition["name"] = name
+            response = self._save(connection, None, 0, self._parse(definition), host)
             return self._remember(connection, mutation, "templates/use", response)
 
     # MARK: Runs
@@ -840,7 +960,9 @@ class WorkflowStore:
                 "id": row["id"], "number": row["number"], "iteration": row["iteration"], "state": row["state"],
                 "agentId": row["agent_id"], "launchedAt": iso(row["launched_at"]), "endedAt": iso(ended),
                 "durationMs": int(round((ended - row["launched_at"]) * 1000)) if ended is not None else None,
-                "tokens": {"in": row["tokens_in"], "out": row["tokens_out"]}, "outcomeCode": row["outcome_code"]})
+                # The text runner can't count tokens: null means unknown, not zero.
+                "tokens": {"in": row["tokens_in"], "out": row["tokens_out"]} if row["tokens_known"] else None,
+                "outcomeCode": row["outcome_code"]})
         value["inputs"] = json.loads(run["inputs_json"])
         value["stages"] = []
         for stage in definition["stages"]:
@@ -956,13 +1078,13 @@ def finish(connection: sqlite3.Connection, run: sqlite3.Row, now: float, stages:
 def go_back(connection: sqlite3.Connection, run: sqlite3.Row, definition: dict, target: str, notes: dict,
             now: float, *, state: str, count_loop: str | None = None, through: str | None = None,
             stages: dict | None = None) -> None:
-    """Send the run back to `target` with the next iteration; stages from there to `through` start over."""
-    index = model.stage_index(definition)
+    """Send the run back to `target` with the next iteration; stages on the way from there to `through` start
+    over."""
     stages = json.loads(run["stages_json"]) if stages is None else stages
     iteration = run["iteration"] + 1
-    for stage in definition["stages"][index[target]: index[through or run["stage_key"]] + 1]:
-        stage_state(stages, stage["key"], "pending", now, iteration=iteration)
-        stages[stage["key"]]["startedAt"] = stages[stage["key"]]["endedAt"] = None
+    for key in model.stages_between(definition, target, through or run["stage_key"]):
+        stage_state(stages, key, "pending", now, iteration=iteration)
+        stages[key]["startedAt"] = stages[key]["endedAt"] = None
     loops = json.loads(run["loops_json"] or "{}")
     if count_loop is not None:
         loops[count_loop] = int(loops.get(count_loop, 0)) + 1
@@ -986,10 +1108,9 @@ def retry(connection: sqlite3.Connection, store: WorkflowStore, run: sqlite3.Row
         return
     target = run["retry_stage"] or run["failure_stage"] or run["stage_key"]
     stages = json.loads(run["stages_json"])
-    index = model.stage_index(definition)
-    for stage in definition["stages"][index[target]: index[run["stage_key"]] + 1]:
-        stage_state(stages, stage["key"], "pending", now)
-        stages[stage["key"]]["startedAt"] = stages[stage["key"]]["endedAt"] = None
+    for key in model.stages_between(definition, target, run["stage_key"]):
+        stage_state(stages, key, "pending", now)
+        stages[key]["startedAt"] = stages[key]["endedAt"] = None
     update_run(connection, run, now, state="planned", stage_key=target, bindings_json=model.canonical_json(bindings),
                stages_json=model.canonical_json(stages), attention_code=None, attention_message=None,
                failure_stage=None, failure_code=None, failure_message=None, retry_stage=None, cancel_requested=0,

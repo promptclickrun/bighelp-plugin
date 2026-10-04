@@ -6,15 +6,17 @@ import importlib
 import importlib.util
 import os
 from pathlib import Path
+import sqlite3
 import stat
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 
 from loopdy_plugin import workflow_model as model
 from loopdy_plugin import workflow_store
 from loopdy_plugin.workflow_store import Mutation, StoreUnavailable, WorkflowError, WorkflowStore
-from workflow_fixtures import DRAFT, Engine, INPUTS
+from workflow_fixtures import DRAFT, Engine, INPUTS, graph_definition
 
 
 CLIENT_RUN = "6f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b"
@@ -113,6 +115,124 @@ class DefinitionStoreTests(unittest.TestCase):
             workflow_id, "draft", None)["workflow"]["bindings"]], [None, None, None])
         self.assertEqual(self.store.bind(workflow_id, "writer", "writer", Mutation(request_id(2)))["bindings"][1][
             "agentId"], "writer")
+
+
+class EditStoreTests(unittest.TestCase):
+    """Version 2: drafts from scratch, pins, unarchive and your templates."""
+
+    def setUp(self):
+        self.engine = Engine(self)
+        self.store = self.engine.store
+        self.clock = self.engine.clock
+
+    def error(self, call, *args, **kwargs) -> WorkflowError:
+        with self.assertRaises(WorkflowError) as caught:
+            call(*args, **kwargs)
+        return caught.exception
+
+    def test_a_draft_from_scratch_saves_and_layout_comes_back_as_is(self):
+        empty = {"schemaVersion": 2, "name": "New workflow", "description": "", "roles": [], "inputs": [],
+                 "limits": {"stageMinutes": 20, "maxRevisions": 2}, "stages": []}
+        created = self.store.save_draft(None, 0, empty, self.engine.facts)
+        self.assertEqual([issue["code"] for issue in created["validation"]["issues"]], ["no_stages"])
+        self.assertFalse(created["validation"]["valid"])
+        self.assertEqual(self.error(self.store.publish, created["workflowId"], 1, self.engine.facts).code,
+                         "not_valid")
+        graph = graph_definition()
+        saved = self.store.save_draft(created["workflowId"], 1, graph, self.engine.facts)
+        self.assertTrue(saved["validation"]["valid"])
+        got = self.store.get_workflow(created["workflowId"], "draft", self.engine.facts)["workflow"]
+        self.assertEqual(got["definition"]["layout"], graph["layout"])
+        self.assertEqual(got["definition"]["stages"][1]["next"], None)
+        self.assertEqual(self.store.list_workflows(False, None)["workflows"][0]["stageCount"], 5)
+
+    def test_pinned_workflows_come_first_and_archive_can_be_undone(self):
+        first, _ = self.engine.workflow(name="First")
+        self.clock.advance(5)
+        second, _ = self.engine.workflow(name="Second")
+        names = lambda: [item["name"] for item in self.store.list_workflows(False, None)["workflows"]]
+        self.assertEqual(names(), ["Second", "First"])
+        self.assertEqual(self.store.pin(first, True), {"workflowId": first, "pinned": True})
+        self.assertEqual(names(), ["First", "Second"])
+        listed = self.store.list_workflows(False, None)["workflows"]
+        self.assertEqual([item["pinned"] for item in listed], [True, False])
+        self.assertTrue(self.store.get_workflow(first, "draft", None)["workflow"]["pinned"])
+        self.store.pin(first, False)
+        self.assertEqual(names(), ["Second", "First"])
+        self.store.archive(second)
+        self.assertEqual(names(), ["First"])
+        self.assertEqual(self.store.unarchive(second), {"workflowId": second, "archived": False})
+        self.assertEqual(sorted(names()), ["First", "Second"])
+        self.assertEqual(self.error(self.store.pin, "wf_0000000000000000", True).code, "workflow_not_found")
+
+    def test_your_templates_save_list_use_and_delete(self):
+        workflow_id, _ = self.engine.workflow(graph_definition(), name="ignored")
+        saved = self.store.save_template(workflow_id, "  Loop newsletter ", "My loop.")
+        template_id = saved["templateId"]
+        self.assertRegex(template_id, r"^tpl-[0-9a-f]{16}$")
+        templates = self.store.list_templates()["templates"]
+        self.assertEqual([(item["id"], item["source"]) for item in templates],
+                         [(template_id, "yours"), ("research-draft-review", "builtin")])
+        self.assertEqual((templates[0]["name"], templates[0]["description"], templates[0]["stageCount"]),
+                         ("Loop newsletter", "My loop.", 5))
+        self.assertRegex(templates[0]["updatedAt"], r"Z$")
+        self.assertIsNone(templates[1]["updatedAt"])
+        used = self.store.use_template(template_id, None, self.engine.facts)
+        got = self.store.get_workflow(used["workflowId"], "draft", self.engine.facts)["workflow"]
+        self.assertEqual(got["name"], "Loop newsletter")
+        self.assertEqual(got["definition"]["layout"], graph_definition()["layout"])
+        self.assertEqual([item["agentId"] for item in got["bindings"]], [None, None, None])
+        self.assertEqual(self.store.use_template("research-draft-review", "Plain", None)["draftVersion"], 1)
+        self.assertEqual(self.error(self.store.delete_template, "research-draft-review").code, "not_allowed")
+        self.assertEqual(self.store.delete_template(template_id), {"deleted": True})
+        self.assertEqual(self.error(self.store.delete_template, template_id).code, "template_not_found")
+        self.assertEqual(self.error(self.store.use_template, template_id, None, None).code, "template_not_found")
+        self.assertEqual(self.error(self.store.save_template, workflow_id, " ", None).code, "invalid_request")
+
+    def test_at_most_a_hundred_templates(self):
+        workflow_id, _ = self.engine.workflow()
+        with patch.object(workflow_store, "MAX_TEMPLATES", 2):
+            self.store.save_template(workflow_id, "One", None)
+            self.store.save_template(workflow_id, "Two", None)
+            self.assertEqual(self.error(self.store.save_template, workflow_id, "Three", None).code, "not_allowed")
+
+    def test_a_version_one_store_is_upgraded_in_place(self):
+        root = self.engine.root
+        workflow_id, revision = self.engine.workflow()
+        run_id = self.engine.run(workflow_id, revision)
+        with sqlite3.connect(str(self.store.database)) as connection:
+            for table in ("workflows", "attempts"):
+                connection.execute(f"ALTER TABLE {table} RENAME TO old_{table}")
+            connection.execute("DROP TABLE templates")
+            old_workflows = SCHEMA_V1_WORKFLOWS
+            connection.execute(old_workflows)
+            connection.execute("INSERT INTO workflows SELECT id, name, draft_json, draft_version, latest_revision, "
+                               "archived, run_counter, created_at, updated_at FROM old_workflows")
+            connection.execute(SCHEMA_V1_ATTEMPTS)
+            connection.execute("DROP TABLE old_workflows")
+            connection.execute("DROP TABLE old_attempts")
+            connection.execute("PRAGMA user_version=1")
+        upgraded = WorkflowStore(root, clock=self.clock)
+        self.assertEqual(upgraded.list_workflows(False, None)["workflows"][0]["pinned"], False)
+        self.assertEqual(upgraded.get_run(run_id)["run"]["state"], "planned")
+        upgraded.pin(workflow_id, True)
+        self.assertEqual(upgraded.list_templates()["templates"][0]["source"], "builtin")
+        with upgraded.read() as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+
+
+# The 3.5.0 tables that version 2 changed, for the upgrade test.
+SCHEMA_V1_WORKFLOWS = """CREATE TABLE workflows (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, draft_json TEXT NOT NULL, draft_version INTEGER NOT NULL,
+        latest_revision INTEGER, archived INTEGER NOT NULL DEFAULT 0, run_counter INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL)"""
+SCHEMA_V1_ATTEMPTS = """CREATE TABLE attempts (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL, stage_key TEXT NOT NULL, iteration INTEGER NOT NULL,
+        number INTEGER NOT NULL, state TEXT NOT NULL, agent_id TEXT NOT NULL, pid INTEGER, pid_fingerprint TEXT,
+        coordinator_epoch INTEGER NOT NULL, launched_at REAL NOT NULL, deadline_at REAL NOT NULL, ended_at REAL,
+        exit_code INTEGER, outcome_code TEXT, tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0, stream_offset INTEGER NOT NULL DEFAULT 0, stop_reason TEXT,
+        kill_at REAL, dir TEXT NOT NULL)"""
 
 
 class RunStoreTests(unittest.TestCase):

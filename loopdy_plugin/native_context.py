@@ -45,6 +45,8 @@ class NativeContext:
     serving_profile_id: str | None
     features: tuple[str, ...]
     runtime_id: str
+    # (feature, fixed reason code) for features this computer can't offer and the app can explain.
+    unavailable: tuple[tuple[str, str], ...] = ()
 
     def payload(self) -> dict:
         return {
@@ -58,6 +60,7 @@ class NativeContext:
                 "displayName": self.display_name,
             } if self.provider is not None else None,
             "features": list(self.features),
+            **({"unavailable": dict(self.unavailable)} if self.unavailable else {}),
         }
 
     @property
@@ -140,12 +143,15 @@ def native_context(request: Request) -> NativeContext:
             raise NativeAPIError(401, "native_identity_invalid",
                                  "The Hermes identity is invalid or expired.") from None
 
-    profile, features = _native_features(provider)
-    return NativeContext(provider, user_id, display_name, profile, features, RUNTIME_ID)
+    unavailable: dict[str, str] = {}
+    profile, features = _native_features(provider, unavailable=unavailable)
+    return NativeContext(provider, user_id, display_name, profile, features, RUNTIME_ID,
+                         tuple(sorted(unavailable.items())))
 
 
 def _native_features(
     provider: str | None, *, skipped: list[tuple[str, str]] | None = None,
+    unavailable: dict[str, str] | None = None,
 ) -> tuple[str | None, tuple[str, ...]]:
     """Single source for API predicates/order and optional startup diagnostics."""
     def skip(feature: str, reason: str) -> None:
@@ -303,19 +309,25 @@ def _native_features(
     else:
         skip(sign_in_capability, "sign-ins need a POSIX terminal and public profile helpers.")
     try:
-        from .workflow_api import CAPABILITY as workflows_capability, probe as workflows_probe
+        from .workflow_api import (CAPABILITY as workflows_capability, EDIT_CAPABILITY as workflows_edit_capability,
+                                   probe as workflows_probe)
         reason = workflows_probe()
         if reason is None:
-            features.append(workflows_capability)
+            features.extend((workflows_capability, workflows_edit_capability))
         else:
-            skip(workflows_capability, {
+            why = {
                 "not_posix": "workflows need a POSIX host.",
-                "service_manager_missing": "workflows need launchctl (macOS) or systemd-run (Linux).",
-                "hermes_update_needed": "this Hermes lacks the turn report or the chat runner flags.",
+                "chat_runner_missing": "this Hermes has no `chat -q` runner.",
                 "profile_helpers_missing": "public profile helpers are unimportable.",
-            }.get(reason, "the workflow store can't be opened."))
+            }.get(reason, "the workflow store can't be opened.")
+            skip(workflows_capability, why)
+            skip(workflows_edit_capability, why)
+            if unavailable is not None:
+                # A fixed code, so the app can say what to do (update Hermes, for example).
+                unavailable[workflows_capability] = reason
     except ImportError:
         skip("native-workflows-v1", "workflow support is unimportable.")
+        skip("native-workflows-edit-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
     if live_alerts_available():
         features.append(live_alerts_capability)

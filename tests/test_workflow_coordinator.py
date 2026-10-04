@@ -7,13 +7,15 @@ from pathlib import Path
 import signal
 import stat
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from loopdy_plugin import workflow_model as model
 from loopdy_plugin import workflow_coordinator
+from loopdy_plugin import workflow_runner as runner
 from loopdy_plugin.workflow_store import WorkflowStore
-from workflow_fixtures import DRAFT, Engine, FakeHost
+from workflow_fixtures import DRAFT, Engine, FakeHost, graph_definition
 
 
 BRIEF = {"brief": {"content": "# Brief\n\nThree facts and two sources."}}
@@ -376,6 +378,191 @@ class RecoveryTests(unittest.TestCase):
         self.restart(rebooted)
         run = self.engine.detail(self.run_id)
         self.assertEqual(run["attention"]["code"], "host_restarted")
+
+
+OLDER_HERMES = frozenset({"cli", "source", "toolsets", "query", "query_file", "quiet"})
+
+
+class TextRunnerTests(unittest.TestCase):
+    """Hermes before 0.21.4: one plain `chat -q` turn; the reply comes on stdout at the end."""
+
+    def setUp(self):
+        self.engine = Engine(self)
+        self.engine.coordinator = self.engine.new_coordinator()
+        self.engine.coordinator.features, self.engine.coordinator.mode = OLDER_HERMES, "text"
+        self.workflow_id, self.revision = self.engine.workflow()
+        self.engine.start()
+        self.run_id = self.engine.run(self.workflow_id, self.revision)
+        self.engine.tick()
+        self.process = self.engine.host.latest()
+
+    def test_reply_on_stdout_hands_off_with_unknown_tokens(self):
+        self.assertEqual(self.process.argv[-3:], ["--query-file", "brief.md", "-Q"])
+        self.assertEqual(self.process.stdout_path.name, "reply.txt")
+        self.assertNotIn("HERMES_QUIET_TURN_REPORT_FILE", self.process.env)
+        self.engine.tick()
+        self.engine.tick(seconds=125)
+        self.engine.host.reply_text(self.process.pid, BRIEF)
+        self.engine.tick()
+        detail = self.engine.detail(self.run_id)
+        self.assertEqual((detail["state"], detail["stageKey"]), ("running", "draft"))
+        self.assertIsNone(detail["stages"][0]["attempts"][0]["tokens"])
+        self.assertEqual(detail["tokens"], {"in": 0, "out": 0})
+        with self.engine.store.read() as connection:
+            lines = [tuple(row) for row in connection.execute(
+                "SELECT kind, text FROM live_lines WHERE attempt_id=? ORDER BY seq",
+                (detail["stages"][0]["attempts"][0]["id"],))]
+        self.assertEqual(lines, [("init", "Started. This Hermes shows no live steps, so the result comes at the end."),
+                                 ("text", "Still working (2 min)."), ("result", "Finished.")])
+
+    def test_exit_before_the_turn_says_why_without_quoting_stderr(self):
+        self.engine.host.crash(self.process.pid, 1, stderr=b"x" * 9000 + (
+            b"\n/opt/private/python3: Error while finding module specification for 'hermes_cli.main' "
+            b"(ModuleNotFoundError: No module named 'hermes_cli')\n"))
+        self.engine.tick()
+        run = self.engine.detail(self.run_id)
+        self.assertEqual(run["failure"]["code"], "agent_exit")
+        self.assertEqual(run["failure"]["message"], "Research the topic stopped before its turn began. Hermes "
+                                                    "couldn't load the Python module hermes_cli. (exit code 1)")
+        events = self.engine.store.events(self.run_id, 0, 50)["events"]
+        explained = [event for event in events if event["kind"] == "agent_error"]
+        self.assertEqual([event["text"] for event in explained],
+                         ["Hermes couldn't load the Python module hermes_cli. (exit code 1)"])
+        self.assertNotIn("/opt/private", json.dumps(self.engine.detail(self.run_id)) + json.dumps(events))
+        self.assertLessEqual((self.process.cwd / "stderr.log").stat().st_size, 4096)
+
+    def test_gone_without_a_result_needs_attention_after_a_restart(self):
+        self.engine.coordinator.release()
+        self.engine.host.reply_text(self.process.pid, BRIEF)
+        self.process.own = False
+        coordinator = self.engine.new_coordinator()
+        coordinator.features, coordinator.mode = OLDER_HERMES, "text"
+        self.assertTrue(coordinator.acquire())
+        coordinator.begin()
+        run = self.engine.detail(self.run_id)
+        self.assertEqual((run["state"], run["attention"]["code"]), ("needs_attention", "coordinator_restarted"))
+
+    def test_no_tool_scope_never_starts_an_agent(self):
+        self.engine.host.reply_text(self.process.pid, BRIEF)
+        self.engine.coordinator.features = OLDER_HERMES - {"toolsets"}
+        count = len(self.engine.host.processes)
+        self.engine.tick()
+        self.assertEqual(len(self.engine.host.processes), count)
+        self.assertEqual(self.engine.detail(self.run_id)["failure"]["code"], "spawn_failed")
+
+
+class ImportPathTests(unittest.TestCase):
+    def test_module_form_workers_get_the_import_path_and_launchers_do_not(self):
+        engine = Engine(self)
+        workflow_id, revision = engine.workflow()
+        coordinator = workflow_coordinator.Coordinator(
+            engine.store, host=engine.host, clock=engine.clock, environ={"PATH": "/usr/bin:/bin"},
+            import_path=["/fixture/hermes-agent", "/fixture/site-packages"], memory_ok=lambda: True)
+        self.addCleanup(coordinator.release)
+        self.assertEqual(coordinator.hermes, runner.module_argv())
+        engine.coordinator = coordinator
+        engine.start()
+        engine.run(workflow_id, revision)
+        engine.tick()
+        worker = engine.host.latest()
+        self.assertEqual(worker.argv[1:3], ["-m", "hermes_cli.main"])
+        self.assertEqual(worker.env["PYTHONPATH"], os.pathsep.join(["/fixture/hermes-agent", "/fixture/site-packages"]))
+        launcher = workflow_coordinator.Coordinator(engine.store, hermes=["/fixture/bin/hermes"],
+                                                    import_path=["/fixture/hermes-agent"])
+        self.assertEqual(launcher.import_path, [])
+
+    def test_the_launching_process_hands_over_what_it_found(self):
+        engine = Engine(self)
+        with patch.object(runner, "hermes_import_path", return_value=["/fixture/hermes-agent"]), \
+                patch.object(runner, "detect_hermes_features", return_value=OLDER_HERMES), \
+                patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}, clear=False):
+            os.environ.pop("HERMES_BIN", None)
+            command = workflow_coordinator.coordinator_command(engine.root)
+        self.assertEqual(command[1], "-i")
+        python_path = next(item for item in command if item.startswith("PYTHONPATH="))
+        self.assertTrue(python_path.endswith(os.pathsep + "/fixture/hermes-agent"))
+        self.assertEqual(command[command.index("--hermes-path") + 1], "/fixture/hermes-agent")
+        self.assertEqual(runner.decode_features(command[command.index("--hermes-features") + 1]), OLDER_HERMES)
+        self.assertNotIn("OPENAI_API_KEY", " ".join(command))
+
+    def test_hosted_hermes_without_a_service_manager_runs_detached(self):
+        with patch.object(workflow_coordinator.platform, "system", return_value="Linux"), \
+                patch.object(workflow_coordinator.shutil, "which", return_value=None):
+            self.assertEqual(workflow_coordinator.service_manager(), "detached")
+        with patch.object(workflow_coordinator.platform, "system", return_value="Linux"), \
+                patch.object(workflow_coordinator.shutil, "which", return_value="/usr/bin/systemd-run"), \
+                patch.object(workflow_coordinator, "_systemd_user_available", return_value=False):
+            self.assertEqual(workflow_coordinator.service_manager(), "detached")
+        with patch.object(workflow_coordinator.platform, "system", return_value="Darwin"), \
+                patch.object(workflow_coordinator.shutil, "which", return_value="/bin/launchctl"):
+            self.assertEqual(workflow_coordinator.service_manager(), "launchd")
+        with patch.object(workflow_coordinator, "coordinator_command", return_value=["/fixture/env"]), \
+                patch.object(workflow_coordinator.subprocess, "run",
+                             return_value=SimpleNamespace(returncode=1)), \
+                patch.object(workflow_coordinator, "_launch_detached", return_value=True) as detached:
+            self.assertTrue(workflow_coordinator.launch_service(Path("/fixture/root/a/b/c"), manager="systemd"))
+        detached.assert_called_once_with(["/fixture/env"])
+
+
+class GraphRunTests(unittest.TestCase):
+    """schemaVersion 2 runs follow `next` edges one stage at a time; the decision loops back."""
+
+    def setUp(self):
+        self.engine = Engine(self)
+        self.workflow_id, self.revision = self.engine.workflow(graph_definition())
+        self.engine.start()
+        self.run_id = self.engine.run(self.workflow_id, self.revision, inputs={"topic": "Checklists"})
+
+    def test_follows_next_edges_loops_back_and_ends_where_next_is_null(self):
+        engine = self.engine
+        engine.tick()
+        self.assertEqual(engine.state(self.run_id), ("running", "research"))
+        engine.finish_stage(BRIEF)
+        self.assertEqual(engine.state(self.run_id), ("running", "draft"))  # research's next, not the list order
+        engine.finish_stage(GOOD_DRAFT)
+        self.assertEqual(engine.state(self.run_id), ("running", "review"))
+        engine.finish_stage({"decision": "changes", "notes": [{"severity": "major", "text": "Shorter."}]})
+        engine.tick()
+        run = engine.detail(self.run_id)
+        self.assertEqual((run["state"], run["stageKey"], run["iteration"]), ("running", "draft", 2))
+        states = {stage["key"]: stage["state"] for stage in run["stages"]}
+        self.assertEqual(states, {"research": "accepted", "signoff": "pending", "draft": "running",
+                                  "review": "pending", "review_decision": "pending"})
+        engine.finish_stage(GOOD_DRAFT)
+        engine.finish_stage({"decision": "pass", "notes": []})
+        engine.tick()
+        detail = engine.detail(self.run_id)
+        self.assertEqual((detail["state"], detail["stageKey"]), ("waiting_for_you", "signoff"))
+        done = engine.store.signoff(self.run_id, "signoff", "approve", detail["signoff"]["artifact"]["sha256"], "")
+        self.assertEqual(done["run"]["state"], "succeeded")
+
+    def test_sign_off_changes_go_back_to_the_stage_that_wrote_the_file(self):
+        engine = self.engine
+        engine.tick()
+        engine.finish_stage(BRIEF)
+        engine.finish_stage(GOOD_DRAFT)
+        engine.finish_stage({"decision": "pass", "notes": []})
+        engine.tick()
+        digest = engine.detail(self.run_id)["signoff"]["artifact"]["sha256"]
+        run = engine.store.signoff(self.run_id, "signoff", "changes", digest, "Add a tip.")["run"]
+        self.assertEqual((run["state"], run["stageKey"], run["iteration"]), ("planned", "draft", 2))
+        states = {stage["key"]: stage["state"] for stage in engine.detail(self.run_id)["stages"]}
+        self.assertEqual(states, {"research": "accepted", "signoff": "pending", "draft": "pending",
+                                  "review": "pending", "review_decision": "pending"})
+
+    def test_the_decision_loop_limit_needs_attention(self):
+        engine = self.engine
+        engine.tick()
+        engine.finish_stage(BRIEF)
+        engine.finish_stage(GOOD_DRAFT)
+        for _ in range(2):
+            engine.finish_stage({"decision": "changes", "notes": []})
+            engine.tick()
+            if engine.state(self.run_id)[0] == "needs_attention":
+                break
+            engine.finish_stage(GOOD_DRAFT)
+        run = engine.detail(self.run_id)
+        self.assertEqual((run["state"], run["attention"]["code"]), ("needs_attention", "revision_limit"))
 
 
 class OwnershipTests(unittest.TestCase):

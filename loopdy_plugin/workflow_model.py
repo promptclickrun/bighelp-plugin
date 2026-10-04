@@ -13,7 +13,9 @@ import re
 from typing import Any, Callable
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SCHEMA_VERSIONS = (1, 2)
+MAX_LAYOUT_COORDINATE = 100_000
 KEY = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 TOOLSET = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
 MAX_DEFINITION_BYTES = 64 * 1024
@@ -126,12 +128,15 @@ def definition_sha256(definition: dict) -> str:
 
 def parse_definition(value: Any) -> dict:
     """A normalized copy of a well-formed definition, or DefinitionError. Semantics are left to validate()."""
+    if type(value) is dict and type(value.get("schemaVersion")) is int and value["schemaVersion"] > SCHEMA_VERSION:
+        _fail("This workflow needs a newer bighelp plugin.")
+    version = value.get("schemaVersion") if type(value) is dict else None
     top = _object(value, "The workflow", ("schemaVersion", "name", "stages"),
-                  ("description", "roles", "inputs", "limits"))
-    if top["schemaVersion"] != SCHEMA_VERSION or type(top["schemaVersion"]) is not int:
+                  ("description", "roles", "inputs", "limits") + (("layout",) if version == 2 else ()))
+    if type(top["schemaVersion"]) is not int or top["schemaVersion"] not in SCHEMA_VERSIONS:
         _fail("This workflow needs a newer bighelp plugin.")
     result: dict[str, Any] = {
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": top["schemaVersion"],
         "name": _text(top["name"], "The name", MAX_TITLE, empty=True).strip(),
         "description": _text(top.get("description", ""), "The description", MAX_DESCRIPTION, empty=True),
     }
@@ -170,30 +175,62 @@ def parse_definition(value: Any) -> dict:
     }
     stages = []
     for index, stage in enumerate(_list(top["stages"], "Stages", MAX_STAGES)):
-        stages.append(_parse_stage(stage, f"Stage {index + 1}"))
+        stages.append(_parse_stage(stage, f"Stage {index + 1}", graph=version == 2))
     result["stages"] = stages
+    if "layout" in top:
+        result["layout"] = _parse_layout(top["layout"])
     if encoded_size(result) > MAX_DEFINITION_BYTES:
         _fail("The workflow is too large.")
     return result
 
 
-def _parse_stage(stage: Any, where: str) -> dict:
+def _point(value: Any, where: str) -> dict:
+    _object(value, where, ("x", "y"))
+    point = {}
+    for axis in ("x", "y"):
+        number = _number(value[axis], f"{where} {axis}")
+        if abs(number) > MAX_LAYOUT_COORDINATE:
+            _fail(f"{where} {axis} is too far out.")
+        point[axis] = number
+    return point
+
+
+def _parse_layout(value: Any) -> dict:
+    """Where the app draws each box. Stored as given; the engine never reads it."""
+    _object(value, "The layout", (), ("inputs", "stages"))
+    result: dict[str, Any] = {}
+    if "inputs" in value:
+        result["inputs"] = _point(value["inputs"], "The inputs position")
+    if "stages" in value:
+        stages = value["stages"]
+        if type(stages) is not dict or len(stages) > MAX_STAGES:
+            _fail(f"The stage positions must be an object with at most {MAX_STAGES} entries.")
+        result["stages"] = {_key(key, "A stage position key"): _point(point, f"The position of {key}")
+                            for key, point in stages.items()}
+    return result
+
+
+def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
     if type(stage) is not dict:
         _fail(f"{where} must be an object.")
     kind = stage.get("kind")
     common = ("key", "kind", "title")
+    # schemaVersion 2: every stage but a decision may name the stage after it (`next`), or null to end there.
+    edge = ("next",) if graph and kind != "decision" else ()
     if kind == "agent":
-        _object(stage, where, common + ("role", "instructions", "outputs"), ("tools", "uses", "minutes"))
+        _object(stage, where, common + ("role", "instructions", "outputs"), ("tools", "uses", "minutes") + edge)
     elif kind == "check":
-        _object(stage, where, common + ("rules",))
+        _object(stage, where, common + ("rules",), edge)
     elif kind == "decision":
         _object(stage, where, common + ("on", "changes"), ("pass",))
     elif kind == "signoff":
-        _object(stage, where, common + ("file",))
+        _object(stage, where, common + ("file",), edge)
     else:
         _fail(f"{where} has an unknown kind.")
     result: dict[str, Any] = {"key": _key(stage["key"], f"{where} key"), "kind": kind,
                               "title": _text(stage["title"], f"{where} title", MAX_TITLE)}
+    if "next" in stage:
+        result["next"] = None if stage["next"] is None else _key(stage["next"], f"{where} next")
     if kind == "agent":
         result["role"] = _key(stage["role"], f"{where} role")
         result["instructions"] = _text(stage["instructions"], f"{where} instructions", MAX_INSTRUCTIONS, empty=True)
@@ -302,10 +339,101 @@ def max_revisions(definition: dict, stage: dict) -> int:
     return int(stage["changes"].get("maxRevisions", definition["limits"]["maxRevisions"]))
 
 
-def next_stage_key(definition: dict, key: str) -> str | None:
+def following_key(definition: dict, key: str) -> str | None:
+    """The stage after `key` in the list (schemaVersion 1's only order)."""
     stages = definition["stages"]
     index = stage_index(definition)[key]
     return stages[index + 1]["key"] if index + 1 < len(stages) else None
+
+
+def next_stage_key(definition: dict, key: str) -> str | None:
+    """Where the run goes when `key` passes: its `next` (None ends the run), else the following stage.
+
+    For a decision this is where `pass: "next"` goes.
+    """
+    stage = stage_by_key(definition, key)
+    if stage is not None and stage["kind"] != "decision" and "next" in stage:
+        return stage["next"]
+    return following_key(definition, key)
+
+
+def pass_target(definition: dict, stage: dict) -> str | None:
+    return next_stage_key(definition, stage["key"]) if stage["pass"] == "next" else stage["pass"]
+
+
+def forward_graph(definition: dict) -> dict[str, list[str]]:
+    """Each stage's ways on. Going back (a decision's changes, a sign-off's changes) is not part of it."""
+    keys = set(stage_index(definition))
+    graph: dict[str, list[str]] = {}
+    for stage in definition["stages"]:
+        target = pass_target(definition, stage) if stage["kind"] == "decision" else next_stage_key(
+            definition, stage["key"])
+        graph.setdefault(stage["key"], [])
+        if target is not None and target in keys and target not in graph[stage["key"]]:
+            graph[stage["key"]].append(target)
+    return graph
+
+
+def _reachable(graph: dict[str, list[str]], start: str) -> set[str]:
+    seen, todo = set(), [start]
+    while todo:
+        key = todo.pop()
+        if key in seen or key not in graph:
+            continue
+        seen.add(key)
+        todo.extend(graph[key])
+    return seen
+
+
+def stages_between(definition: dict, start: str, end: str) -> list[str]:
+    """Stages on some way from `start` to `end` (both included), in list order: what a loop back runs again."""
+    graph = forward_graph(definition)
+    reverse: dict[str, list[str]] = {key: [] for key in graph}
+    for key, targets in graph.items():
+        for target in targets:
+            reverse[target].append(key)
+    on_way = _reachable(graph, start) & _reachable(reverse, end)
+    on_way |= {start, end}
+    return [stage["key"] for stage in definition["stages"] if stage["key"] in on_way]
+
+
+def _dominators(graph: dict[str, list[str]], start: str) -> dict[str, set[str]]:
+    """For each stage the start reaches: the stages every way from the start to it passes (itself included)."""
+    reach = _reachable(graph, start)
+    predecessors = {key: [other for other in reach if key in graph[other]] for key in reach}
+    result = {key: set(reach) for key in reach}
+    result[start] = {start}
+    changed = True
+    while changed:
+        changed = False
+        for key in reach - {start}:
+            sets = [result[other] for other in predecessors[key]]
+            value = {key} | (set.intersection(*sets) if sets else set())
+            if value != result[key]:
+                result[key], changed = value, True
+    return result
+
+
+def _cycle_stage(graph: dict[str, list[str]], order: list[str]) -> str | None:
+    """The first stage (in list order) on a loop that no decision or sign-off made."""
+    state: dict[str, int] = {}
+    found: list[str] = []
+
+    def visit(key: str) -> None:
+        state[key] = 1
+        for target in graph.get(key, []):
+            if state.get(target) == 1:
+                found.append(target)
+            elif target not in state:
+                visit(target)
+        state[key] = 2
+
+    for key in order:
+        if key not in state:
+            visit(key)
+    if not found:
+        return None
+    return min(found, key=order.index)
 
 
 def _issue(code: str, message: str, severity: str = "error", stage: str | None = None) -> dict:
@@ -315,22 +443,22 @@ def _issue(code: str, message: str, severity: str = "error", stage: str | None =
     return value
 
 
-HOST_CODES = frozenset({"role_unbound", "agent_missing", "toolset_unknown"})
+HOST_CODES = frozenset({"role_unbound", "agent_missing", "toolset_unknown", "tool_scope_unsupported"})
 
 
 def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
              profile_exists: Callable[[str], bool] | None = None,
-             toolset_known: Callable[[str], bool] | None = None) -> dict:
+             toolset_known: Callable[[str], bool] | None = None, tool_scope: bool = True) -> dict:
     """{valid, host, issues}. `valid`: the definition has no errors. `host`: it can also run on this computer."""
     issues: list[dict] = []
     stages = definition["stages"]
+    graph_mode = definition["schemaVersion"] >= 2
     roles = {role["key"]: role["label"] for role in definition["roles"]}
     inputs = {item["key"]: item for item in definition["inputs"]}
     if not definition["name"].strip():
         issues.append(_issue("name_missing", "Give the workflow a name."))
     if not stages:
         issues.append(_issue("no_stages", "Add at least one stage."))
-    seen: set[str] = set()
     for collection, label in ((definition["roles"], "role"), (definition["inputs"], "input"), (stages, "stage")):
         keys: set[str] = set()
         for item in collection:
@@ -344,14 +472,24 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
     index = {}
     for position, stage in enumerate(stages):
         index.setdefault(stage["key"], position)
+    graph = forward_graph(definition) if graph_mode else {}
+    reach = _reachable(graph, stages[0]["key"]) if graph_mode and stages else set()
+    dominators = _dominators(graph, stages[0]["key"]) if graph_mode and stages else {}
+    if graph_mode:
+        issues.extend(_graph_issues(definition, graph, reach, index))
     for position, stage in enumerate(stages):
         key, title = stage["key"], stage["title"]
 
         def earlier_output(reference: str) -> dict | None:
+            """The output, when its stage always runs before this one."""
             spec = output_spec(definition, reference)
-            if spec is None or index.get(spec["stageKey"], len(stages)) >= position:
+            if spec is None:
                 return None
-            return spec
+            if not graph_mode:
+                return spec if index.get(spec["stageKey"], len(stages)) < position else None
+            if key not in reach:
+                return spec  # Already reported as unreachable.
+            return spec if spec["stageKey"] != key and spec["stageKey"] in dominators.get(key, ()) else None
 
         if stage["kind"] == "agent":
             used_roles.add(stage["role"])
@@ -375,11 +513,14 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
                     continue
                 if earlier_output(use) is not None:
                     continue
-                if output_spec(definition, use) is not None:
-                    issues.append(_issue("use_forward", f"{title} uses {use}, which comes later.", stage=key))
-                else:
+                if output_spec(definition, use) is None:
                     issues.append(_issue("use_unknown", f"{title} uses {use}, which no earlier stage makes.",
                                          stage=key))
+                elif graph_mode:
+                    issues.append(_issue("uses_not_before", f"{title} uses {use}, which doesn't always come first.",
+                                         stage=key))
+                else:
+                    issues.append(_issue("use_forward", f"{title} uses {use}, which comes later.", stage=key))
             for tool in stage["tools"]:
                 if tool in DENIED_TOOLSETS or tool.startswith("hermes-"):
                     issues.append(_issue("tool_not_allowed", f"{title} can't use {tool} in a workflow.", stage=key))
@@ -388,6 +529,10 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
                                          "warning", stage=key))
                 if toolset_known is not None and tool not in DENIED_TOOLSETS and not toolset_known(tool):
                     issues.append(_issue("toolset_unknown", f"This computer has no tool called {tool}.", stage=key))
+            if not tool_scope:
+                issues.append(_issue("tool_scope_unsupported",
+                                     f"This computer's Hermes can't limit the tools of {title}. Update Hermes.",
+                                     stage=key))
         elif stage["kind"] == "check":
             for rule in stage["rules"]:
                 spec = earlier_output(rule["of"])
@@ -403,16 +548,24 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
                 issues.append(_issue("decision_values", f"{title} needs the values pass and changes.", stage=key))
             target = stage["changes"]["goTo"]
             target_stage = stage_by_key(definition, target)
-            if target_stage is None or target_stage["kind"] != "agent" or index[target] >= position:
+            if target_stage is None or target_stage["kind"] != "agent":
+                issues.append(_issue("goto_invalid", f"{title} must send changes back to an agent stage.",
+                                     stage=key))
+            elif graph_mode and (target == key or key not in _reachable(graph, target)):
+                issues.append(_issue("goto_not_earlier", f"{title} must send changes back to a stage before it.",
+                                     stage=key))
+            elif not graph_mode and index[target] >= position:
                 issues.append(_issue("goto_invalid", f"{title} must send changes back to an earlier agent stage.",
                                      stage=key))
-            if stage["pass"] != "next" and index.get(stage["pass"], -1) <= position:
+            if graph_mode:
+                if stage["pass"] != "next" and (stage["pass"] not in index or stage["pass"] == key):
+                    issues.append(_issue("pass_invalid", f"{title} must pass to another stage.", stage=key))
+            elif stage["pass"] != "next" and index.get(stage["pass"], -1) <= position:
                 issues.append(_issue("pass_invalid", f"{title} must pass to a later stage.", stage=key))
         elif stage["kind"] == "signoff":
             spec = earlier_output(stage["file"])
             if spec is None or spec["type"] != "markdown_file":
                 issues.append(_issue("signoff_file", f"{title} must show a file an earlier stage wrote.", stage=key))
-        seen.add(key)
     for role_key, label in roles.items():
         if role_key not in used_roles:
             issues.append(_issue("role_unused", f"No stage uses {label}.", "warning"))
@@ -429,6 +582,27 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
     host = bindings is not None and not any(item["severity"] == "error" and item["code"] in HOST_CODES
                                             for item in issues)
     return {"valid": valid, "host": host, "issues": issues}
+
+
+def _graph_issues(definition: dict, graph: dict[str, list[str]], reach: set[str], index: dict[str, int]) -> list[dict]:
+    """schemaVersion 2: where each stage goes. The run starts at the first stage and moves one stage at a time."""
+    issues = []
+    stages = definition["stages"]
+    for stage in stages:
+        if stage["kind"] != "decision" and stage.get("next") is not None and stage["next"] not in index:
+            issues.append(_issue("next_unknown", f"{stage['title']} goes on to a stage this workflow doesn't have.",
+                                 stage=stage["key"]))
+    looped = _cycle_stage(graph, [stage["key"] for stage in stages])
+    if looped is not None:
+        title = stages[index[looped]]["title"]
+        issues.append(_issue("cycle", f"{title} is part of a loop. Only a decision's changes can go back.",
+                             stage=looped))
+    for stage in stages[1:]:
+        if stage["key"] not in reach:
+            issues.append(_issue("unreachable_stage", f"Nothing leads to {stage['title']}.", stage=stage["key"]))
+    if stages and not any(not graph.get(key) for key in reach):
+        issues.append(_issue("no_end", "The workflow never ends. Let a stage end the run."))
+    return issues
 
 
 def parse_inputs(definition: dict, value: Any) -> dict:
