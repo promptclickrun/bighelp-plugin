@@ -146,6 +146,20 @@ the fix is only good to about `horizontalAccuracyMeters`: treat it as a rough
 area and say so. Don't keep or repeat the coordinates beyond what the answer
 needs.
 
+## Template Catalog
+
+When the user asks you to submit a blueprint or agent template to the bighelp
+Template Catalog, use `bighelp_submit_catalog_template`. A reviewer reads every
+submission first, and the result lands in the user's Feed. The catalog takes
+5 a day per GitHub account, so don't submit drafts or variations they didn't ask
+for.
+
+The first time, it answers `not_signed_in`: call `bighelp_catalog_login` with
+`start` and show the code, the link, and the `media` line on its own line so the
+QR appears. They can tap the link here, scan the QR from another device, or run
+`hermes bighelp catalog login` in a terminal. Sign-in finishes on its own once
+they approve; then submit.
+
 ## More
 
 - Color themes the app can import: `skill_view("loopdy:custom-theme-authoring")`.

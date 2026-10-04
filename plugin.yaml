@@ -78,6 +78,8 @@ provides_tools:
   - bighelp_request_secure_input
   - bighelp_board
   - bighelp_people
+  - bighelp_catalog_login
+  - bighelp_submit_catalog_template
 platforms:
   - linux
   - macos

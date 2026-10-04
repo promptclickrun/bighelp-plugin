@@ -76,6 +76,7 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
 | Usage activity | When your agents work (hours of the day), their messages, and each model's tokens and cost per day, for the app's Usage page. Hermes' own analytics carry the rest. Read-only. | [Usage activity](docs/USAGE_ACTIVITY.md) |
 | Provider sign-in | Sign in to accounts that otherwise need a terminal on the computer (GitHub Copilot, Claude Code, Claude subscriptions) from the phone. The provider's own sign-in tool runs on the computer; the phone gets only its link and code. | [Provider sign-in](docs/PROVIDER_SIGN_IN.md) |
 | Generated media and files | Agent-made images, videos and files show up in chat. Hermes' own media rules decide what can be shared, and host paths are never exposed. | [Agent attachments](docs/AGENT_ATTACHMENTS.md) |
+| Template Catalog submissions | Agents submit blueprints and agent templates to the bighelp Template Catalog for you, credited to your GitHub name, after you sign in to GitHub once per computer (from chat with a code, link and QR, or with `hermes bighelp catalog login`). A reviewer reads every one; results show up in Feed. 5 a day per GitHub account. | [Template Catalog](docs/TEMPLATE_CATALOG.md) |
 | Model names | `model-names.json` gives friendly model names. The app can refresh it without a plugin update. | |
 
 ### Cards: rules for agents
