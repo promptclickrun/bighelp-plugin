@@ -386,6 +386,8 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
             result = {"updated": store.mark_read(body.itemIds, read=body.read)}
         elif operation == "promote" and isinstance(body, _BoardItem):
             result = {"item": store.promote_idea(body.itemId)}
+        elif operation == "accept" and isinstance(body, _BoardItem):
+            result = {"item": store.accept_idea(body.itemId)}
         elif operation == "media" and isinstance(body, _BoardMedia):
             mime, data = store.image(body.itemId, body.index)
             result = media_payload(mime, data)
@@ -408,11 +410,12 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
     return {"agentId": body.agentId, **result}
 
 
-async def _board_request(request: Request, model: type[_Body], operation: str, maximum: int) -> Response:
+async def _board_request(request: Request, model: type[_Body], operation: str, maximum: int,
+                         feature: str | None = None) -> Response:
     from .agent_board import CAPABILITY
     owner = native_context(request)
     request_id = _precondition(request, owner)
-    if CAPABILITY not in owner.features:
+    if CAPABILITY not in owner.features or (feature is not None and feature not in owner.features):
         raise NativeAPIError(503, "board_unavailable", "The agent board is unavailable.")
     body = await _body(request, model)
     result = await run_in_threadpool(_board, request, owner, body, operation)
@@ -437,6 +440,12 @@ async def board_read(request: Request) -> Response:
 @router.post("/board/promote")
 async def board_promote(request: Request) -> Response:
     return await _board_request(request, _BoardItem, "promote", MAX_BODY_BYTES)
+
+
+@router.post("/board/accept")
+async def board_accept(request: Request) -> Response:
+    from .agent_board import ANSWERS_CAPABILITY
+    return await _board_request(request, _BoardItem, "accept", MAX_BODY_BYTES, ANSWERS_CAPABILITY)
 
 
 @router.post("/board/media")

@@ -37,6 +37,9 @@ GOAL_CATEGORIES_CAPABILITY = "native-agent-board-goal-categories-v1"
 # Feed posts carry host files by reference; the app fetches them through the
 # attachment routes (``attachments/board``), never by path.
 FILES_CAPABILITY = "native-agent-board-files-v1"
+# Let's do it tells the board which idea by its id (``board/accept``), so the
+# chat message the app still sends never has to carry it.
+ANSWERS_CAPABILITY = "native-agent-board-answers-v1"
 TOOL_NAME = "bighelp_board"
 KINDS = ("feed", "idea", "goal")
 GOAL_SECTIONS = ("tracking", "goal")
@@ -379,14 +382,27 @@ class BoardStore:
         self.set_flags(item_id, dismissed=True)
         return goal
 
-    def accept_idea(self, title: str, *, now: float | None = None) -> bool:
-        """Records a Let's do it: the newest idea on the board with that title."""
+    def accept_idea(self, item_id: Any, *, now: float | None = None) -> dict:
+        """Records a Let's do it for exactly this idea. Saying it again changes nothing."""
+        item_id = _clean(item_id, 64, field="id", required=True)
         with self._db() as db:
-            row = db.execute("""SELECT id FROM items WHERE kind='idea' AND dismissed=0 AND title=?
-                                ORDER BY created DESC LIMIT 1""", (title.strip(),)).fetchone()
+            db.execute("UPDATE items SET answer='yes', answered=? WHERE id=? AND kind='idea' AND answer!='yes'",
+                       (time.time() if now is None else now, item_id))
+            row = db.execute("SELECT * FROM items WHERE id=? AND kind='idea'", (item_id,)).fetchone()
         if row is None:
+            raise BoardError("No idea has that id.")
+        return self._item(row)
+
+    def accept_idea_titled(self, title: str, *, now: float | None = None) -> bool:
+        """Records a Let's do it from the chat message alone (apps before
+        ``board/accept``): the newest idea on the board with that title."""
+        with self._db() as db:
+            rows = db.execute("""SELECT id, answer FROM items WHERE kind='idea' AND dismissed=0 AND title=?
+                                 ORDER BY created DESC""", (title.strip(),)).fetchall()
+        # The app already said which one by id; a same-title twin isn't a yes too.
+        if not rows or any(row["answer"] == "yes" for row in rows):
             return False
-        self._answer(row["id"], "yes", now)
+        self._answer(rows[0]["id"], "yes", now)
         return True
 
     def _answer(self, item_id: str, answer: str, now: float | None) -> None:
@@ -849,7 +865,7 @@ class ActivityRecorder:
                 message = payload.get("user_message")
                 accepted = _LETS_DO_IT.match(message) if isinstance(message, str) else None
                 if accepted and key not in self._turns:
-                    self._store_getter().accept_idea(accepted.group(1))
+                    self._store_getter().accept_idea_titled(accepted.group(1))
                 if key not in self._turns:
                     self._turns[key] = {"request": _first_sentence(message, 200) if isinstance(message, str)
                                         else "", "tools": [], "response": ""}

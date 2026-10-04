@@ -78,11 +78,14 @@ chunks. Without the feature, posts have no files and the app shows Feed as befor
 ### Answers to ideas
 
 Ideas also carry `answer`: `yes` (Let's do it), `goal` (Make it a goal), `not now`
-(hidden) or `none`. The plugin records them without an app change:
+(hidden) or `none`:
 
-- **Let's do it** sends the chat message `Yes, go ahead with this idea: “<title>”.`;
-  the board's `pre_llm_call` observer marks the newest visible idea with that
-  title `yes`.
+- **Let's do it** calls `board/accept` with the idea's `itemId` (see below), then
+  opens a chat with the message `Yes, go ahead with this idea: “<title>”.` The id
+  never goes into the chat. Apps from before `board/accept` send only the message.
+  For them, the board's `pre_llm_call` observer marks the newest visible idea with that
+  title `yes`. When a visible idea with that title is already `yes`, the observer
+  does nothing, so a same-title twin never gets a second yes.
 - **Make it a goal** (`board/promote`) marks the idea `goal`.
 - **Not now** and Delete (`board/update` with `dismissed: true`) mark an idea
   `not now`, unless it was already answered. Undo clears it. Hiding Feed posts
@@ -93,3 +96,15 @@ ideas answered in the last 30 days (up to 30). Publishing an idea with the id of
 a `not now` from the last 30 days fails with a message telling the agent to offer
 something else; after that, re-publishing brings it back with no answer. Ideas
 hidden before this change have no answer.
+
+With `native-agent-board-answers-v1`:
+
+| Route | Body | Returns |
+|---|---|---|
+| `board/accept` | `itemId` of an idea | the idea as `item`, with `answer: "yes"` |
+
+The app calls it when the person taps Let's do it. It marks exactly that idea
+`yes` and leaves the idea on the board. Calling it again changes nothing, and the
+first time stays as the answer time. An unknown id, or the id of a Feed post or a
+goal, fails with `404 board_item_unavailable`. It also works on a hidden idea:
+the tap is the person's newest answer.
