@@ -211,10 +211,11 @@ def _headers(context: NativeContext, request_id: str | None = None) -> dict[str,
     return result
 
 
-def _response(value: dict, context: NativeContext, request_id: str | None = None) -> Response:
+def _response(value: dict, context: NativeContext, request_id: str | None = None,
+              maximum: int | None = None) -> Response:
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
                          sort_keys=True, allow_nan=False).encode("utf-8")
-    maximum = 16_384 if request_id is None else MAX_BODY_BYTES
+    maximum = maximum or (16_384 if request_id is None else MAX_BODY_BYTES)
     if len(encoded) > maximum:
         raise NativeAPIError(413, "payload_too_large", "The response exceeds the byte limit.")
     return Response(encoded, media_type="application/json", headers=_headers(context, request_id))
@@ -496,6 +497,60 @@ async def people_speaking(request: Request) -> Response:
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response(value, owner, request_id)
+
+
+def _live_alerts_call(operation, *args, **kwargs):
+    from .live_alerts import LiveAlertError
+    from .managed_notifications import ManagedNotificationError
+    try:
+        return operation(*args, **kwargs)
+    except LiveAlertError as error:
+        raise NativeAPIError(error.status, error.code, error.message) from None
+    except ManagedNotificationError:
+        raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.") from None
+
+
+async def _live_alerts_request(request: Request, model):
+    from . import live_alerts
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if live_alerts.CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.")
+    body = await _body(request, model)
+    from .managed_notifications import get_managed_notifications
+    service = await run_in_threadpool(_live_alerts_call, get_managed_notifications)
+    return owner, request_id, body, service
+
+
+@router.post("/alerts/listen")
+async def live_alerts_listen(request: Request) -> Response:
+    """bighelp is open on this device: hold until an alert for it is there (or the wait ends)."""
+    from . import live_alerts
+    owner, request_id, body, service = await _live_alerts_request(request, live_alerts.ListenBody)
+    value = await live_alerts.listen(
+        body, service=service, is_disconnected=request.is_disconnected,
+        run=lambda operation, *args, **kwargs: run_in_threadpool(_live_alerts_call, operation, *args, **kwargs))
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=live_alerts.MAX_RESPONSE_BYTES + 16_384)
+
+
+@router.post("/alerts/stop")
+async def live_alerts_stop(request: Request) -> Response:
+    """bighelp went to the background on this device: push its alerts again right away."""
+    from . import live_alerts
+    owner, request_id, body, service = await _live_alerts_request(request, live_alerts.StopBody)
+    await run_in_threadpool(_live_alerts_call, live_alerts.stop, service, body)
+    return _response({"stopped": True}, owner, request_id)
+
+
+@router.post("/alerts/ack")
+async def live_alerts_ack(request: Request) -> Response:
+    """The device showed these alerts, or chose not to: they never go out as pushes."""
+    from . import live_alerts
+    owner, request_id, body, service = await _live_alerts_request(request, live_alerts.AckBody)
+    settled = await run_in_threadpool(_live_alerts_call, live_alerts.ack, service, body)
+    return _response({"settled": settled}, owner, request_id)
 
 
 class _Usage(_Body):

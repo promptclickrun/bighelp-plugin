@@ -129,6 +129,9 @@ Notifications and Live Activities are opt-in per host from the app. Chat never d
   [`sealed_alerts.py`](loopdy_plugin/sealed_alerts.py).
 - **Live Activities.** Lock Screen and Dynamic Island updates carry only a phase, a fixed label (such as
   "Your agent is working") and counts. They never include message text.
+- **Instant while bighelp is open.** A phone, iPad or Mac with bighelp open gets each alert straight from the
+  host, as the same sealed alert, in about a second. The device keeps quiet about the chat on screen and tells
+  the host that it got the alert. Without that answer in one second, the push goes out as usual.
 
 More detail: [Notifications](docs/NOTIFICATIONS.md).
 
