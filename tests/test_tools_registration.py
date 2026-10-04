@@ -145,6 +145,11 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema["parameters"], PEOPLE_PARAMETERS)
                 self.assertIn("not proof of identity", description)
                 continue
+            if tool_name.startswith("bighelp_templates_"):
+                from loopdy_plugin.template_tools import SCHEMAS as TEMPLATE_SCHEMAS
+                self.assertEqual(renderer_schema, TEMPLATE_SCHEMAS[tool_name])
+                self.assertIn("tool_search", description)
+                continue
             if tool_name == "bighelp_marketplace_prepare_upload":
                 self.assertIn("private marketplace", description)
                 self.assertIn("cannot submit or publish", description)
