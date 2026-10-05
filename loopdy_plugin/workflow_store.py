@@ -515,7 +515,7 @@ class WorkflowStore:
                 validation = self._validation(connection, row["id"], draft, host)
                 bindings = {role: binding["agent_id"] for role, binding in
                             self._bindings(connection, row["id"]).items()}
-                used = {stage["role"] for stage in current["stages"] if stage["kind"] == "agent"}
+                used = {stage["role"] for stage in model.all_stages(current) if stage["kind"] == "agent"}
                 missing = [role["key"] for role in current["roles"] if role["key"] in used and (
                     not bindings.get(role["key"]) or (host is not None and host.profile_exists is not None
                                                       and not host.profile_exists(bindings[role["key"]])))]
@@ -974,7 +974,8 @@ class WorkflowStore:
             "workflowName": cache[name_key], "revision": run["revision"], "state": run["state"],
             "stageKey": run["stage_key"], "stageTitle": stage["title"],
             "stageState": stages.get(run["stage_key"], {}).get("state", "pending"),
-            "stagesDone": sum(1 for item in stages.values() if item["state"] == "accepted"),
+            "stagesDone": sum(1 for item in definition["stages"]
+                              if stages.get(item["key"], {}).get("state") == "accepted"),
             "stageCount": len(definition["stages"]), "iteration": run["iteration"],
             "startedAt": iso(run["started_at"]), "updatedAt": iso(run["updated_at"]), "endedAt": iso(run["ended_at"]),
             "paused": bool(run["pause_requested"]), "version": run["version"], "sample": bool(run["sample"]),
@@ -1022,7 +1023,7 @@ class WorkflowStore:
                 "iteration": row["iteration"], "decision": row["decision"], "notes": row["notes"][:2_000],
                 "decidedAt": iso(row["decided_at"])})
         value["stages"] = []
-        for stage in definition["stages"]:
+        for stage in model.all_stages(definition):
             current = stages.get(stage["key"], {})
             agent = stage["kind"] == "agent"
             entry = {
@@ -1038,6 +1039,10 @@ class WorkflowStore:
             if stage["kind"] == "signoff":
                 # The person's sign-offs, newest last.
                 entry["decisions"] = decisions.get(stage["key"], [])[-20:]
+            group = model.parent_key(definition, stage["key"])
+            if group is not None:
+                # An agent of a parallel block: it runs with the others in `group`.
+                entry["group"] = group
             value["stages"].append(entry)
         latest: dict[tuple[str, str], sqlite3.Row] = {}
         history: dict[tuple[str, str], list[sqlite3.Row]] = {}
@@ -1087,7 +1092,22 @@ _ACTIVE = ",".join(f"'{state}'" for state in ACTIVE_STATES)
 
 def initial_stages(definition: dict) -> dict:
     return {stage["key"]: {"state": "pending", "iteration": 1, "startedAt": None, "endedAt": None}
-            for stage in definition["stages"]}
+            for stage in model.all_stages(definition)}
+
+
+def reset_stage(stages: dict, definition: dict, key: str, now: float, *, iteration: int | None = None,
+                keep_accepted_branches: bool = False, rerun: str | None = None) -> None:
+    """Back to pending, a parallel block with its agents. On a retry the agents that finished keep their work,
+    except `rerun` (the one whose work a check refused)."""
+    stage_state(stages, key, "pending", now, iteration=iteration)
+    stages[key]["startedAt"] = stages[key]["endedAt"] = None
+    stage = model.stage_by_key(definition, key) or {}
+    for branch in stage.get("branches", ()):
+        item = stages.get(branch["key"], {})
+        if keep_accepted_branches and item.get("state") == "accepted" and branch["key"] != rerun:
+            continue
+        stage_state(stages, branch["key"], "pending", now, iteration=iteration)
+        stages[branch["key"]]["startedAt"] = stages[branch["key"]]["endedAt"] = None
 
 
 def stage_state(stages: dict, key: str, state: str, now: float, *, start: bool = False, end: bool = False,
@@ -1110,7 +1130,8 @@ def stage_reads(stage: dict) -> list[str]:
     elif kind == "check":
         reads = [rule["of"] for rule in stage.get("rules") or [] if isinstance(rule.get("of"), str)]
     elif kind == "decision":
-        reads = [stage["on"]] if isinstance(stage.get("on"), str) else []
+        on = stage.get("on")
+        reads = [on] if isinstance(on, str) else [item for item in on or [] if isinstance(item, str)]
     elif kind == "signoff":
         reads = [stage["file"]] if isinstance(stage.get("file"), str) else []
     else:
@@ -1161,9 +1182,10 @@ def go_back(connection: sqlite3.Connection, run: sqlite3.Row, definition: dict, 
     over."""
     stages = json.loads(run["stages_json"]) if stages is None else stages
     iteration = run["iteration"] + 1
+    # A parallel block's agent goes back as its whole block.
+    target = model.top_key(definition, target)
     for key in model.stages_between(definition, target, through or run["stage_key"]):
-        stage_state(stages, key, "pending", now, iteration=iteration)
-        stages[key]["startedAt"] = stages[key]["endedAt"] = None
+        reset_stage(stages, definition, key, now, iteration=iteration)
     loops = json.loads(run["loops_json"] or "{}")
     if count_loop is not None:
         loops[count_loop] = int(loops.get(count_loop, 0)) + 1
@@ -1185,11 +1207,12 @@ def retry(connection: sqlite3.Connection, store: WorkflowStore, run: sqlite3.Row
         go_back(connection, run, definition, decision["changes"]["goTo"], notes, now, state="planned",
                 count_loop=decision["key"])
         return
-    target = run["retry_stage"] or run["failure_stage"] or run["stage_key"]
+    retry_stage = run["retry_stage"] or run["failure_stage"] or run["stage_key"]
+    # In a parallel block only the agents that didn't finish run again (and the one a check refused).
+    target = model.top_key(definition, retry_stage)
     stages = json.loads(run["stages_json"])
-    for key in model.stages_between(definition, target, run["stage_key"]):
-        stage_state(stages, key, "pending", now)
-        stages[key]["startedAt"] = stages[key]["endedAt"] = None
+    for key in model.stages_between(definition, target, model.top_key(definition, run["stage_key"])):
+        reset_stage(stages, definition, key, now, keep_accepted_branches=True, rerun=retry_stage)
     update_run(connection, run, now, state="planned", stage_key=target, bindings_json=model.canonical_json(bindings),
                stages_json=model.canonical_json(stages), attention_code=None, attention_message=None,
                failure_stage=None, failure_code=None, failure_message=None, retry_stage=None, cancel_requested=0,

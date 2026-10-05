@@ -171,7 +171,7 @@ class WorkflowRouteTests(unittest.TestCase):
                                                     "description": "Draft until the review passes."},
                                  "templates-save.json")
         templates = self.ok("templates/list", {}, "templates-list-v2.json")["templates"]
-        self.assertEqual([item["source"] for item in templates], ["yours", "builtin"])
+        self.assertEqual([item["source"] for item in templates], ["yours", "builtin", "builtin"])
         used = self.ok("templates/use", {"templateId": saved_template["templateId"], "name": "Monthly newsletter"},
                        "templates-use-yours.json")
         self.assertEqual(self.ok("get", {"workflowId": used["workflowId"]})["workflow"]["name"], "Monthly newsletter")

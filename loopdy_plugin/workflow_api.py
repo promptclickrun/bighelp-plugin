@@ -28,6 +28,8 @@ CAPABILITY = "native-workflows-v1"
 EDIT_CAPABILITY = "native-workflows-edit-v1"
 # Manual or scheduled triggers (workflow_trigger.py); needs Hermes' cron jobs.
 TRIGGER_CAPABILITY = "native-workflows-trigger-v1"
+# Parallel blocks (several agent stages at once) and decisions that read several verdicts.
+PARALLEL_CAPABILITY = "native-workflows-parallel-v1"
 # Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
 REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)
