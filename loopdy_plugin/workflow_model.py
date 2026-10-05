@@ -33,7 +33,15 @@ MAX_STAGE_MINUTES = 60
 DEFAULT_STAGE_MINUTES = 20
 MAX_REVISIONS = 5
 DEFAULT_MAX_REVISIONS = 2
-STAGE_KINDS = ("agent", "check", "decision", "signoff")
+STAGE_KINDS = ("agent", "check", "decision", "signoff", "parallel")
+# A parallel block runs this many agent stages at once (schemaVersion 2 only).
+MIN_BRANCHES = 2
+MAX_BRANCHES = 5
+# Every stage, the agents inside parallel blocks included.
+MAX_ALL_STAGES = 40
+# A decision can read the verdicts of several stages (a parallel block's agents).
+MAX_DECISION_SOURCES = MAX_BRANCHES
+DECISION_REQUIRES = ("all", "any")
 INPUT_TYPES = ("text", "long_text", "number", "choice")
 INPUT_TEXT_LIMITS = {"text": 2000, "long_text": 20000}
 OUTPUT_TYPES = ("markdown_file", "text", "number", "decision", "notes")
@@ -177,6 +185,8 @@ def parse_definition(value: Any) -> dict:
     for index, stage in enumerate(_list(top["stages"], "Stages", MAX_STAGES)):
         stages.append(_parse_stage(stage, f"Stage {index + 1}", graph=version == 2))
     result["stages"] = stages
+    if len(all_stages(result)) > MAX_ALL_STAGES:
+        _fail(f"A workflow has at most {MAX_ALL_STAGES} stages, counting the agents in parallel blocks.")
     if "layout" in top:
         result["layout"] = _parse_layout(top["layout"])
     if encoded_size(result) > MAX_DEFINITION_BYTES:
@@ -222,9 +232,13 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
     elif kind == "check":
         _object(stage, where, common + ("rules",), edge)
     elif kind == "decision":
-        _object(stage, where, common + ("on", "changes"), ("pass",))
+        _object(stage, where, common + ("on", "changes"), ("pass", "require"))
     elif kind == "signoff":
         _object(stage, where, common + ("file",), edge)
+    elif kind == "parallel":
+        if not graph:
+            _fail(f"{where} is a parallel block, which needs schemaVersion 2.")
+        _object(stage, where, common + ("branches",), edge)
     else:
         _fail(f"{where} has an unknown kind.")
     result: dict[str, Any] = {"key": _key(stage["key"], f"{where} key"), "kind": kind,
@@ -278,10 +292,29 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
                 parsed["max"] = _number(rule["max"], f"{label} maximum")
             rules.append(parsed)
         result["rules"] = rules
+    elif kind == "parallel":
+        branches = []
+        for number, branch in enumerate(_list(stage["branches"], f"{where} agents", MAX_BRANCHES)):
+            label = f"{where} agent {number + 1}"
+            if type(branch) is not dict or branch.get("kind") != "agent":
+                _fail(f"{label} must be an agent stage.")
+            if "next" in branch:
+                _fail(f"{label} can't name a stage after it: the block goes on when all its agents are done.")
+            branches.append(_parse_stage(branch, label))
+        result["branches"] = branches
     elif kind == "decision":
-        if type(stage["on"]) is not str or not _is_reference(stage["on"]) or stage["on"].startswith("inputs."):
-            _fail(f"{where} must read a stage output.")
-        result["on"] = stage["on"]
+        # One verdict (`"review.decision"`), or several (a parallel block's agents) with `require`.
+        sources = stage["on"] if type(stage["on"]) is list else [stage["on"]]
+        if not 1 <= len(sources) <= MAX_DECISION_SOURCES:
+            _fail(f"{where} reads 1 to {MAX_DECISION_SOURCES} decisions.")
+        for source in sources:
+            if type(source) is not str or not _is_reference(source) or source.startswith("inputs."):
+                _fail(f"{where} must read a stage output.")
+        result["on"] = stage["on"] if type(stage["on"]) is str else list(sources)
+        if "require" in stage:
+            if stage["require"] not in DECISION_REQUIRES:
+                _fail(f"{where} must require all or any of its decisions to pass.")
+            result["require"] = stage["require"]
         target = stage.get("pass", "next")
         if target != "next":
             _key(target, f"{where} pass")
@@ -312,11 +345,45 @@ def stage_index(definition: dict) -> dict[str, int]:
     return {stage["key"]: index for index, stage in enumerate(definition["stages"])}
 
 
-def stage_by_key(definition: dict, key: str) -> dict | None:
+def all_stages(definition: dict) -> list[dict]:
+    """Every stage in list order, each parallel block followed by its agents."""
+    result = []
     for stage in definition["stages"]:
+        result.append(stage)
+        result.extend(stage.get("branches", ()))
+    return result
+
+
+def stage_by_key(definition: dict, key: str) -> dict | None:
+    """A stage by key, the agents inside parallel blocks included."""
+    for stage in all_stages(definition):
         if stage["key"] == key:
             return stage
     return None
+
+
+def parent_key(definition: dict, key: str) -> str | None:
+    """The parallel block an agent belongs to, or None for a stage in the flow itself."""
+    for stage in definition["stages"]:
+        if any(branch["key"] == key for branch in stage.get("branches", ())):
+            return stage["key"]
+    return None
+
+
+def top_key(definition: dict, key: str) -> str:
+    """The stage in the flow itself: a parallel block's agent stands for its block."""
+    return parent_key(definition, key) or key
+
+
+def decision_sources(stage: dict) -> list[str]:
+    """The decisions a decision stage reads, one or several."""
+    return list(stage["on"]) if type(stage["on"]) is list else [stage["on"]]
+
+
+def decision_passes(stage: dict, values: list[Any]) -> bool:
+    """A decision passes unless its verdicts ask for changes: all must pass (the default), or any."""
+    passed = [value != "changes" for value in values]
+    return any(passed) if stage.get("require") == "any" else all(passed)
 
 
 def output_spec(definition: dict, reference: str) -> dict | None:
@@ -459,7 +526,8 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
         issues.append(_issue("name_missing", "Give the workflow a name."))
     if not stages:
         issues.append(_issue("no_stages", "Add at least one stage."))
-    for collection, label in ((definition["roles"], "role"), (definition["inputs"], "input"), (stages, "stage")):
+    for collection, label in ((definition["roles"], "role"), (definition["inputs"], "input"),
+                              (all_stages(definition), "stage")):
         keys: set[str] = set()
         for item in collection:
             if item["key"] in keys:
@@ -477,78 +545,94 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
     dominators = _dominators(graph, stages[0]["key"]) if graph_mode and stages else {}
     if graph_mode:
         issues.extend(_graph_issues(definition, graph, reach, index))
+    def earlier_output(reference: str, anchor: str, position: int) -> dict | None:
+        """The output, when its stage always runs before `anchor` (a parallel block for its agents)."""
+        spec = output_spec(definition, reference)
+        if spec is None:
+            return None
+        source = top_key(definition, spec["stageKey"])
+        if not graph_mode:
+            return spec if index.get(source, len(stages)) < position else None
+        if anchor not in reach:
+            return spec  # Already reported as unreachable.
+        return spec if source != anchor and source in dominators.get(anchor, ()) else None
+
+    def check_agent(stage: dict, anchor: str, position: int) -> None:
+        key, title = stage["key"], stage["title"]
+        used_roles.add(stage["role"])
+        if stage["role"] not in roles:
+            issues.append(_issue("role_unknown", f"{title} uses a role this workflow doesn't have.", stage=key))
+        if not stage["instructions"].strip():
+            issues.append(_issue("instructions_missing", f"Tell {title} what to do.", stage=key))
+        if not stage["outputs"]:
+            issues.append(_issue("no_outputs", f"{title} must hand off at least one output.", stage=key))
+        names = [output["name"] for output in stage["outputs"]]
+        if len(names) != len(set(names)):
+            issues.append(_issue("duplicate_key", f"{title} has two outputs with one name.", stage=key))
+        for output in stage["outputs"]:
+            if output["type"] == "decision" and not output.get("values"):
+                issues.append(_issue("decision_values", f"{title} needs decision values.", stage=key))
+        for use in stage["uses"]:
+            head, tail = split_reference(use)
+            if head == "inputs":
+                if tail not in inputs:
+                    issues.append(_issue("use_unknown", f"{title} uses {use}, which isn't an input.", stage=key))
+                continue
+            if earlier_output(use, anchor, position) is not None:
+                continue
+            if output_spec(definition, use) is None:
+                issues.append(_issue("use_unknown", f"{title} uses {use}, which no earlier stage makes.",
+                                     stage=key))
+            elif anchor != key and top_key(definition, split_reference(use)[0]) == anchor:
+                issues.append(_issue("uses_parallel", f"{title} uses {use}, which runs at the same time.",
+                                     stage=key))
+            elif graph_mode:
+                issues.append(_issue("uses_not_before", f"{title} uses {use}, which doesn't always come first.",
+                                     stage=key))
+            else:
+                issues.append(_issue("use_forward", f"{title} uses {use}, which comes later.", stage=key))
+        for tool in stage["tools"]:
+            if tool in DENIED_TOOLSETS or tool.startswith("hermes-"):
+                issues.append(_issue("tool_not_allowed", f"{title} can't use {tool} in a workflow.", stage=key))
+            elif tool in WARNED_TOOLSETS:
+                issues.append(_issue("tool_terminal", f"{title} can run commands on this computer.",
+                                     "warning", stage=key))
+            if toolset_known is not None and tool not in DENIED_TOOLSETS and not toolset_known(tool):
+                issues.append(_issue("toolset_unknown", f"This computer has no tool called {tool}.", stage=key))
+        if not tool_scope:
+            issues.append(_issue("tool_scope_unsupported",
+                                 f"This computer's Hermes can't limit the tools of {title}. Update Hermes.",
+                                 stage=key))
+
     for position, stage in enumerate(stages):
         key, title = stage["key"], stage["title"]
-
-        def earlier_output(reference: str) -> dict | None:
-            """The output, when its stage always runs before this one."""
-            spec = output_spec(definition, reference)
-            if spec is None:
-                return None
-            if not graph_mode:
-                return spec if index.get(spec["stageKey"], len(stages)) < position else None
-            if key not in reach:
-                return spec  # Already reported as unreachable.
-            return spec if spec["stageKey"] != key and spec["stageKey"] in dominators.get(key, ()) else None
-
         if stage["kind"] == "agent":
-            used_roles.add(stage["role"])
-            if stage["role"] not in roles:
-                issues.append(_issue("role_unknown", f"{title} uses a role this workflow doesn't have.", stage=key))
-            if not stage["instructions"].strip():
-                issues.append(_issue("instructions_missing", f"Tell {title} what to do.", stage=key))
-            if not stage["outputs"]:
-                issues.append(_issue("no_outputs", f"{title} must hand off at least one output.", stage=key))
-            names = [output["name"] for output in stage["outputs"]]
-            if len(names) != len(set(names)):
-                issues.append(_issue("duplicate_key", f"{title} has two outputs with one name.", stage=key))
-            for output in stage["outputs"]:
-                if output["type"] == "decision" and not output.get("values"):
-                    issues.append(_issue("decision_values", f"{title} needs decision values.", stage=key))
-            for use in stage["uses"]:
-                head, tail = split_reference(use)
-                if head == "inputs":
-                    if tail not in inputs:
-                        issues.append(_issue("use_unknown", f"{title} uses {use}, which isn't an input.", stage=key))
-                    continue
-                if earlier_output(use) is not None:
-                    continue
-                if output_spec(definition, use) is None:
-                    issues.append(_issue("use_unknown", f"{title} uses {use}, which no earlier stage makes.",
-                                         stage=key))
-                elif graph_mode:
-                    issues.append(_issue("uses_not_before", f"{title} uses {use}, which doesn't always come first.",
-                                         stage=key))
-                else:
-                    issues.append(_issue("use_forward", f"{title} uses {use}, which comes later.", stage=key))
-            for tool in stage["tools"]:
-                if tool in DENIED_TOOLSETS or tool.startswith("hermes-"):
-                    issues.append(_issue("tool_not_allowed", f"{title} can't use {tool} in a workflow.", stage=key))
-                elif tool in WARNED_TOOLSETS:
-                    issues.append(_issue("tool_terminal", f"{title} can run commands on this computer.",
-                                         "warning", stage=key))
-                if toolset_known is not None and tool not in DENIED_TOOLSETS and not toolset_known(tool):
-                    issues.append(_issue("toolset_unknown", f"This computer has no tool called {tool}.", stage=key))
-            if not tool_scope:
-                issues.append(_issue("tool_scope_unsupported",
-                                     f"This computer's Hermes can't limit the tools of {title}. Update Hermes.",
-                                     stage=key))
+            check_agent(stage, key, position)
+        elif stage["kind"] == "parallel":
+            if not MIN_BRANCHES <= len(stage["branches"]) <= MAX_BRANCHES:
+                issues.append(_issue("parallel_branches",
+                                     f"{title} runs {MIN_BRANCHES} to {MAX_BRANCHES} agents at once.", stage=key))
+            for branch in stage["branches"]:
+                check_agent(branch, key, position)
         elif stage["kind"] == "check":
             for rule in stage["rules"]:
-                spec = earlier_output(rule["of"])
+                spec = earlier_output(rule["of"], key, position)
                 if spec is None or spec["type"] not in RULE_TARGETS[rule["type"]]:
                     issues.append(_issue("check_target", f"{title} can't check {rule['of']} that way.", stage=key))
                 if "min" in rule and rule["min"] > rule["max"]:
                     issues.append(_issue("check_range", f"{title} has a minimum above its maximum.", stage=key))
         elif stage["kind"] == "decision":
-            spec = earlier_output(stage["on"])
-            if spec is None or spec["type"] != "decision":
-                issues.append(_issue("decision_source", f"{title} must read an earlier decision.", stage=key))
-            elif sorted(spec.get("values", [])) != sorted(DECISION_VALUES):
-                issues.append(_issue("decision_values", f"{title} needs the values pass and changes.", stage=key))
+            for source in decision_sources(stage):
+                spec = earlier_output(source, key, position)
+                if spec is None or spec["type"] != "decision":
+                    issues.append(_issue("decision_source", f"{title} must read an earlier decision.", stage=key))
+                elif sorted(spec.get("values", [])) != sorted(DECISION_VALUES):
+                    issues.append(_issue("decision_values", f"{title} needs the values pass and changes.",
+                                         stage=key))
             target = stage["changes"]["goTo"]
             target_stage = stage_by_key(definition, target)
-            if target_stage is None or target_stage["kind"] != "agent":
+            if (target_stage is None or target_stage["kind"] not in ("agent", "parallel")
+                    or parent_key(definition, target) is not None):
                 issues.append(_issue("goto_invalid", f"{title} must send changes back to an agent stage.",
                                      stage=key))
             elif graph_mode and (target == key or key not in _reachable(graph, target)):
@@ -563,7 +647,7 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
             elif stage["pass"] != "next" and index.get(stage["pass"], -1) <= position:
                 issues.append(_issue("pass_invalid", f"{title} must pass to a later stage.", stage=key))
         elif stage["kind"] == "signoff":
-            spec = earlier_output(stage["file"])
+            spec = earlier_output(stage["file"], key, position)
             if spec is None or spec["type"] != "markdown_file":
                 issues.append(_issue("signoff_file", f"{title} must show a file an earlier stage wrote.", stage=key))
     for role_key, label in roles.items():
@@ -684,7 +768,46 @@ RESEARCH_DRAFT_REVIEW = {
         {"key": "signoff", "kind": "signoff", "title": "Your sign-off", "file": "draft.draft"},
     ],
 }
-TEMPLATES = {"research-draft-review": RESEARCH_DRAFT_REVIEW}
+def _take(key: str, role: str, title: str, angle: str) -> dict:
+    return {"key": key, "kind": "agent", "title": title, "role": role,
+            "instructions": (f"Answer the question from this angle: {angle}. Be concrete and short. Then say pass when "
+                             "your answer stands on its own, or changes when the question needs a sharper focus, "
+                             "with notes saying why."),
+            "tools": ["web"], "uses": ["inputs.question"],
+            "outputs": [{"name": "answer", "type": "markdown_file"},
+                        {"name": "decision", "type": "decision", "values": ["pass", "changes"]},
+                        {"name": "notes", "type": "notes"}]}
+
+
+# Three agents look at one question at the same time, then one writes the answer from all three.
+THREE_TAKES = {
+    "schemaVersion": 2,
+    "name": "Three takes, one answer",
+    "description": "Three agents answer at the same time from different angles. When all three agree, one writes "
+                   "the answer from them, and you sign it off.",
+    "roles": [{"key": "researcher", "label": "Researcher"}, {"key": "skeptic", "label": "Skeptic"},
+              {"key": "practitioner", "label": "Practitioner"}, {"key": "writer", "label": "Writer"}],
+    "inputs": [{"key": "question", "label": "Question", "type": "long_text", "required": True,
+                "sample": "Should a small team keep a shared checklist for releases?"}],
+    "limits": {"stageMinutes": 20, "maxRevisions": 1},
+    "stages": [
+        {"key": "takes", "kind": "parallel", "title": "Three takes at once", "next": "agree",
+         "branches": [_take("facts", "researcher", "The facts", "what is known, with sources"),
+                      _take("risks", "skeptic", "The risks", "what could go wrong, and what is missing"),
+                      _take("practice", "practitioner", "In practice", "what to actually do, step by step")]},
+        {"key": "agree", "kind": "decision", "title": "All three agree", "require": "all",
+         "on": ["facts.decision", "risks.decision", "practice.decision"],
+         "pass": "answer", "changes": {"goTo": "takes"}},
+        {"key": "answer", "kind": "agent", "title": "One answer", "role": "writer",
+         "instructions": "Write one clear answer from the three takes. Keep what they agree on, and say where they "
+                         "differ.",
+         "uses": ["inputs.question", "facts.answer", "risks.answer", "practice.answer"],
+         "outputs": [{"name": "answer", "type": "markdown_file"}], "next": "signoff"},
+        {"key": "signoff", "kind": "signoff", "title": "Your sign-off", "file": "answer.answer", "next": None},
+    ],
+}
+
+TEMPLATES = {"research-draft-review": RESEARCH_DRAFT_REVIEW, "three-takes": THREE_TAKES}
 
 
 def template(template_id: str) -> dict | None:

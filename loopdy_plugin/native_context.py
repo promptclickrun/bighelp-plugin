@@ -311,10 +311,11 @@ def _native_features(
     try:
         from .workflow_api import (CAPABILITY as workflows_capability, EDIT_CAPABILITY as workflows_edit_capability,
                                    TRIGGER_CAPABILITY as workflows_trigger_capability,
+                                   PARALLEL_CAPABILITY as workflows_parallel_capability,
                                    probe as workflows_probe, triggers_available)
         reason = workflows_probe()
         if reason is None:
-            features.extend((workflows_capability, workflows_edit_capability))
+            features.extend((workflows_capability, workflows_edit_capability, workflows_parallel_capability))
             if triggers_available():
                 features.append(workflows_trigger_capability)
             else:
@@ -327,6 +328,7 @@ def _native_features(
             }.get(reason, "the workflow store can't be opened.")
             skip(workflows_capability, why)
             skip(workflows_edit_capability, why)
+            skip(workflows_parallel_capability, why)
             skip(workflows_trigger_capability, why)
             if unavailable is not None:
                 # A fixed code, so the app can say what to do (update Hermes, for example).
@@ -334,6 +336,7 @@ def _native_features(
     except ImportError:
         skip("native-workflows-v1", "workflow support is unimportable.")
         skip("native-workflows-edit-v1", "workflow support is unimportable.")
+        skip("native-workflows-parallel-v1", "workflow support is unimportable.")
         skip("native-workflows-trigger-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
     if live_alerts_available():

@@ -154,7 +154,10 @@ class Coordinator:
             stage = model.stage_by_key(definition, attempt["stage_key"])
             connection.execute("UPDATE attempts SET state='unknown', outcome_code='unknown', ended_at=?, "
                                "coordinator_epoch=? WHERE id=?", (now, self.epoch, attempt["id"]))
-            self._attention(connection, run, now, code, f"We don't know how {stage['title']} ended.")
+            if run["state"] not in ACTIVE_STATES:
+                return  # A parallel block's run that already failed or ended.
+            self._attention(connection, run, now, code, f"We don't know how {stage['title']} ended.",
+                            stage_key=attempt["stage_key"])
 
         self._with_run(attempt["run_id"], settle)
 
@@ -197,6 +200,14 @@ class Coordinator:
                                           (self.epoch,)).fetchall()
         for attempt in attempts:
             self._watch(attempt)
+        # A parallel block's run that failed or ended stops its other agents: nothing waits for them.
+        with self.store.read() as connection:
+            orphans = connection.execute(
+                f"SELECT a.* FROM attempts a JOIN runs r ON r.id=a.run_id WHERE a.state IN ({_LIVE}) "
+                "AND a.coordinator_epoch=? AND a.stop_reason IS NULL AND a.pid IS NOT NULL "
+                "AND r.state IN ('failed','succeeded','cancelled')", (self.epoch,)).fetchall()
+        for attempt in orphans:
+            self._stop(attempt, "sibling")
         with self.store.read() as connection:
             accepted = connection.execute("SELECT id FROM runs WHERE state='accepted' ORDER BY seq").fetchall()
         for row in accepted:
@@ -227,8 +238,9 @@ class Coordinator:
                 stage = model.stage_by_key(definition, attempt["stage_key"])
                 connection.execute("UPDATE attempts SET state='unknown', outcome_code='unknown', ended_at=? "
                                    "WHERE id=?", (now, attempt["id"]))
-                self._attention(connection, run, now, "coordinator_restarted",
-                                f"We don't know how {stage['title']} ended.")
+                if run["state"] in ACTIVE_STATES:
+                    self._attention(connection, run, now, "coordinator_restarted",
+                                    f"We don't know how {stage['title']} ended.", stage_key=attempt["stage_key"])
             self._with_run(attempt["run_id"], settle)
             return
         stream = attempt["runner"] == "stream"
@@ -353,6 +365,14 @@ class Coordinator:
         def stopped(connection, run, definition, now):
             stage = model.stage_by_key(definition, attempt["stage_key"])
             stages = json.loads(run["stages_json"])
+            if reason == "sibling" or run["state"] not in ACTIVE_STATES:
+                # Another agent of its parallel block decided the run already.
+                connection.execute("UPDATE attempts SET state='cancelled', outcome_code='cancelled', ended_at=?, "
+                                   "exit_code=? WHERE id=?", (now, exit_code, attempt["id"]))
+                if stages.get(attempt["stage_key"], {}).get("state") not in ("accepted", "failed"):
+                    stage_state(stages, attempt["stage_key"], "cancelled", now, end=True)
+                    update_run(connection, run, now, stages_json=model.canonical_json(stages))
+                return
             if reason == "timeout":
                 connection.execute("UPDATE attempts SET state='timed_out', outcome_code='timed_out', ended_at=?, "
                                    "exit_code=? WHERE id=?", (now, exit_code, attempt["id"]))
@@ -362,11 +382,14 @@ class Coordinator:
             connection.execute("UPDATE attempts SET state='cancelled', outcome_code='cancelled', ended_at=?, "
                                "exit_code=? WHERE id=?", (now, exit_code, attempt["id"]))
             stage_state(stages, attempt["stage_key"], "cancelled", now, end=True)
-            update_run(connection, run, now, state="cancelled", ended_at=now,
+            top = model.top_key(definition, attempt["stage_key"])
+            if top != attempt["stage_key"]:
+                stage_state(stages, top, "cancelled", now, end=True)
+            update_run(connection, run, now, state="cancelled", ended_at=now, stage_key=top,
                        stages_json=model.canonical_json(stages))
-            add_event(connection, run["id"], now, "cancelled", "The run was cancelled.", attempt["stage_key"])
+            add_event(connection, run["id"], now, "cancelled", "The run was cancelled.", top)
 
-        if reason in ("timeout", "cancel"):
+        if reason in ("timeout", "cancel", "sibling"):
             self._with_run(attempt["run_id"], stopped)
             return
         with self.store.read() as connection:
@@ -394,7 +417,11 @@ class Coordinator:
                 self._add_lines(connection, attempt["id"],
                                 [("result", "Finished." if exit_code == 0 else "Ended with an error.")], now)
             stage_state(stages, attempt["stage_key"], "checking_output", now)
-            update_run(connection, run, now, state="checking_output", stages_json=model.canonical_json(stages))
+            if model.parent_key(definition, attempt["stage_key"]) is None and run["state"] in ACTIVE_STATES:
+                update_run(connection, run, now, state="checking_output", stages_json=model.canonical_json(stages))
+            else:
+                # A parallel block's agent: the block runs on while the others work.
+                update_run(connection, run, now, stages_json=model.canonical_json(stages))
             add_event(connection, run["id"], now, "stage_checking", f"Checking what {stage['title']} handed off.",
                       attempt["stage_key"], attempt["number"])
             return definition, stage
@@ -447,12 +474,29 @@ class Coordinator:
                                (now, attempt["id"]))
             stages = json.loads(run["stages_json"])
             stage_state(stages, attempt["stage_key"], "accepted", now, end=True)
-            update_run(connection, run, now, state="accepted", stages_json=model.canonical_json(stages),
-                       next_stage=model.next_stage_key(definition, attempt["stage_key"]), change_notes_json=None,
-                       artifact_bytes=run["artifact_bytes"] + total, tokens_in=run["tokens_in"] + row["tokens_in"],
-                       tokens_out=run["tokens_out"] + row["tokens_out"])
+            counts = dict(artifact_bytes=run["artifact_bytes"] + total, tokens_in=run["tokens_in"] + row["tokens_in"],
+                          tokens_out=run["tokens_out"] + row["tokens_out"])
+            group = model.stage_by_key(definition, model.parent_key(definition, attempt["stage_key"]) or "")
+            if group is None:
+                update_run(connection, run, now, state="accepted", stages_json=model.canonical_json(stages),
+                           next_stage=model.next_stage_key(definition, attempt["stage_key"]), change_notes_json=None,
+                           **counts)
+                add_event(connection, run["id"], now, "stage_accepted", f"{stage['title']} is done.",
+                          attempt["stage_key"], attempt["number"])
+                return
             add_event(connection, run["id"], now, "stage_accepted", f"{stage['title']} is done.",
                       attempt["stage_key"], attempt["number"])
+            done = all(stages.get(branch["key"], {}).get("state") == "accepted" for branch in group["branches"])
+            if done and run["state"] in ACTIVE_STATES:
+                stage_state(stages, group["key"], "accepted", now, end=True)
+                update_run(connection, run, now, state="accepted", stage_key=group["key"],
+                           stages_json=model.canonical_json(stages), change_notes_json=None,
+                           next_stage=model.next_stage_key(definition, group["key"]), **counts)
+                add_event(connection, run["id"], now, "stage_accepted", f"{group['title']}: every agent is done.",
+                          group["key"])
+            else:
+                # The others still work (or the run stopped meanwhile): keep this agent's work for a retry.
+                update_run(connection, run, now, stages_json=model.canonical_json(stages), **counts)
 
         self._with_run(attempt["run_id"], accept)
 
@@ -488,14 +532,25 @@ class Coordinator:
                                (code, now, attempt["id"]))
             connection.execute("UPDATE runs SET tokens_in=tokens_in+?, tokens_out=tokens_out+? WHERE id=?",
                                (row["tokens_in"], row["tokens_out"], run["id"]))
-            self._fail(connection, run, now, attempt["stage_key"], code, message)
+            if run["state"] not in ACTIVE_STATES:
+                return  # Another agent of its parallel block already decided the run.
+            self._fail(connection, connection.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone(),
+                       now, attempt["stage_key"], code, message)
         self._with_run(attempt["run_id"], change)
+
+    def _top(self, connection: sqlite3.Connection, run: sqlite3.Row, key: str) -> str:
+        """The stage in the flow itself: a parallel block's agent stands for its block."""
+        return model.top_key(self.store._definition(connection, run["workflow_id"], run["revision"]), key)
 
     def _fail(self, connection: sqlite3.Connection, run: sqlite3.Row, now: float, stage_key: str, code: str,
               message: str, retry_stage: str | None = None, stages: dict | None = None) -> None:
         stages = json.loads(run["stages_json"]) if stages is None else stages
         stage_state(stages, stage_key, "failed", now, end=True)
-        update_run(connection, run, now, state="failed", stage_key=stage_key, failure_stage=stage_key,
+        top = self._top(connection, run, stage_key)
+        if top != stage_key:
+            # One agent of a parallel block failed: the block did. The others stop (tick).
+            stage_state(stages, top, "failed", now, end=True)
+        update_run(connection, run, now, state="failed", stage_key=top, failure_stage=stage_key,
                    failure_code=code, failure_message=clean_text(message, 300), retry_stage=retry_stage,
                    ended_at=now, stages_json=model.canonical_json(stages))
         add_event(connection, run["id"], now, "failed" if code != "check_failed" else "check_failed",
@@ -506,7 +561,8 @@ class Coordinator:
         stage_key = stage_key or run["stage_key"]
         stages = json.loads(run["stages_json"]) if stages is None else stages
         stage_state(stages, stage_key, "needs_attention", now)
-        update_run(connection, run, now, state="needs_attention", stage_key=stage_key, attention_code=code,
+        update_run(connection, run, now, state="needs_attention", stage_key=self._top(connection, run, stage_key),
+                   attention_code=code,
                    attention_message=clean_text(message, 300), stages_json=model.canonical_json(stages), **extra)
         add_event(connection, run["id"], now, "needs_attention", message, stage_key)
 
@@ -552,6 +608,8 @@ class Coordinator:
         stage = model.stage_by_key(definition, stage_key)
         if stage["kind"] == "agent":
             return self._launch(run, definition, stage, from_states)
+        if stage["kind"] == "parallel":
+            return self._start_parallel(run, definition, stage, from_states)
 
         def change(connection, run, definition, now):
             if run["state"] not in from_states:
@@ -567,6 +625,43 @@ class Coordinator:
                 self._wait_for_signoff(connection, run, definition, stage, stages, now)
             return True
         return bool(self._with_run(run_id, change))
+
+    def _start_parallel(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...]) -> bool:
+        """Every agent of the block at once. On a retry, the ones that finished keep their work."""
+        with self.store.read() as connection:
+            live = {row["stage_key"] for row in connection.execute(
+                f"SELECT stage_key FROM attempts WHERE run_id=? AND state IN ({_LIVE})", (run["id"],))}
+        stages = json.loads(run["stages_json"])
+        todo = [branch for branch in stage["branches"]
+                if stages.get(branch["key"], {}).get("state") != "accepted" and branch["key"] not in live]
+
+        def begin(connection, fresh, definition, now):
+            if fresh["state"] not in from_states or fresh["cancel_requested"]:
+                return False
+            current = json.loads(fresh["stages_json"])
+            stage_state(current, stage["key"], "running", now, start=True, iteration=fresh["iteration"])
+            if not todo and not live:
+                stage_state(current, stage["key"], "accepted", now, end=True)
+                update_run(connection, fresh, now, state="accepted", stage_key=stage["key"],
+                           stages_json=model.canonical_json(current),
+                           next_stage=model.next_stage_key(definition, stage["key"]))
+                return False
+            update_run(connection, fresh, now, state="launched", stage_key=stage["key"], next_stage=None,
+                       stages_json=model.canonical_json(current),
+                       started_at=fresh["started_at"] if fresh["started_at"] is not None else now)
+            add_event(connection, fresh["id"], now, "stage_launched",
+                      f"{stage['title']}: {len(todo)} agents start at once.", stage["key"])
+            return True
+
+        if not self._with_run(run["id"], begin):
+            return False
+        for branch in todo:
+            with self.store.read() as connection:
+                fresh = connection.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone()
+            if fresh is None or fresh["state"] not in ("launched", "running") or fresh["cancel_requested"]:
+                break
+            self._launch(fresh, definition, branch, ("launched", "running"), group=stage)
+        return True
 
     @staticmethod
     def _latest(connection: sqlite3.Connection, run_id: str, reference: str) -> sqlite3.Row | None:
@@ -596,10 +691,13 @@ class Coordinator:
         add_event(connection, run["id"], now, "check_passed", f"{stage['title']} passed.", stage["key"])
 
     def _decide(self, connection, run, definition, stage, stages, now) -> None:
-        row = self._latest(connection, run["id"], stage["on"])
-        value = json.loads(row["value_json"]) if row is not None and row["value_json"] else None
-        source, _ = model.split_reference(stage["on"])
-        if value != "changes":
+        # One verdict, or several (a parallel block's agents): all must pass, or any (`require`).
+        verdicts = []
+        for reference in model.decision_sources(stage):
+            row = self._latest(connection, run["id"], reference)
+            value = json.loads(row["value_json"]) if row is not None and row["value_json"] else None
+            verdicts.append((reference, row, value))
+        if model.decision_passes(stage, [value for _, _, value in verdicts]):
             stage_state(stages, stage["key"], "accepted", now, end=True)
             target = model.next_stage_key(definition, stage["key"]) if stage["pass"] == "next" else stage["pass"]
             update_run(connection, run, now, state="accepted", stage_key=stage["key"],
@@ -607,10 +705,14 @@ class Coordinator:
             add_event(connection, run["id"], now, "decision_pass", f"{stage['title']}: passed.", stage["key"])
             return
         notes = []
-        for artifact in connection.execute(
-                "SELECT value_json FROM artifacts WHERE run_id=? AND stage_key=? AND type='notes' AND iteration=? "
-                "ORDER BY id", (run["id"], source, row["iteration"])):
-            notes.extend(json.loads(artifact["value_json"] or "[]"))
+        for reference, row, value in verdicts:
+            if value != "changes" or row is None:
+                continue
+            source, _ = model.split_reference(reference)
+            for artifact in connection.execute(
+                    "SELECT value_json FROM artifacts WHERE run_id=? AND stage_key=? AND type='notes' AND iteration=? "
+                    "ORDER BY id", (run["id"], source, row["iteration"])):
+                notes.extend(json.loads(artifact["value_json"] or "[]"))
         loops = json.loads(run["loops_json"] or "{}")
         used = int(loops.get(stage["key"], 0))
         limit = model.max_revisions(definition, stage)
@@ -671,7 +773,9 @@ class Coordinator:
             result.append(item)
         return result
 
-    def _launch(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...]) -> bool:
+    def _launch(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...],
+                *, group: dict | None = None) -> bool:
+        """One agent stage, or one agent of the parallel block `group` (the run stays on the block)."""
         bindings = json.loads(run["bindings_json"])
         agent = bindings.get(stage["role"])
         home = runner.profile_home(self.hermes_root, agent) if agent else None
@@ -704,7 +808,8 @@ class Coordinator:
         stream = self.mode == "stream"
 
         def launched(connection, fresh, definition, now):
-            if fresh["state"] not in from_states or fresh["version"] != run["version"] or fresh["cancel_requested"]:
+            if (fresh["state"] not in from_states or fresh["cancel_requested"]
+                    or (group is None and fresh["version"] != run["version"])):
                 return False
             connection.execute(
                 "INSERT INTO attempts (id, run_id, stage_key, iteration, number, state, agent_id, coordinator_epoch, "
@@ -714,7 +819,8 @@ class Coordinator:
                  now + minutes * 60, str(directory), self.mode, 1 if stream else 0))
             stages = json.loads(fresh["stages_json"])
             stage_state(stages, stage["key"], "launched", now, start=True, iteration=iteration)
-            update_run(connection, fresh, now, state="launched", stage_key=stage["key"], next_stage=None,
+            update_run(connection, fresh, now, state=fresh["state"] if group is not None else "launched",
+                       stage_key=group["key"] if group is not None else stage["key"], next_stage=None,
                        stages_json=model.canonical_json(stages),
                        started_at=fresh["started_at"] if fresh["started_at"] is not None else now)
             add_event(connection, fresh["id"], now, "stage_launched", f"{stage['title']} started with {agent}.",
@@ -737,7 +843,9 @@ class Coordinator:
             def failed(connection, fresh, definition, now):
                 connection.execute("UPDATE attempts SET state='failed', outcome_code='spawn_failed', ended_at=? "
                                    "WHERE id=?", (now, attempt_id))
-                self._fail(connection, fresh, now, stage["key"], "spawn_failed", f"{stage['title']} couldn't start.")
+                if fresh["state"] in ACTIVE_STATES:
+                    self._fail(connection, fresh, now, stage["key"], "spawn_failed",
+                               f"{stage['title']} couldn't start.")
             self._with_run(run["id"], failed)
             return True
         fingerprint = self.host.fingerprint(pid) or "unverified"

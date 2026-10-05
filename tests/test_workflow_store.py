@@ -172,7 +172,7 @@ class EditStoreTests(unittest.TestCase):
         self.assertRegex(template_id, r"^tpl-[0-9a-f]{16}$")
         templates = self.store.list_templates()["templates"]
         self.assertEqual([(item["id"], item["source"]) for item in templates],
-                         [(template_id, "yours"), ("research-draft-review", "builtin")])
+                         [(template_id, "yours"), ("research-draft-review", "builtin"), ("three-takes", "builtin")])
         self.assertEqual((templates[0]["name"], templates[0]["description"], templates[0]["stageCount"]),
                          ("Loop newsletter", "My loop.", 5))
         self.assertRegex(templates[0]["updatedAt"], r"Z$")

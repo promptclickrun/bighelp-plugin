@@ -106,8 +106,17 @@ Version 1 workflows stay valid and mean "each stage goes to the next one in the 
 - `next` on every stage except a decision: a stage key, or `null` to end the run after this stage. Left out, the
   stage goes to the following stage in `stages` (version 1 behavior). A decision keeps `pass` (`"next"`, the
   following stage in the list, or a stage key) and `changes` (`goTo` an agent stage before it, `maxRevisions`).
-- The run starts at the first stage in `stages` and moves one stage at a time; there are no parallel branches. A
-  sign-off's Ask for changes goes back to the stage that wrote the file.
+- The run starts at the first stage in `stages` and moves one stage at a time. A sign-off's Ask for changes goes
+  back to the stage that wrote the file (its whole parallel block, for a block's agent).
+- A parallel block (3.8.0, `native-workflows-parallel-v1`): `{"key", "kind": "parallel", "title", "next"?,
+  "branches": [agent stages]}` with 2 to 5 agent stages and no `next` on them. All of them start at once; the run
+  goes on when every one is done. Their keys are stage keys like any other (unique among all stages, 40 at most), so
+  a later stage reads `<agent>.<output>`. An agent can't read the others in its block. If one fails, the block
+  fails and the others stop; Try again runs only the agents that didn't finish. A decision's `changes.goTo` may be a
+  block (every agent runs again). In a run, the block is the run's `stageKey`, and each agent is in `stages` with
+  `"group": "<block key>"`.
+- A decision's `on` may list several decisions (1 to 5), with `require`: `"all"` (the default: pass when none asks
+  for changes) or `"any"` (pass when one passes). Changes notes come from every verdict that asked for changes.
 - `layout` (optional): `{"inputs": {"x", "y"}, "stages": {"<key>": {"x", "y"}}}` in points, finite numbers with
   |x| and |y| at most 100,000, at most one entry per stage (20). The plugin stores and returns it as is; the engine
   never reads it.
