@@ -32,6 +32,8 @@ TRIGGER_CAPABILITY = "native-workflows-trigger-v1"
 PARALLEL_CAPABILITY = "native-workflows-parallel-v1"
 # Delivery stages (`hermes send` to a place Hermes can message) and file and picture outputs.
 DELIVERY_CAPABILITY = "native-workflows-delivery-v1"
+# A decision's way can end the run as succeeded, cancelled or failed, with a note.
+OUTCOMES_CAPABILITY = "native-workflows-outcomes-v1"
 # Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
 REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)

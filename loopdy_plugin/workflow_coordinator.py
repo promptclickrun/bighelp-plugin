@@ -728,12 +728,19 @@ class Coordinator:
             row = self._latest(connection, run["id"], reference)
             value = json.loads(row["value_json"]) if row is not None and row["value_json"] else None
             verdicts.append((reference, row, value))
+        item = stages.get(stage["key"], {})
+        item.pop("outcome", None)
+        item.pop("note", None)
         if model.decision_passes(stage, [value for _, _, value in verdicts]):
             stage_state(stages, stage["key"], "accepted", now, end=True)
+            add_event(connection, run["id"], now, "decision_pass", f"{stage['title']}: passed.", stage["key"])
+            end = model.ending(stage["pass"])
+            if end is not None:
+                self._end(connection, run, stage, stages, end, None, now)
+                return
             target = model.next_stage_key(definition, stage["key"]) if stage["pass"] == "next" else stage["pass"]
             update_run(connection, run, now, state="accepted", stage_key=stage["key"],
                        stages_json=model.canonical_json(stages), next_stage=target)
-            add_event(connection, run["id"], now, "decision_pass", f"{stage['title']}: passed.", stage["key"])
             return
         notes = []
         for reference, row, value in verdicts:
@@ -744,6 +751,14 @@ class Coordinator:
                     "SELECT value_json FROM artifacts WHERE run_id=? AND stage_key=? AND type='notes' AND iteration=? "
                     "ORDER BY id", (run["id"], source, row["iteration"])):
                 notes.extend(json.loads(artifact["value_json"] or "[]"))
+        end = model.ending(stage["changes"])
+        if end is not None:
+            # Not passing isn't always a failure: "no new pull requests" can end the run as done.
+            stage_state(stages, stage["key"], "accepted", now, end=True)
+            add_event(connection, run["id"], now, "decision_changes", f"{stage['title']}: didn't pass.",
+                      stage["key"])
+            self._end(connection, run, stage, stages, end, notes[0]["text"] if notes else None, now)
+            return
         loops = json.loads(run["loops_json"] or "{}")
         used = int(loops.get(stage["key"], 0))
         limit = model.max_revisions(definition, stage)
@@ -756,6 +771,26 @@ class Coordinator:
                   stage["key"])
         go_back(connection, run, definition, stage["changes"]["goTo"], {"from": "review", "notes": notes}, now,
                 state="planned", count_loop=stage["key"], through=stage["key"], stages=stages)
+
+    def _end(self, connection, run, stage, stages, end: dict, reason: str | None, now: float) -> None:
+        """A decision ends the run the way the workflow says: succeeded, cancelled or failed, with its note (or the
+        verdict's first note)."""
+        outcome = end["end"]
+        default = {"succeeded": f"{stage['title']}: the run is done.",
+                   "cancelled": f"{stage['title']} cancelled the run.",
+                   "failed": f"{stage['title']} failed the run."}[outcome]
+        note = clean_text((end.get("message") or "").strip() or (reason or "").strip() or default, 200)
+        item = stages.setdefault(stage["key"], {})
+        item["outcome"], item["note"] = outcome, note
+        if outcome == "failed":
+            # Try again runs the stage that gave the verdict, then decides again.
+            source, _ = model.split_reference(model.decision_sources(stage)[0])
+            self._fail(connection, run, now, stage["key"], "decision_failed", note,
+                       retry_stage=self._top(connection, run, source), stages=stages)
+            return
+        update_run(connection, run, now, state=outcome, stage_key=stage["key"], ended_at=now, next_stage=None,
+                   stages_json=model.canonical_json(stages), change_notes_json=None)
+        add_event(connection, run["id"], now, outcome, note, stage["key"])
 
     def _wait_for_signoff(self, connection, run, definition, stage, stages, now) -> None:
         row = self._latest(connection, run["id"], stage["file"])

@@ -23,7 +23,8 @@ PROCESS_FEATURES = (
     "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
     "native-host-restart-v1",
     "native-provider-usage-v1", "native-provider-sign-in-v1", "native-workflows-v1", "native-workflows-edit-v1",
-    "native-workflows-parallel-v1", "native-workflows-delivery-v1", "native-workflows-trigger-v1",
+    "native-workflows-parallel-v1", "native-workflows-delivery-v1", "native-workflows-outcomes-v1",
+    "native-workflows-trigger-v1",
     "native-live-alerts-v1", "native-notification-quiet-hours-v1",
 )
 WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
@@ -72,11 +73,12 @@ class NativeStartupLoggingTests(unittest.TestCase):
                               available=Mock(return_value=True))
         self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[15],
                                 EDIT_CAPABILITY=PROCESS_FEATURES[16], PARALLEL_CAPABILITY=PROCESS_FEATURES[17],
-                                DELIVERY_CAPABILITY=PROCESS_FEATURES[18], TRIGGER_CAPABILITY=PROCESS_FEATURES[19],
+                                DELIVERY_CAPABILITY=PROCESS_FEATURES[18], OUTCOMES_CAPABILITY=PROCESS_FEATURES[19],
+                                TRIGGER_CAPABILITY=PROCESS_FEATURES[20],
                                 probe=Mock(return_value=None), triggers_available=Mock(return_value=True))
-        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[20],
+        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[21],
                                   available=Mock(return_value=True))
-        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[21],
+        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[22],
                             available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
