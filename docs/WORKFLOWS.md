@@ -321,3 +321,10 @@ The `bighelp_workflows` tool (toolset `bighelp_workflows`) gives agents the same
 runs; `publish` (with role choices) and `set_trigger` with a schedule ask the person in Hermes' approval prompt
 every time, and refuse when no one can answer. Sign-offs stay in the app. Inside a workflow stage the tool only
 reads.
+
+`save_draft` also takes `bindings`, role key to agent id. Every role and agent must exist,
+or nothing is saved (`role_not_found`, `profile_not_found`). On a workflow that was never published the picks are
+saved without asking, the same way the app's `bind` saves them: such a workflow can't run until the person
+publishes it in the app, where every pick shows in the role pickers. Once a workflow is published, runs use the
+current picks, so changing them asks the person first, like `publish` does (`not_approved` when no one can
+answer).

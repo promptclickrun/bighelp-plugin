@@ -306,6 +306,87 @@ class WorkflowRouteTests(unittest.TestCase):
                                      "schedule": "0 9 * * *", "inputs": INPUTS})["error"], "not_approved")
         self.assertEqual(tools.call({"action": "nope"})["error"], "action_invalid")
 
+    def test_agents_pick_agents_on_a_draft_that_never_ran_without_asking(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        asked = []
+
+        def approve(description, rule_key):
+            asked.append(description)
+            return False, "No one can approve this right now."
+
+        tools = WorkflowTools(approve=approve)
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Picked"})
+        workflow_id, version = created["workflowId"], created["draftVersion"]
+        definition = self.ok("get", {"workflowId": workflow_id})["workflow"]["definition"]
+        saved = tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": version,
+                            "definition": definition, "bindings": dict(BINDINGS)})
+        self.assertNotIn("error", saved, saved)
+        self.assertEqual(asked, [])
+        # The app's own get shows the picks, so the role pickers open filled in.
+        workflow = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual({item["role"]: item["agentId"] for item in workflow["bindings"]}, dict(BINDINGS))
+        self.assertNotIn("role_unbound", [issue["code"] for issue in saved["validation"]["issues"]])
+        # Still nothing runs until the person publishes.
+        self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
+                         "not_published")
+        # A new workflow can come with its picks in one call.
+        fresh = tools.call({"action": "save_draft", "baseDraftVersion": 0, "definition": definition,
+                            "bindings": {"writer": "writer"}})
+        fresh_bindings = self.ok("get", {"workflowId": fresh["workflowId"]})["workflow"]["bindings"]
+        self.assertEqual({item["role"]: item["agentId"] for item in fresh_bindings}["writer"], "writer")
+
+    def test_draft_picks_refuse_unknown_agents_and_roles_and_save_nothing(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        tools = WorkflowTools(approve=lambda description, rule_key: (False, "no"))
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Checked"})
+        workflow_id, version = created["workflowId"], created["draftVersion"]
+        definition = self.ok("get", {"workflowId": workflow_id})["workflow"]["definition"]
+        missing = tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": version,
+                              "definition": definition, "bindings": {"writer": "nobody-here"}})
+        self.assertEqual(missing["error"], "profile_not_found")
+        unknown = tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": version,
+                              "definition": definition, "bindings": {"ghost": "writer"}})
+        self.assertEqual(unknown["error"], "role_not_found")
+        workflow = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual(workflow["draftVersion"], version)
+        self.assertEqual([item["agentId"] for item in workflow["bindings"]], [None, None, None])
+
+    def test_agents_ask_before_changing_agents_on_a_published_workflow(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        answer = [True]
+        asked = []
+
+        def approve(description, rule_key):
+            asked.append(description)
+            return answer[0], "The person said no."
+
+        tools = WorkflowTools(approve=approve)
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Live"})
+        workflow_id = created["workflowId"]
+        tools.call({"action": "publish", "workflowId": workflow_id, "bindings": dict(BINDINGS)})
+        current = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        answer[0] = False
+        asked.clear()
+        refused = tools.call({"action": "save_draft", "workflowId": workflow_id,
+                              "baseDraftVersion": current["draftVersion"], "definition": current["definition"],
+                              "bindings": {"writer": "editor"}})
+        self.assertEqual(refused["error"], "not_approved")
+        self.assertEqual(len(asked), 1)
+        self.assertIn("writer: editor", asked[0])
+        after = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual({item["role"]: item["agentId"] for item in after["bindings"]}["writer"], "writer")
+        self.assertEqual(after["draftVersion"], current["draftVersion"])
+        # A plain draft save of a published workflow still needs no approval.
+        saved = tools.call({"action": "save_draft", "workflowId": workflow_id,
+                            "baseDraftVersion": current["draftVersion"], "definition": current["definition"]})
+        self.assertNotIn("error", saved, saved)
+        # With approval, the new pick lands.
+        answer[0] = True
+        tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": saved["draftVersion"],
+                    "definition": current["definition"], "bindings": {"writer": "editor"}})
+        after = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual({item["role"]: item["agentId"] for item in after["bindings"]}["writer"], "editor")
+
     def test_every_route_matches_the_vectors(self):
         status = self.ok("status", {}, "status.json")
         self.assertEqual((status["coordinator"]["state"], status["slots"]["total"], status["runner"]),
