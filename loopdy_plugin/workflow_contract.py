@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import mimetypes
 import os
 import re
 import stat
@@ -18,6 +19,8 @@ from typing import Any
 FENCE = "bighelp-handoff"
 MAX_REPLY_BYTES = 2 * 1024 * 1024
 MAX_MARKDOWN_BYTES = 512 * 1024
+MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_FILE_NAME = 120
 MAX_TEXT_BYTES = 8 * 1024
 MAX_NOTES = 20
 MAX_NOTE_CHARS = 1000
@@ -25,6 +28,10 @@ _BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*" + re.escape(FENCE) + r"[ \t]*\
                     re.MULTILINE | re.DOTALL)
 _OPENER = re.compile(r"^[ \t]*(?:`{3,}|~{3,})[ \t]*" + re.escape(FENCE) + r"[ \t]*$", re.MULTILINE)
 _HEADING = re.compile(r"#{1,6}[ \t]+\S")
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]+")
+# Pictures by their first bytes, never by the name the agent gave them.
+_IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "image/png", ".png"), (b"\xff\xd8\xff", "image/jpeg", ".jpg"),
+                (b"GIF87a", "image/gif", ".gif"), (b"GIF89a", "image/gif", ".gif"))
 
 
 class ContractError(Exception):
@@ -91,7 +98,7 @@ def extract_block(reply: str) -> dict:
     return value["outputs"]
 
 
-def _read_out_file(attempt_dir: Path, relative: Any, title: str) -> bytes:
+def _read_out_file(attempt_dir: Path, relative: Any, title: str, limit: int = MAX_MARKDOWN_BYTES) -> bytes:
     """Read out/<name> without following links or leaving the attempt's out folder."""
     if type(relative) is not str or not relative.startswith("out/") or "\x00" in relative:
         raise ContractError("contract_bad_path", f"{title} named a file outside its out folder.")
@@ -117,20 +124,43 @@ def _read_out_file(attempt_dir: Path, relative: Any, title: str) -> bytes:
         info = os.fstat(handle)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ContractError("contract_bad_path", f"{title} named something that isn't a plain file.")
-        if info.st_size > MAX_MARKDOWN_BYTES:
-            raise ContractError("contract_too_large", f"{title} handed off a file over 512 KB.")
+        too_large = ContractError("contract_too_large", f"{title} handed off a file over {_size(limit)}.")
+        if info.st_size > limit:
+            raise too_large
         chunks, total = [], 0
         while True:
             chunk = os.read(handle, 65536)
             if not chunk:
                 break
             total += len(chunk)
-            if total > MAX_MARKDOWN_BYTES:
-                raise ContractError("contract_too_large", f"{title} handed off a file over 512 KB.")
+            if total > limit:
+                raise too_large
             chunks.append(chunk)
         return b"".join(chunks)
     finally:
         os.close(handle)
+
+
+def _size(limit: int) -> str:
+    return f"{limit // (1024 * 1024)} MB" if limit >= 1024 * 1024 else f"{limit // 1024} KB"
+
+
+def file_name(relative: str) -> str:
+    """A name that is safe to show and to save: the last part of the path, plain characters only."""
+    name = _UNSAFE_NAME.sub("_", relative.rsplit("/", 1)[-1]).strip(" .")
+    return (name or "file")[-MAX_FILE_NAME:]
+
+
+def image_type(data: bytes) -> tuple[str, str] | None:
+    """(MIME type, extension) of a PNG, JPEG, GIF, WebP or HEIC picture, else None."""
+    for magic, mime, extension in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime, extension
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp", ".webp"
+    if data[4:8] == b"ftyp" and data[8:12] in (b"heic", b"heix", b"mif1", b"msf1"):
+        return "image/heic", ".heic"
+    return None
 
 
 def _utf8(data: bytes, title: str) -> str:
@@ -194,6 +224,24 @@ def parse_outputs(reply: str, outputs: list[dict], *, attempt_dir: Path, stage_t
                 notes.append({"severity": note["severity"], "text": note["text"].strip()})
             data = json.dumps(notes, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             result.append(Output(name, kind, data, value=notes))
+        elif kind in ("file", "image"):
+            if type(value) is not dict or set(value) != {"path"}:
+                raise wrong
+            data = _read_out_file(attempt_dir, value["path"], label, MAX_FILE_BYTES)
+            if not data:
+                raise ContractError("contract_wrong_type", f"{label} is an empty file.")
+            shown = file_name(value["path"])
+            if kind == "image":
+                found = image_type(data)
+                if found is None:
+                    raise ContractError("contract_wrong_type", f"{label} isn't a PNG, JPEG, GIF, WebP or HEIC picture.")
+                mime, extension = found
+                if not shown.lower().endswith(extension) and not (extension == ".jpg"
+                                                                   and shown.lower().endswith(".jpeg")):
+                    shown = f"{shown.rsplit('.', 1)[0] if '.' in shown else shown}{extension}"
+            else:
+                mime = mimetypes.guess_type(shown, strict=False)[0] or "application/octet-stream"
+            result.append(Output(name, kind, data, value={"fileName": shown, "mimeType": mime}))
         else:
             raise wrong
     return result

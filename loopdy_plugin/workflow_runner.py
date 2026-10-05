@@ -142,6 +142,20 @@ def worker_argv(base: list[str], profile: str, tools: list[str], features: froze
     return argv
 
 
+def send_argv(base: list[str], target: str, message_file: Path) -> list[str]:
+    """`hermes send` for a delivery stage. `--to=` keeps a target like "telegram:-100…" from reading as a flag."""
+    return [*base, "-p", "default", "send", f"--to={target}", "--file", str(message_file), "--json"]
+
+
+def send_env(base: Mapping[str, str], *, home: Path, import_path: list[str] | tuple[str, ...] = ()) -> dict[str, str]:
+    """The computer's own Hermes home: deliveries use its gateway settings, like scheduled tasks do."""
+    env = {key: base[key] for key in _SAFE_ENV if key in base}
+    env.update({"HERMES_HOME": str(home), "PYTHONUTF8": "1"})
+    if import_path:
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(import_path))
+    return env
+
+
 def text_query(brief: str | None) -> str:
     """The `-q` text when Hermes can't read a query file: the brief when it is small enough, else a pointer."""
     if brief is not None and len(brief.encode("utf-8")) <= MAX_INLINE_QUERY_BYTES:
@@ -443,7 +457,7 @@ def write_private(path: Path, data: bytes, *, read_only: bool = False) -> None:
 
 
 _TYPE_NAMES = {"markdown_file": "Markdown file", "text": "text", "number": "number", "decision": "decision",
-               "notes": "notes"}
+               "notes": "notes", "file": "file", "image": "picture"}
 
 
 def handoff_help(outputs: list[dict]) -> list[str]:
@@ -459,6 +473,11 @@ def handoff_help(outputs: list[dict]) -> list[str]:
             how = "a number."
         elif kind == "decision":
             how = "one of: " + ", ".join(f'"{value}"' for value in output.get("values", [])) + "."
+        elif kind == "file":
+            how = '{"path": "out/<name>.<ext>"}. Save the file in your out folder first. At most 10 MB.'
+        elif kind == "image":
+            how = ('{"path": "out/<name>.png"}. Save the picture in your out folder first. A PNG, JPEG, GIF, WebP '
+                   'or HEIC picture, at most 10 MB.')
         else:
             how = ('a list of at most 20 notes like {"severity": "major", "text": "..."}; '
                    'severity is "minor" or "major". Use [] for no notes.')
@@ -473,6 +492,7 @@ def _example(outputs: list[dict]) -> str:
         example[output["name"]] = {
             "markdown_file": {"content": "# Title\n\n..."}, "text": "...", "number": 0,
             "decision": (output.get("values") or ["pass"])[0], "notes": [],
+            "file": {"path": f"out/{output['name']}.pdf"}, "image": {"path": f"out/{output['name']}.png"},
         }[kind]
     return json.dumps({"outputs": example}, ensure_ascii=False)
 

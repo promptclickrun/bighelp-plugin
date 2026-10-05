@@ -30,6 +30,8 @@ EDIT_CAPABILITY = "native-workflows-edit-v1"
 TRIGGER_CAPABILITY = "native-workflows-trigger-v1"
 # Parallel blocks (several agent stages at once) and decisions that read several verdicts.
 PARALLEL_CAPABILITY = "native-workflows-parallel-v1"
+# Delivery stages (`hermes send` to a place Hermes can message) and file and picture outputs.
+DELIVERY_CAPABILITY = "native-workflows-delivery-v1"
 # Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
 REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)

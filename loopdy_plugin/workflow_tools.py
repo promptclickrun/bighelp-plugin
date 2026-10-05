@@ -30,8 +30,10 @@ SCHEMA = {
     "name": TOOL,
     "description": (
         "The person's bighelp workflows on this computer: multi-step flows where agents hand work from stage to "
-        "stage (agent, check, decision and sign-off stages, and parallel blocks that run 2 to 5 agent stages at once; a "
-        "decision can read all their verdicts). Actions: list (workflows, runs waiting for the person, "
+        "stage (agent, check, decision and sign-off stages, delivery stages that send earlier outputs to a place "
+        "`hermes send --to` takes, and parallel blocks that run 2 to 5 agent stages at once; a decision can read "
+        "all their verdicts). Outputs can be Markdown files, text, numbers, decisions, notes, files and pictures. "
+        "Actions: list (workflows, runs waiting for the person, "
         "active runs), get (one workflow's definition, roles and problems), templates, create (from a template "
         "id, or from a definition), save_draft, publish (with role -> agent choices; the person approves), start "
         "(a run of the newest published version, with inputs), runs, run (one run in full: stages, outputs, "
