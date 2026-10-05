@@ -23,7 +23,7 @@ PROCESS_FEATURES = (
     "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
     "native-host-restart-v1",
     "native-provider-usage-v1", "native-provider-sign-in-v1", "native-workflows-v1", "native-workflows-edit-v1",
-    "native-live-alerts-v1", "native-notification-quiet-hours-v1",
+    "native-workflows-trigger-v1", "native-live-alerts-v1", "native-notification-quiet-hours-v1",
 )
 WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
 
@@ -70,10 +70,11 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[14],
                               available=Mock(return_value=True))
         self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[15],
-                                EDIT_CAPABILITY=PROCESS_FEATURES[16], probe=Mock(return_value=None))
-        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[17],
+                                EDIT_CAPABILITY=PROCESS_FEATURES[16], TRIGGER_CAPABILITY=PROCESS_FEATURES[17],
+                                probe=Mock(return_value=None), triggers_available=Mock(return_value=True))
+        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[18],
                                   available=Mock(return_value=True))
-        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[18],
+        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[19],
                             available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,

@@ -310,10 +310,15 @@ def _native_features(
         skip(sign_in_capability, "sign-ins need a POSIX terminal and public profile helpers.")
     try:
         from .workflow_api import (CAPABILITY as workflows_capability, EDIT_CAPABILITY as workflows_edit_capability,
-                                   probe as workflows_probe)
+                                   TRIGGER_CAPABILITY as workflows_trigger_capability,
+                                   probe as workflows_probe, triggers_available)
         reason = workflows_probe()
         if reason is None:
             features.extend((workflows_capability, workflows_edit_capability))
+            if triggers_available():
+                features.append(workflows_trigger_capability)
+            else:
+                skip(workflows_trigger_capability, "this Hermes has no cron jobs.")
         else:
             why = {
                 "not_posix": "workflows need a POSIX host.",
@@ -322,12 +327,14 @@ def _native_features(
             }.get(reason, "the workflow store can't be opened.")
             skip(workflows_capability, why)
             skip(workflows_edit_capability, why)
+            skip(workflows_trigger_capability, why)
             if unavailable is not None:
                 # A fixed code, so the app can say what to do (update Hermes, for example).
                 unavailable[workflows_capability] = reason
     except ImportError:
         skip("native-workflows-v1", "workflow support is unimportable.")
         skip("native-workflows-edit-v1", "workflow support is unimportable.")
+        skip("native-workflows-trigger-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
     if live_alerts_available():
         features.append(live_alerts_capability)

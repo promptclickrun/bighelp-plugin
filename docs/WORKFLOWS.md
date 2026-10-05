@@ -146,6 +146,16 @@ code is `not_posix`, `profile_helpers_missing`, `chat_runner_missing` (update He
 "version 2" here: the stage graph and layout, your templates, pin and unarchive. With only `native-workflows-v1`
 the app shows a workflow's flow read-only.
 
+`native-workflows-trigger-v1` (3.7.0) adds triggers, listed when this Hermes has cron jobs. Each workflow has one:
+`{"kind": "manual"}` (someone, or an agent, starts each run) or `{"kind": "schedule", "schedule", "inputs",
+"jobId"}`. `list` and `get` include it. `trigger/set` with `{workflowId, trigger: {kind, schedule?, inputs?}}`
+saves it and returns `{trigger}`: a schedule is a cron expression (repeating, in this computer's time zone) and
+needs a published, valid workflow and inputs it accepts. The plugin makes a Hermes cron job with no agent
+(`no_agent`, delivered locally) whose script, `scripts/bighelp-workflow-<id>.py`, starts one run of the newest
+version with the saved inputs (one per minute, however often the job fires). A new schedule replaces the job;
+`manual` and `archive` remove it. Errors: `schedule_invalid`, `not_published`, `not_valid`, `inputs_invalid`,
+`schedules_unavailable`.
+
 Every route is `POST /api/plugins/loopdy/native/workflows/<path>` with the usual native headers: `If-Match` (the
 context ETag) and `X-Loopdy-Request-ID` (a lowercase UUID). Responses echo the request ID and the ETag and are
 `no-store`. Requests and responses are at most 196,608 bytes, and unknown request fields are refused. A mutation
@@ -217,7 +227,9 @@ attempts: [{id, number, iteration, state, agentId, launchedAt, endedAt, duration
 outcomeCode}]}]`, `outputs: [{stageKey, iteration, name, type, sha256, bytes, wordCount?, value?}]` (the latest of
 each output; `value` for numbers, decisions, notes and short text), `signoff?: {stageKey, artifact, previous?,
 reviewNotes, history: [{iteration, decision, notes, artifactSha256, decidedAt}]}`, `tokens: {in, out}` and
-`allowedActions`. `minutes` is the stage's time limit.
+`allowedActions`. `minutes` is the stage's time limit. Each stage also has `uses` (3.7.0): the references it
+read, such as `inputs.topic` or `draft.draft`; a sign-off stage has `decisions: [{iteration, decision, notes,
+decidedAt}]`, the person's sign-offs.
 
 - Attention codes: `host_restarted`, `coordinator_restarted` (both: "We don't know how <stage> ended."),
   `revision_limit`, `agent_missing`.
@@ -268,3 +280,11 @@ The usual native envelope: `{"error": {"code", "message", "retryable", "details"
 
 The general native codes (`context_required`, `context_changed`, `invalid_request`, `payload_too_large`,
 `native_service_unavailable`, identity errors) apply too.
+
+## For agents
+
+The `bighelp_workflows` tool (toolset `bighelp_workflows`) gives agents the same workflows: `list`, `get`,
+`templates`, `runs` and `run` read; `create`, `save_draft`, `start`, `control` and `archive` change drafts and
+runs; `publish` (with role choices) and `set_trigger` with a schedule ask the person in Hermes' approval prompt
+every time, and refuse when no one can answer. Sign-offs stay in the app. Inside a workflow stage the tool only
+reads.

@@ -18,7 +18,10 @@
         "valid": true,
         "archived": false,
         "lastRunAt": null,
-        "pinned": true
+        "pinned": true,
+        "trigger": {
+          "kind": "manual"
+        }
       },
       {
         "id": "wf_8c1d2e3f4a5b6c7d",
@@ -31,7 +34,10 @@
         "valid": true,
         "archived": false,
         "lastRunAt": "2026-10-04T09:30:00Z",
-        "pinned": false
+        "pinned": false,
+        "trigger": {
+          "kind": "manual"
+        }
       },
       {
         "id": "wf_1a2b3c4d5e6f7081",
@@ -48,7 +54,10 @@
         "valid": true,
         "archived": false,
         "lastRunAt": null,
-        "pinned": false
+        "pinned": false,
+        "trigger": {
+          "kind": "manual"
+        }
       }
     ],
     "waiting": [

@@ -500,9 +500,9 @@ class ManagedNotificationTests(unittest.TestCase):
                              assistant_response="Got it, I'll send the numbers over.",platform="api_server")
         self.service.drain_pending()
         self.assertEqual(self.events_sent(), [])
-        self.assertEqual(self.service.preferences(self.grant_id), {"version": 1, "peerChats": False})
+        self.assertEqual(self.service.preferences(self.grant_id)["peerChats"], False)
         self.service.set_preferences(self.grant_id, peer_chats=True)
-        self.assertEqual(self.service.preferences(self.grant_id), {"version": 1, "peerChats": True})
+        self.assertEqual(self.service.preferences(self.grant_id)["peerChats"], True)
         self.service.observe("post_llm_call",profile="default",session_id="peer-session",turn_id="turn-b",
                              assistant_response="Here are the numbers.",platform="api_server")
         self.service.drain_pending()
@@ -513,6 +513,88 @@ class ManagedNotificationTests(unittest.TestCase):
                              assistant_response="Here is your answer.",platform="desktop")
         self.service.drain_pending()
         self.assertEqual([e["eventType"] for e in self.events_sent()], ["session.completed"])
+
+    def test_workflow_stage_turns_never_alert(self):
+        # Each workflow stage is a `hermes chat --source workflow` turn: machinery, not a chat.
+        with patch.dict(os.environ, {"HERMES_SESSION_SOURCE": "workflow"}):
+            self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-a",
+                                 assistant_response="Draft written.",platform="cli")
+            self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-b",
+                                 failed=True,error="provider failed",platform="cli")
+        self.service.drain_pending()
+        self.assertEqual(self.events_sent(), [])
+
+    def workflow_journal(self):
+        """A workflow store's run journal, as the plugin's workflow code writes it."""
+        root = Path(self.temp.name) / "workflows"
+        root.mkdir()
+        db = sqlite3.connect(root / "workflows.sqlite3")
+        db.executescript("""
+            CREATE TABLE workflows (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE runs (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+                               workflow_id TEXT NOT NULL, sample INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE events (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, at REAL NOT NULL,
+                                 kind TEXT NOT NULL, stage_key TEXT, attempt INTEGER, text TEXT NOT NULL);
+            INSERT INTO workflows VALUES ('wf_1', 'Research and write');
+            INSERT INTO runs (id, workflow_id) VALUES ('run_1', 'wf_1');
+            INSERT INTO events (run_id, at, kind, text) VALUES ('run_1', 1, 'succeeded', 'An old run finished.');
+        """)
+        db.commit()
+        # Questions need the clarification type in the phone's grant.
+        with sqlite3.connect(self.service.db_path) as notifications:
+            grant = dict(self.grant, eventTypes=["clarification.required", "session.completed", "session.failed"])
+            notifications.execute("UPDATE grants SET public_json=? WHERE grant_id=?",
+                                  (json.dumps(grant, separators=(",", ":"), sort_keys=True), self.grant_id))
+        patcher = patch("loopdy_plugin.workflow_api.workflows_root", return_value=root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return db
+
+    def test_workflow_runs_alert_when_they_need_you_and_when_they_end(self):
+        from loopdy_plugin.managed_notifications import session_reference
+        journal = self.workflow_journal()
+        self.service.queue_workflow_alerts()
+        self.service.drain_pending()
+        self.assertEqual(self.events_sent(), [], "Runs from before the first look don't alert")
+        journal.executescript("""
+            INSERT INTO events (run_id, at, kind, stage_key, text) VALUES ('run_1', 2, 'stage_running', 'draft', 'Draft is running.');
+            INSERT INTO events (run_id, at, kind, stage_key, text) VALUES ('run_1', 3, 'waiting_for_you', 'approve', 'Approve is waiting for you.');
+            INSERT INTO events (run_id, at, kind, text) VALUES ('run_1', 4, 'cancelled', 'The run was cancelled.');
+            INSERT INTO events (run_id, at, kind, text) VALUES ('run_1', 5, 'failed', 'The run failed.');
+        """)
+        journal.commit()
+        self.service.queue_workflow_alerts()
+        self.service.queue_workflow_alerts()
+        self.service.drain_pending()
+        sent = self.events_sent()
+        # Sending order isn't fixed; each alert is its own.
+        self.assertEqual(sorted((e["eventType"], e["content"]["text"]) for e in sent), [
+            ("clarification.required", "Approve is waiting for you."),
+            ("session.completed", "The run was cancelled."),
+            ("session.failed", "The run failed.")])
+        self.assertEqual({e["sessionReference"] for e in sent}, {session_reference("default", "workflow.run.run_1")})
+
+        # A device can turn each kind off.
+        self.calls.clear()
+        self.assertEqual(self.service.preferences(self.grant_id)["workflows"],
+                         {"needsYou": True, "succeeded": True, "failed": True, "cancelled": True})
+        self.service.set_preferences(self.grant_id, peer_chats=False,
+                                     workflows={"needsYou": True, "succeeded": False, "failed": True, "cancelled": True})
+        journal.executescript("""
+            INSERT INTO events (run_id, at, kind, text) VALUES ('run_1', 6, 'succeeded', 'The run is done.');
+            INSERT INTO events (run_id, at, kind, text) VALUES ('run_1', 7, 'needs_attention', 'Draft needs attention.');
+        """)
+        journal.commit()
+        self.service.queue_workflow_alerts()
+        self.service.drain_pending()
+        self.assertEqual([e["content"]["text"] for e in self.events_sent()], ["Draft needs attention."])
+        journal.close()
+
+    def test_workflow_alert_preferences_are_validated_and_advertised(self):
+        self.assertTrue(self.service.capabilities()["preferences"]["workflows"])
+        for bad in ({"needsYou": True}, {"needsYou": "yes", "succeeded": True, "failed": True, "cancelled": True}, []):
+            with self.assertRaises(ManagedNotificationError):
+                self.service.set_preferences(self.grant_id, peer_chats=False, workflows=bad)
 
     def test_peer_chat_preference_is_validated_and_advertised(self):
         self.assertTrue(self.service.capabilities()["preferences"]["peerChats"])

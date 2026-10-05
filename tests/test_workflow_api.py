@@ -18,9 +18,10 @@ from workflow_fixtures import AGENTS, BINDINGS, DRAFT, Engine, INPUTS, graph_def
 VECTORS = Path(__file__).resolve().parents[1] / "fixtures" / "contracts" / "workflows-v1"
 PREFIX = native_fixtures.PREFIX + "/workflows/"
 # Keys a response leaves out when they don't apply (docs/WORKFLOWS.md marks them with ?).
-OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey"}
+OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey",
+            "decisions"}
 # Fields v2 added to v1 responses: the v1 vectors stay as they were, and apps ignore fields they don't know.
-ADDED_IN_V2 = frozenset({"pinned", "source", "updatedAt", "mode"})
+ADDED_IN_V2 = frozenset({"pinned", "source", "updatedAt", "mode", "uses", "decisions", "trigger"})
 
 
 V2_VECTORS = {"draft-save-new.json", "draft-save-v2.json", "validate-v2.json", "pin.json", "unarchive.json",
@@ -203,6 +204,107 @@ class WorkflowRouteTests(unittest.TestCase):
         engine.tick()
         detail = self.ok("runs/get", {"runId": run["id"]}, "runs-get-text-runner.json")["run"]
         self.assertIsNone(detail["stages"][0]["attempts"][0]["tokens"])
+        # Each stage says what it read, so the app can show a stage's inputs.
+        uses = {stage["key"]: stage["uses"] for stage in detail["stages"]}
+        self.assertEqual(uses["draft"], ["inputs.topic", "inputs.audience", "inputs.length", "research.brief"])
+        self.assertEqual(uses["review_decision"], ["review.decision"])
+        self.assertEqual([stage["decisions"] for stage in detail["stages"] if stage["kind"] == "signoff"], [[]])
+
+    def published(self):
+        used = self.ok("templates/use", {"templateId": "research-draft-review"})
+        for role, agent in BINDINGS:
+            self.ok("bind", {"workflowId": used["workflowId"], "role": role, "agentId": agent})
+        self.ok("publish", {"workflowId": used["workflowId"], "draftVersion": 1})
+        return used["workflowId"]
+
+    def test_a_schedule_is_a_cron_job_that_starts_runs(self):
+        import cron.jobs
+        self.assertIn("native-workflows-trigger-v1", self.fixture.context().json()["features"])
+        workflow_id = self.published()
+        jobs: dict[str, dict] = {}
+
+        def create_job(**fields):
+            job = dict(fields, id=f"job{len(jobs) + 1}")
+            jobs[job["id"]] = job
+            return job
+
+        with patch.object(cron.jobs, "create_job", side_effect=create_job), \
+                patch.object(cron.jobs, "remove_job", side_effect=lambda job_id: jobs.pop(job_id, None) is not None):
+            self.assertEqual(self.ok("get", {"workflowId": workflow_id})["workflow"]["trigger"], {"kind": "manual"})
+            self.error("trigger/set", {"workflowId": workflow_id, "trigger": {"kind": "schedule", "schedule": "nope"}},
+                       422, "schedule_invalid")
+            self.error("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "0 9 * * 1-5", "inputs": {}}}, 422, "inputs_invalid")
+            trigger = self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "0 9 * * 1-5", "inputs": INPUTS}})["trigger"]
+            self.assertEqual((trigger["kind"], trigger["schedule"], trigger["jobId"]), ("schedule", "0 9 * * 1-5", "job1"))
+            job = jobs["job1"]
+            # No agent: the job only runs the script, which starts the run.
+            self.assertEqual((job["no_agent"], job["prompt"], job["script"], job["deliver"]),
+                             (True, None, f"bighelp-workflow-{workflow_id}.py", "local"))
+            script = self.home / "scripts" / job["script"]
+            self.assertIn(f"run_scheduled({workflow_id!r})", script.read_text())
+            listed = next(w for w in self.ok("list", {})["workflows"] if w["id"] == workflow_id)
+            self.assertEqual(listed["trigger"]["schedule"], "0 9 * * 1-5")
+
+            # The job firing (twice in one minute) starts one run.
+            from loopdy_plugin.workflow_trigger import run_scheduled
+            self.assertEqual(run_scheduled(workflow_id, now=1_800_000_000), 0)
+            self.assertEqual(run_scheduled(workflow_id, now=1_800_000_030), 0)
+            runs = self.ok("runs/list", {"workflowId": workflow_id, "filter": "all", "limit": 10})["runs"]
+            self.assertEqual(len(runs), 1)
+
+            # A new schedule replaces the job; manual removes it and its script.
+            self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "30 7 * * *", "inputs": INPUTS}})
+            self.assertEqual(list(jobs), ["job2"])
+            self.assertEqual(self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {"kind": "manual"}}),
+                             {"trigger": {"kind": "manual"}})
+            self.assertEqual(jobs, {})
+            self.assertFalse(script.exists())
+
+            # Archiving a scheduled workflow stops its schedule.
+            self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "30 7 * * *", "inputs": INPUTS}})
+            self.ok("archive", {"workflowId": workflow_id})
+            self.assertEqual(jobs, {})
+
+    def test_agents_read_draft_and_run_workflows_and_ask_before_publishing(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        asked = []
+        answer = [False]
+
+        def approve(description, rule_key):
+            asked.append(description)
+            return answer[0], "The person said no."
+
+        tools = WorkflowTools(approve=approve)
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Agent made"})
+        workflow_id = created["workflowId"]
+        self.assertIn(workflow_id, [w["id"] for w in tools.call({"action": "list"})["workflows"]])
+        self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
+                         "not_published")
+        bindings = dict(BINDINGS)
+        refused = tools.call({"action": "publish", "workflowId": workflow_id, "bindings": bindings})
+        self.assertEqual(refused["error"], "not_approved")
+        self.assertIn("Agent made", asked[0])
+        self.assertIsNone(self.ok("get", {"workflowId": workflow_id})["workflow"]["latestRevision"])
+        answer[0] = True
+        tools.call({"action": "publish", "workflowId": workflow_id, "bindings": bindings})
+        run = tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["run"]
+        self.assertEqual(tools.call({"action": "run", "runId": run["id"]})["run"]["id"], run["id"])
+        self.assertEqual(tools.call({"action": "control", "runId": run["id"], "runAction": "cancel"})["run"]["id"],
+                         run["id"])
+        # A stage reads, but never starts or changes runs.
+        with patch.dict("os.environ", {"HERMES_SESSION_SOURCE": "workflow"}):
+            self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
+                             "not_in_a_stage")
+            self.assertIn("workflows", tools.call({"action": "list"}))
+        # A schedule asks too.
+        answer[0] = False
+        self.assertEqual(tools.call({"action": "set_trigger", "workflowId": workflow_id, "trigger": "schedule",
+                                     "schedule": "0 9 * * *", "inputs": INPUTS})["error"], "not_approved")
+        self.assertEqual(tools.call({"action": "nope"})["error"], "action_invalid")
 
     def test_every_route_matches_the_vectors(self):
         status = self.ok("status", {}, "status.json")

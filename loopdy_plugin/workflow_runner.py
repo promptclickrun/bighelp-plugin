@@ -21,6 +21,14 @@ from .workflow_store import clean_text, open_private, secure_dir
 
 REPORT_ENV = "HERMES_QUIET_TURN_REPORT_FILE"
 SESSION_SOURCE = "workflow"
+
+
+def in_workflow_stage(environ: Mapping[str, str] = os.environ) -> bool:
+    """This Hermes process runs one stage of a workflow (`worker_env` sets the session source).
+
+    Its turns are machinery: the run itself alerts when it needs the person or ends.
+    """
+    return environ.get("HERMES_SESSION_SOURCE", "").strip() == SESSION_SOURCE
 # Hermes' own default toolset list is the whole platform. A stage with no tools gets only the to-do tool.
 EMPTY_TOOLSET = "todo"
 MAX_REPORT_BYTES = 4 * 1024 * 1024

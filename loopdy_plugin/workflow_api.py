@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 CAPABILITY = "native-workflows-v1"
 # Graph edits, layout, your templates, pin and unarchive (docs/WORKFLOWS.md, "Version 2").
 EDIT_CAPABILITY = "native-workflows-edit-v1"
+# Manual or scheduled triggers (workflow_trigger.py); needs Hermes' cron jobs.
+TRIGGER_CAPABILITY = "native-workflows-trigger-v1"
 # Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
 REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)
@@ -219,6 +221,16 @@ class _Pin(_WorkflowBody):
     pinned: StrictBool
 
 
+class _TriggerValue(_Strict):
+    kind: Literal["manual", "schedule"]
+    schedule: str | None = Field(default=None, max_length=200)
+    inputs: dict[str, Any] | None = None
+
+
+class _Trigger(_WorkflowBody):
+    trigger: _TriggerValue
+
+
 # MARK: Operations
 
 def _status(store: WorkflowStore, body: _Empty, mutation: Mutation) -> dict:
@@ -262,7 +274,25 @@ def _bind(store, body: _Bind, mutation):
 
 
 def _archive(store, body: _WorkflowBody, mutation):
-    return store.archive(body.workflowId, mutation)
+    result = store.archive(body.workflowId, mutation)
+    # An archived workflow doesn't run on its schedule any more.
+    if store.trigger(body.workflowId)["kind"] == "schedule":
+        from .workflow_trigger import set_trigger
+        set_trigger(store, body.workflowId, {"kind": "manual"}, None)
+    return result
+
+
+def _set_trigger(store, body: _Trigger, mutation):
+    from .workflow_trigger import set_trigger
+    return set_trigger(store, body.workflowId, body.trigger.model_dump(), _host_facts())
+
+
+def triggers_available() -> bool:
+    try:
+        from cron.jobs import create_job, parse_schedule, remove_job  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _start(store, body: _Start, mutation):
@@ -332,6 +362,7 @@ _ROUTES: dict[str, tuple[type[BaseModel], Callable[..., dict], bool]] = {
     "archive": (_WorkflowBody, _archive, False),
     "unarchive": (_WorkflowBody, _unarchive, False),
     "pin": (_Pin, _pin, False),
+    "trigger/set": (_Trigger, _set_trigger, False),
     "runs/start": (_Start, _start, True),
     "runs/list": (_Runs, _runs, False),
     "runs/get": (_RunBody, _run, False),
