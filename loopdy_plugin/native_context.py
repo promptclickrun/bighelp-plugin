@@ -313,11 +313,12 @@ def _native_features(
                                    TRIGGER_CAPABILITY as workflows_trigger_capability,
                                    PARALLEL_CAPABILITY as workflows_parallel_capability,
                                    DELIVERY_CAPABILITY as workflows_delivery_capability,
+                                   OUTCOMES_CAPABILITY as workflows_outcomes_capability,
                                    probe as workflows_probe, triggers_available)
         reason = workflows_probe()
         if reason is None:
             features.extend((workflows_capability, workflows_edit_capability, workflows_parallel_capability,
-                             workflows_delivery_capability))
+                             workflows_delivery_capability, workflows_outcomes_capability))
             if triggers_available():
                 features.append(workflows_trigger_capability)
             else:
@@ -332,6 +333,7 @@ def _native_features(
             skip(workflows_edit_capability, why)
             skip(workflows_parallel_capability, why)
             skip(workflows_delivery_capability, why)
+            skip(workflows_outcomes_capability, why)
             skip(workflows_trigger_capability, why)
             if unavailable is not None:
                 # A fixed code, so the app can say what to do (update Hermes, for example).
@@ -341,6 +343,7 @@ def _native_features(
         skip("native-workflows-edit-v1", "workflow support is unimportable.")
         skip("native-workflows-parallel-v1", "workflow support is unimportable.")
         skip("native-workflows-delivery-v1", "workflow support is unimportable.")
+        skip("native-workflows-outcomes-v1", "workflow support is unimportable.")
         skip("native-workflows-trigger-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
     if live_alerts_available():

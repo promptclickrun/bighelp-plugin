@@ -1036,6 +1036,9 @@ class WorkflowStore:
                 # What the stage read: run inputs ("inputs.topic") and earlier outputs ("draft.file").
                 "uses": stage_reads(stage),
             }
+            if current.get("outcome") in model.OUTCOMES:
+                # A decision that ended the run: how, and why.
+                entry["outcome"] = {"end": current["outcome"], "note": str(current.get("note") or "")[:200]}
             if stage["kind"] == "signoff":
                 # The person's sign-offs, newest last.
                 entry["decisions"] = decisions.get(stage["key"], [])[-20:]
@@ -1101,6 +1104,8 @@ def reset_stage(stages: dict, definition: dict, key: str, now: float, *, iterati
     except `rerun` (the one whose work a check refused)."""
     stage_state(stages, key, "pending", now, iteration=iteration)
     stages[key]["startedAt"] = stages[key]["endedAt"] = None
+    stages[key].pop("outcome", None)
+    stages[key].pop("note", None)
     stage = model.stage_by_key(definition, key) or {}
     for branch in stage.get("branches", ()):
         item = stages.get(branch["key"], {})

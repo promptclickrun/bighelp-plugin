@@ -117,6 +117,12 @@ Version 1 workflows stay valid and mean "each stage goes to the next one in the 
   `"group": "<block key>"`.
 - A decision's `on` may list several decisions (1 to 5), with `require`: `"all"` (the default: pass when none asks
   for changes) or `"any"` (pass when one passes). Changes notes come from every verdict that asked for changes.
+- Decision outcomes (3.10.0, `native-workflows-outcomes-v1`): `pass` or `changes` can be
+  `{"end": "succeeded" | "cancelled" | "failed", "message"?}` (200 characters) to end the run there. Not passing
+  isn't always a failure: "no new pull requests" can end the run as succeeded. The note is `message`, else the first
+  note of a verdict that didn't pass, else a fixed sentence; alerts and the run show it. In a run, the decision's
+  entry in `stages` has `"outcome": {"end", "note"}`. `failed` fails the run with `decision_failed`, and Try again runs
+  the stage that gave the verdict again. A decision whose `changes` ends the run counts as an end for `no_end`.
 - `layout` (optional): `{"inputs": {"x", "y"}, "stages": {"<key>": {"x", "y"}}}` in points, finite numbers with
   |x| and |y| at most 100,000, at most one entry per stage (20). The plugin stores and returns it as is; the engine
   never reads it.
@@ -137,7 +143,7 @@ Stage kinds (every stage has `key`, `kind`, `title`):
 | --- | --- | --- |
 | `agent` | `role`, `instructions` (8,000 characters), `tools` (toolset names), `uses` (references), `outputs` (`[{name, type, values?}]`, `values` only for `decision`), `minutes` (optional) | The role's agent runs one turn |
 | `check` | `rules`: `{"type": "word_range", "of", "min", "max"}`, `{"type": "has_title", "of"}`, `{"type": "not_empty", "of"}`, `{"type": "number_range", "of", "min", "max"}` | The plugin checks earlier outputs. A failed rule fails the run at this stage |
-| `decision` | `on` (a `decision` output with values `pass` and `changes`), `pass` (`"next"` or a later stage key), `changes`: `{"goTo": <earlier agent stage>, "maxRevisions": <0-5, optional>}` | `pass` goes on. `changes` sends the run back to `goTo` with the next iteration, and that stage's brief gets the review notes. One time too many and the run needs attention (`revision_limit`) |
+| `decision` | `on` (a `decision` output with values `pass` and `changes`), `pass` (`"next"`, a later stage key or `{"end"}`), `changes`: `{"goTo": <earlier agent stage>, "maxRevisions": <0-5, optional>}` or `{"end"}` | `pass` goes on. `changes` sends the run back to `goTo` with the next iteration, and that stage's brief gets the review notes. One time too many and the run needs attention (`revision_limit`) |
 | `signoff` | `file` (a `markdown_file` output) | The run waits for you. Approve goes on; Ask for changes sends the run back to the stage that wrote the file, with your notes |
 | `delivery` (3.9.0) | `deliver` (1 to 10 earlier outputs), `to` (a `hermes send` target), `message` (optional, 2,000 characters) | The plugin sends the outputs with `hermes send`. No agent and no AI |
 

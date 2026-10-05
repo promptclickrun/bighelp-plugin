@@ -42,6 +42,9 @@ MAX_ALL_STAGES = 40
 # A decision can read the verdicts of several stages (a parallel block's agents).
 MAX_DECISION_SOURCES = MAX_BRANCHES
 DECISION_REQUIRES = ("all", "any")
+# A decision's way can end the run instead of going on or back: how it ends, and an optional note.
+OUTCOMES = ("succeeded", "cancelled", "failed")
+MAX_OUTCOME_MESSAGE = 200
 INPUT_TYPES = ("text", "long_text", "number", "choice")
 INPUT_TEXT_LIMITS = {"text": 2000, "long_text": 20000}
 OUTPUT_TYPES = ("markdown_file", "text", "number", "decision", "notes", "file", "image")
@@ -335,19 +338,40 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
                 _fail(f"{where} must require all or any of its decisions to pass.")
             result["require"] = stage["require"]
         target = stage.get("pass", "next")
-        if target != "next":
-            _key(target, f"{where} pass")
-        result["pass"] = target
-        changes = _object(stage["changes"], f"{where} changes", ("goTo",), ("maxRevisions",))
-        result["changes"] = {"goTo": _key(changes["goTo"], f"{where} goTo")}
-        if "maxRevisions" in changes:
-            result["changes"]["maxRevisions"] = _integer(changes["maxRevisions"], f"{where} revision limit",
-                                                         0, MAX_REVISIONS)
+        if type(target) is dict:
+            result["pass"] = _ending(target, f"{where} pass")
+        else:
+            if target != "next":
+                _key(target, f"{where} pass")
+            result["pass"] = target
+        if type(stage["changes"]) is dict and "end" in stage["changes"]:
+            result["changes"] = _ending(stage["changes"], f"{where} changes")
+        else:
+            changes = _object(stage["changes"], f"{where} changes", ("goTo",), ("maxRevisions",))
+            result["changes"] = {"goTo": _key(changes["goTo"], f"{where} goTo")}
+            if "maxRevisions" in changes:
+                result["changes"]["maxRevisions"] = _integer(changes["maxRevisions"], f"{where} revision limit",
+                                                             0, MAX_REVISIONS)
     else:
         if type(stage["file"]) is not str or not _is_reference(stage["file"]) or stage["file"].startswith("inputs."):
             _fail(f"{where} must name a stage's file.")
         result["file"] = stage["file"]
     return result
+
+
+def _ending(value: Any, where: str) -> dict:
+    _object(value, where, ("end",), ("message",))
+    if value["end"] not in OUTCOMES:
+        _fail(f"{where} must end the run as succeeded, cancelled or failed.")
+    result = {"end": value["end"]}
+    if "message" in value:
+        result["message"] = _text(value["message"], f"{where} message", MAX_OUTCOME_MESSAGE, empty=True)
+    return result
+
+
+def ending(way: Any) -> dict | None:
+    """A decision's `pass` or `changes` when it ends the run (`{"end", "message"?}`), else None."""
+    return way if type(way) is dict and "end" in way else None
 
 
 def _is_reference(value: str) -> bool:
@@ -422,6 +446,7 @@ def stage_minutes(definition: dict, stage: dict) -> int:
 
 
 def max_revisions(definition: dict, stage: dict) -> int:
+    """How often a decision may send the run back (its changes way goes back to a stage)."""
     return int(stage["changes"].get("maxRevisions", definition["limits"]["maxRevisions"]))
 
 
@@ -444,6 +469,9 @@ def next_stage_key(definition: dict, key: str) -> str | None:
 
 
 def pass_target(definition: dict, stage: dict) -> str | None:
+    """Where a passing decision goes; None when it ends the run."""
+    if ending(stage["pass"]) is not None:
+        return None
     return next_stage_key(definition, stage["key"]) if stage["pass"] == "next" else stage["pass"]
 
 
@@ -648,9 +676,11 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
                 elif sorted(spec.get("values", [])) != sorted(DECISION_VALUES):
                     issues.append(_issue("decision_values", f"{title} needs the values pass and changes.",
                                          stage=key))
-            target = stage["changes"]["goTo"]
-            target_stage = stage_by_key(definition, target)
-            if (target_stage is None or target_stage["kind"] not in ("agent", "parallel")
+            target = stage["changes"].get("goTo")
+            target_stage = stage_by_key(definition, target) if target is not None else None
+            if target is None:
+                pass  # The changes way ends the run.
+            elif (target_stage is None or target_stage["kind"] not in ("agent", "parallel")
                     or parent_key(definition, target) is not None):
                 issues.append(_issue("goto_invalid", f"{title} must send changes back to an agent stage.",
                                      stage=key))
@@ -660,10 +690,13 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
             elif not graph_mode and index[target] >= position:
                 issues.append(_issue("goto_invalid", f"{title} must send changes back to an earlier agent stage.",
                                      stage=key))
-            if graph_mode:
-                if stage["pass"] != "next" and (stage["pass"] not in index or stage["pass"] == key):
+            passing = stage["pass"]
+            if ending(passing) is not None:
+                pass
+            elif graph_mode:
+                if passing != "next" and (passing not in index or passing == key):
                     issues.append(_issue("pass_invalid", f"{title} must pass to another stage.", stage=key))
-            elif stage["pass"] != "next" and index.get(stage["pass"], -1) <= position:
+            elif passing != "next" and index.get(passing, -1) <= position:
                 issues.append(_issue("pass_invalid", f"{title} must pass to a later stage.", stage=key))
         elif stage["kind"] == "delivery":
             if not stage["deliver"]:
@@ -712,7 +745,11 @@ def _graph_issues(definition: dict, graph: dict[str, list[str]], reach: set[str]
     for stage in stages[1:]:
         if stage["key"] not in reach:
             issues.append(_issue("unreachable_stage", f"Nothing leads to {stage['title']}.", stage=stage["key"]))
-    if stages and not any(not graph.get(key) for key in reach):
+    # A decision whose changes way ends the run is an end too.
+    ends = [key for key in reach if not graph.get(key)] + [
+        stage["key"] for stage in stages
+        if stage["kind"] == "decision" and stage["key"] in reach and ending(stage["changes"]) is not None]
+    if stages and not ends:
         issues.append(_issue("no_end", "The workflow never ends. Let a stage end the run."))
     return issues
 
