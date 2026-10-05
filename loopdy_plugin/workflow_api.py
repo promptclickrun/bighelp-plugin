@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import os
 import socket
@@ -41,7 +42,11 @@ _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 
 def workflows_root() -> Path:
     from hermes_constants import get_default_hermes_root, get_process_hermes_home
-    return root_for_home(Path(get_default_hermes_root(home=get_process_hermes_home())))
+    # Stable Hermes (0.21.5 and earlier) has no `home` argument; it reads HERMES_HOME,
+    # which is the process home there too.
+    if "home" in inspect.signature(get_default_hermes_root).parameters:
+        return root_for_home(Path(get_default_hermes_root(home=get_process_hermes_home())))
+    return root_for_home(Path(get_default_hermes_root()))
 
 
 @functools.lru_cache(maxsize=1)
@@ -53,6 +58,9 @@ def hermes_features() -> frozenset[str]:
 def runner_mode() -> str:
     """`stream` (Hermes 0.21.4 and later) or `text` (a plain `chat -q` turn, for older Hermes)."""
     return runner.runner_mode(hermes_features())
+
+
+_store_errors_logged: set[str] = set()
 
 
 def probe() -> str | None:
@@ -74,7 +82,12 @@ def probe() -> str | None:
             return cached[1]
         WorkflowStore(root).status()
         _probe_cache[str(root)] = (time.monotonic(), None)
-    except Exception:
+    except Exception as error:
+        # The app only gets the code; the host's log says what failed, once per kind of failure.
+        name = type(error).__name__
+        if name not in _store_errors_logged:
+            _store_errors_logged.add(name)
+            logger.warning("bighelp workflows unavailable: the store can't be opened (%s)", name)
         return "store_unavailable"
     return None
 

@@ -126,6 +126,22 @@ class WorkflowRouteTests(unittest.TestCase):
         with patch.object(workflow_api, "workflows_root", side_effect=OSError("unreadable")):
             self.assertEqual(workflow_api.probe(), "store_unavailable")
 
+    def test_store_root_works_with_stable_hermes(self):
+        # Stable Hermes' get_default_hermes_root() takes no arguments; newer builds take `home`.
+        import hermes_constants
+        root = Path("/tmp/loopdy-stable-root")
+
+        def stable():
+            return root
+
+        def newer(*, home=None):
+            return root
+
+        for helper in (stable, newer):
+            with self.subTest(helper=helper.__name__), \
+                    patch.object(hermes_constants, "get_default_hermes_root", helper):
+                self.assertEqual(workflow_api.workflows_root(), root / "plugin-data" / "loopdy" / "workflows")
+
     def test_version_two_routes_match_the_vectors(self):
         status = self.ok("status", {}, "status-v2.json")
         self.assertEqual(status["runner"], {"available": True, "mode": "stream"})
