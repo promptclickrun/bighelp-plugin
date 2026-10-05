@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import sqlite3
@@ -42,6 +43,27 @@ REPORT_EXIT_GRACE_SECONDS = 5
 IDLE_EXIT_SECONDS = 600
 PRUNE_EVERY_SECONDS = 3600
 MIN_FREE_MEMORY = 512 * 1024 * 1024
+DELIVERY_SECONDS = 120
+# Markdown up to this size goes in the message itself; longer files go as an attachment.
+DELIVERY_INLINE_CHARS = 3500
+MAX_SEND_RESULT_BYTES = 64 * 1024
+_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}")
+_SPACES = re.compile(r"\s+")
+# Under Hermes' cache: images/ and documents/ each get a folder per delivery, removed when it ends.
+OUTBOX = "bighelp-workflows"
+
+
+class DeliveryError(Exception):
+    """A delivery can't start. The message is safe to show."""
+
+
+def _unmedia(text: str) -> str:
+    """Outputs are agent text: a `MEDIA:` in them must never make Hermes attach a file from this computer."""
+    return re.sub(r"(?i)(media)(\s*:)", "\\1\u2060\\2", text).replace("[[", "[\u2060[")
+
+
+def _kilobytes(size: int) -> str:
+    return f"{size / (1024 * 1024):.1f} MB" if size >= 1024 * 1024 else f"{max(1, round(size / 1024))} KB"
 _LIVE = ",".join(f"'{state}'" for state in LIVE_ATTEMPT_STATES)
 _ACTIVE = ",".join(f"'{state}'" for state in ACTIVE_STATES)
 
@@ -256,7 +278,7 @@ class Coordinator:
         report = runner.read_report(directory / "report.json", pid)
         if alive:
             runner.trim_stderr(directory / "stderr.log")
-            if not stream:
+            if attempt["runner"] == "text":
                 self._coarse(attempt, now)
             with self.store.read() as connection:
                 run = connection.execute("SELECT cancel_requested FROM runs WHERE id=?",
@@ -357,6 +379,9 @@ class Coordinator:
         stream = attempt["runner"] == "stream"
         output_path = directory / ("stream.jsonl" if stream else "reply.txt")
         reason = attempt["stop_reason"]
+        if attempt["runner"] == "send":
+            # The message went out or it didn't; its attachments aren't needed either way.
+            self._clear_outbox(attempt["id"])
         if reason == "linger" and report is not None:
             exit_code, reason = report["exit_code"], None
         if exit_code is None and report is not None:
@@ -406,6 +431,10 @@ class Coordinator:
                 self._attention(connection, run, now, "coordinator_restarted",
                                 f"We don't know how {stage['title']} ended.")
             self._with_run(attempt["run_id"], unknown)
+            return
+
+        if attempt["runner"] == "send":
+            self._delivered(attempt, exit_code, stderr_tail)
             return
 
         def checking(connection, run, definition, now):
@@ -610,6 +639,8 @@ class Coordinator:
             return self._launch(run, definition, stage, from_states)
         if stage["kind"] == "parallel":
             return self._start_parallel(run, definition, stage, from_states)
+        if stage["kind"] == "delivery":
+            return self._deliver(run, definition, stage, from_states)
 
         def change(connection, run, definition, now):
             if run["state"] not in from_states:
@@ -768,6 +799,13 @@ class Coordinator:
                 item["text"] = "\n".join(f"- [{note['severity']}] {note['text']}" for note in notes) or "(no notes)"
             elif row["type"] == "text":
                 item["text"] = data.decode("utf-8", "replace")
+            elif row["type"] in ("file", "image"):
+                shown = (json.loads(row["value_json"] or "{}") or {}).get("fileName") or name
+                extension = Path(shown).suffix if _EXTENSION.fullmatch(Path(shown).suffix) else ""
+                file_name = f"inputs/{head}.{name}{extension}"
+                runner.write_private(directory / file_name, data, read_only=True)
+                kind = "picture" if row["type"] == "image" else "file"
+                item["text"] = f"A {kind} ({shown}, {_kilobytes(len(data))}). Open it from {file_name}."
             else:
                 item["text"] = str(json.loads(row["value_json"]))
             result.append(item)
@@ -861,6 +899,172 @@ class Coordinator:
                       stage["key"], number)
         self._with_run(run["id"], running)
         return True
+
+    # MARK: Delivery
+
+    def _outbox(self, kind: str, attempt_id: str) -> Path:
+        """Where a delivery's attachments wait: Hermes' own cache, the only place `hermes send` attaches from
+        on every computer (strict media mode included)."""
+        parent = self.hermes_root / "cache" / ("images" if kind == "image" else "documents")
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            raise StoreUnavailable() from None
+        return secure_dir(secure_dir(parent / OUTBOX) / attempt_id)
+
+    def _clear_outbox(self, attempt_id: str) -> None:
+        for kind in ("documents", "images"):
+            _remove_tree(self.hermes_root / "cache" / kind / OUTBOX, attempt_id)
+
+    def _message(self, connection: sqlite3.Connection, run: sqlite3.Row, definition: dict, stage: dict,
+                 attempt_id: str, header: str) -> str:
+        """The text `hermes send` delivers: the header, attachments as MEDIA lines, then short outputs inline."""
+        attachments, body = [], []
+        for index, reference in enumerate(stage["deliver"]):
+            row = self._latest(connection, run["id"], reference)
+            head, name = model.split_reference(reference)
+            source = model.stage_by_key(definition, head)
+            label = f"{source['title'] if source else head}: {name}"
+            if row is None:
+                raise DeliveryError(f"{stage['title']} has nothing to send for {label}.")
+            data = self.store.read_artifact_bytes(row["sha256"])
+            value = json.loads(row["value_json"]) if row["value_json"] else None
+            if row["type"] in ("file", "image") or (row["type"] == "markdown_file"
+                                                    and len(data.decode("utf-8", "replace")) > DELIVERY_INLINE_CHARS):
+                shown = (value or {}).get("fileName") if row["type"] != "markdown_file" else f"{head}-{name}.md"
+                folder = secure_dir(self._outbox(row["type"], attempt_id) / str(index))
+                path = folder / (_SPACES.sub("_", shown or f"{head}-{name}") or "file")
+                runner.write_private(path, data)
+                attachments.append(f"MEDIA:{path}")
+            elif row["type"] in ("markdown_file", "text"):
+                body.append(_unmedia(data.decode("utf-8", "replace").strip()))
+            elif row["type"] == "notes":
+                lines = [f"- [{note['severity']}] {note['text']}" for note in value or []]
+                body.append(_unmedia(f"{label}:\n" + ("\n".join(lines) or "- (no notes)")))
+            elif row["type"] == "number":
+                body.append(f"{label}: {format(value, 'g') if isinstance(value, float) else value}")
+            else:
+                body.append(_unmedia(f"{label}: {value}"))
+        return "\n\n".join([_unmedia(header), *attachments, *[part for part in body if part]]).strip() + "\n"
+
+    def _deliver(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...]) -> bool:
+        """Send earlier outputs with `hermes send`: a short process on this computer, no agent and no AI."""
+        attempt_id = new_id("att")
+        iteration = run["iteration"]
+        with self.store.read() as connection:
+            number = connection.execute("SELECT COUNT(*) FROM attempts WHERE run_id=? AND stage_key=?",
+                                        (run["id"], stage["key"])).fetchone()[0] + 1
+            workflow = connection.execute("SELECT name FROM workflows WHERE id=?", (run["workflow_id"],)).fetchone()
+            name = workflow["name"] if workflow else definition["name"]
+            header = stage.get("message", "").strip() or f"{name} (run {run['number']})"
+            directory = runner.attempt_dir(self.store.runs_dir, run["id"], stage["key"], iteration, number)
+            try:
+                runner.prepare_attempt(directory)
+                message = self._message(connection, run, definition, stage, attempt_id, header)
+                runner.write_private(directory / "message.md", message.encode("utf-8"))
+                problem = None
+            except DeliveryError as error:
+                problem = str(error)
+            except (OSError, StoreUnavailable, WorkflowError):
+                problem = f"{stage['title']} couldn't get its files ready."
+        target = stage["to"]
+        if problem is not None or target == "local":
+            self._clear_outbox(attempt_id)
+
+            def settle(connection, fresh, definition, now):
+                if fresh["state"] not in from_states:
+                    return False
+                stages = json.loads(fresh["stages_json"])
+                stage_state(stages, stage["key"], "running", now, start=True, iteration=iteration)
+                if problem is not None:
+                    self._fail(connection, fresh, now, stage["key"], "delivery_failed", problem, stages=stages)
+                    return False
+                # "Local (save only)": the outputs stay in the run; nothing goes out.
+                stage_state(stages, stage["key"], "accepted", now, end=True)
+                update_run(connection, fresh, now, state="accepted", stage_key=stage["key"],
+                           stages_json=model.canonical_json(stages),
+                           next_stage=model.next_stage_key(definition, stage["key"]))
+                add_event(connection, fresh["id"], now, "delivered", f"{stage['title']}: kept here.", stage["key"])
+                return False
+            self._with_run(run["id"], settle)
+            return False
+
+        def launched(connection, fresh, definition, now):
+            if fresh["state"] not in from_states or fresh["cancel_requested"] or fresh["version"] != run["version"]:
+                return False
+            connection.execute(
+                "INSERT INTO attempts (id, run_id, stage_key, iteration, number, state, agent_id, coordinator_epoch, "
+                "launched_at, deadline_at, dir, runner, tokens_known) "
+                "VALUES (?, ?, ?, ?, ?, 'launched', '', ?, ?, ?, ?, 'send', 1)",
+                (attempt_id, fresh["id"], stage["key"], iteration, number, self.epoch, now, now + DELIVERY_SECONDS,
+                 str(directory)))
+            stages = json.loads(fresh["stages_json"])
+            stage_state(stages, stage["key"], "running", now, start=True, iteration=iteration)
+            update_run(connection, fresh, now, state="running", stage_key=stage["key"], next_stage=None,
+                       stages_json=model.canonical_json(stages),
+                       started_at=fresh["started_at"] if fresh["started_at"] is not None else now)
+            add_event(connection, fresh["id"], now, "stage_launched", f"{stage['title']}: sending to {target}.",
+                      stage["key"], number)
+            return True
+
+        if not self._with_run(run["id"], launched):
+            self._clear_outbox(attempt_id)
+            return False
+        argv = runner.send_argv(self.hermes, target, directory / "message.md")
+        env = runner.send_env(self.environ, home=self.hermes_root, import_path=self.import_path)
+        try:
+            pid = self.host.spawn(argv, env=env, cwd=directory, stdout_path=directory / "send.json",
+                                  stderr_path=directory / "stderr.log")
+        except (OSError, ValueError, StoreUnavailable):
+            self._clear_outbox(attempt_id)
+
+            def failed(connection, fresh, definition, now):
+                connection.execute("UPDATE attempts SET state='failed', outcome_code='spawn_failed', ended_at=? "
+                                   "WHERE id=?", (now, attempt_id))
+                if fresh["state"] in ACTIVE_STATES:
+                    self._fail(connection, fresh, now, stage["key"], "spawn_failed",
+                               f"{stage['title']} couldn't start.")
+            self._with_run(run["id"], failed)
+            return True
+        fingerprint = self.host.fingerprint(pid) or "unverified"
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE attempts SET state='running', pid=?, pid_fingerprint=? WHERE id=?",
+                               (pid, fingerprint, attempt_id))
+        return True
+
+    def _delivered(self, attempt: sqlite3.Row, exit_code: int, stderr_tail: bytes) -> None:
+        """Hermes said whether the message went out: `--json` prints its result, and the exit code agrees."""
+        data = runner.read_tail(Path(attempt["dir"]) / "send.json", MAX_SEND_RESULT_BYTES) or b""
+        try:
+            result = json.loads(data.decode("utf-8", "replace"))
+        except ValueError:
+            result = None
+        result = result if isinstance(result, dict) else {}
+        sent = exit_code == 0 and not result.get("error") and bool(result.get("success") or result.get("skipped"))
+        if not sent:
+            error = result.get("error")
+            reason = (clean_text(error, 200) if isinstance(error, str) and error.strip()
+                      else f"{runner.stderr_summary(stderr_tail)} (exit code {exit_code})")
+
+            def title(connection, run, definition, now):
+                return model.stage_by_key(definition, attempt["stage_key"])["title"]
+            name = self._with_run(attempt["run_id"], title) or attempt["stage_key"]
+            self._attempt_failed(attempt, "delivery_failed", f"{name} couldn't send: {reason}")
+            return
+
+        def accept(connection, run, definition, now):
+            stage = model.stage_by_key(definition, attempt["stage_key"])
+            connection.execute("UPDATE attempts SET state='accepted', outcome_code='accepted', exit_code=?, "
+                               "ended_at=? WHERE id=?", (exit_code, now, attempt["id"]))
+            if run["state"] not in ACTIVE_STATES:
+                return
+            stages = json.loads(run["stages_json"])
+            stage_state(stages, stage["key"], "accepted", now, end=True)
+            update_run(connection, run, now, state="accepted", stages_json=model.canonical_json(stages),
+                       next_stage=model.next_stage_key(definition, stage["key"]))
+            add_event(connection, run["id"], now, "delivered", f"{stage['title']}: sent to {stage['to']}.",
+                      stage["key"], attempt["number"])
+        self._with_run(attempt["run_id"], accept)
 
     # MARK: Retention
 

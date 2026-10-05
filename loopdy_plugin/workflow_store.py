@@ -1134,6 +1134,8 @@ def stage_reads(stage: dict) -> list[str]:
         reads = [on] if isinstance(on, str) else [item for item in on or [] if isinstance(item, str)]
     elif kind == "signoff":
         reads = [stage["file"]] if isinstance(stage.get("file"), str) else []
+    elif kind == "delivery":
+        reads = [item for item in stage.get("deliver") or [] if isinstance(item, str)]
     else:
         reads = []
     return list(dict.fromkeys(reads))[:32]

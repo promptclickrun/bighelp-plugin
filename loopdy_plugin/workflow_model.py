@@ -33,7 +33,7 @@ MAX_STAGE_MINUTES = 60
 DEFAULT_STAGE_MINUTES = 20
 MAX_REVISIONS = 5
 DEFAULT_MAX_REVISIONS = 2
-STAGE_KINDS = ("agent", "check", "decision", "signoff", "parallel")
+STAGE_KINDS = ("agent", "check", "decision", "signoff", "parallel", "delivery")
 # A parallel block runs this many agent stages at once (schemaVersion 2 only).
 MIN_BRANCHES = 2
 MAX_BRANCHES = 5
@@ -44,7 +44,12 @@ MAX_DECISION_SOURCES = MAX_BRANCHES
 DECISION_REQUIRES = ("all", "any")
 INPUT_TYPES = ("text", "long_text", "number", "choice")
 INPUT_TEXT_LIMITS = {"text": 2000, "long_text": 20000}
-OUTPUT_TYPES = ("markdown_file", "text", "number", "decision", "notes")
+OUTPUT_TYPES = ("markdown_file", "text", "number", "decision", "notes", "file", "image")
+# A delivery stage sends earlier outputs to one place Hermes can message (`hermes send --to`).
+MAX_DELIVERED = 10
+MAX_DELIVERY_MESSAGE = 2000
+# "telegram", "discord:#ops", "telegram:-1001234567890:17585", "signal:+15551234567", "slack:C0123ABCD".
+DELIVERY_TARGET = re.compile(r"[a-z][a-z0-9_]{0,31}(:[^\x00-\x1f\x7f\s][^\x00-\x1f\x7f]{0,199})?\Z")
 RULE_TYPES = ("word_range", "has_title", "not_empty", "number_range")
 DECISION_VALUES = ("pass", "changes")
 # A stage must never reach people or start other work on its own. The platform bundles (hermes-*) include
@@ -239,6 +244,8 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
         if not graph:
             _fail(f"{where} is a parallel block, which needs schemaVersion 2.")
         _object(stage, where, common + ("branches",), edge)
+    elif kind == "delivery":
+        _object(stage, where, common + ("deliver", "to"), ("message",) + edge)
     else:
         _fail(f"{where} has an unknown kind.")
     result: dict[str, Any] = {"key": _key(stage["key"], f"{where} key"), "kind": kind,
@@ -302,6 +309,18 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
                 _fail(f"{label} can't name a stage after it: the block goes on when all its agents are done.")
             branches.append(_parse_stage(branch, label))
         result["branches"] = branches
+    elif kind == "delivery":
+        deliver = _list(stage["deliver"], f"{where} outputs", MAX_DELIVERED)
+        for reference in deliver:
+            if type(reference) is not str or not _is_reference(reference) or reference.startswith("inputs."):
+                _fail(f"{where} must deliver stage outputs.")
+        result["deliver"] = list(dict.fromkeys(deliver))
+        to = stage["to"]
+        if type(to) is not str or (to and DELIVERY_TARGET.fullmatch(to) is None):
+            _fail(f"{where} has a place to deliver to that Hermes can't use.")
+        result["to"] = to
+        if "message" in stage:
+            result["message"] = _text(stage["message"], f"{where} message", MAX_DELIVERY_MESSAGE, empty=True)
     elif kind == "decision":
         # One verdict (`"review.decision"`), or several (a parallel block's agents) with `require`.
         sources = stage["on"] if type(stage["on"]) is list else [stage["on"]]
@@ -646,6 +665,15 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
                     issues.append(_issue("pass_invalid", f"{title} must pass to another stage.", stage=key))
             elif stage["pass"] != "next" and index.get(stage["pass"], -1) <= position:
                 issues.append(_issue("pass_invalid", f"{title} must pass to a later stage.", stage=key))
+        elif stage["kind"] == "delivery":
+            if not stage["deliver"]:
+                issues.append(_issue("delivery_empty", f"Choose what {title} sends.", stage=key))
+            if not stage["to"]:
+                issues.append(_issue("delivery_target", f"Choose where {title} sends it.", stage=key))
+            for reference in stage["deliver"]:
+                if earlier_output(reference, key, position) is None:
+                    issues.append(_issue("delivery_source", f"{title} sends {reference}, which no stage before it "
+                                         "always makes.", stage=key))
         elif stage["kind"] == "signoff":
             spec = earlier_output(stage["file"], key, position)
             if spec is None or spec["type"] != "markdown_file":

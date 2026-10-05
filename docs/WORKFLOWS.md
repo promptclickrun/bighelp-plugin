@@ -139,9 +139,27 @@ Stage kinds (every stage has `key`, `kind`, `title`):
 | `check` | `rules`: `{"type": "word_range", "of", "min", "max"}`, `{"type": "has_title", "of"}`, `{"type": "not_empty", "of"}`, `{"type": "number_range", "of", "min", "max"}` | The plugin checks earlier outputs. A failed rule fails the run at this stage |
 | `decision` | `on` (a `decision` output with values `pass` and `changes`), `pass` (`"next"` or a later stage key), `changes`: `{"goTo": <earlier agent stage>, "maxRevisions": <0-5, optional>}` | `pass` goes on. `changes` sends the run back to `goTo` with the next iteration, and that stage's brief gets the review notes. One time too many and the run needs attention (`revision_limit`) |
 | `signoff` | `file` (a `markdown_file` output) | The run waits for you. Approve goes on; Ask for changes sends the run back to the stage that wrote the file, with your notes |
+| `delivery` (3.9.0) | `deliver` (1 to 10 earlier outputs), `to` (a `hermes send` target), `message` (optional, 2,000 characters) | The plugin sends the outputs with `hermes send`. No agent and no AI |
 
 `word_range` and `has_title` read a `markdown_file` or `text` output, `not_empty` also reads `notes`, and
 `number_range` reads a `number`.
+
+### Files, pictures and delivery (3.9.0, `native-workflows-delivery-v1`)
+
+- Output types `file` and `image`: the agent saves the file in its `out/` folder and hands off
+  `{"path": "out/<name>"}`. At most 10 MB. An `image` must be a PNG, JPEG, GIF, WebP or HEIC picture (checked by
+  its first bytes). The run's output has `value: {"fileName", "mimeType"}`; read the bytes with `artifacts/read`.
+  A later stage that uses one gets a read-only copy in `inputs/<stage>.<name><ext>`.
+- A `delivery` stage sends earlier outputs to one place: `to` is what `hermes send --to` takes, like `telegram`
+  (its home channel), `discord:#ops` or `slack:C0123ABCD`. The app offers the computer's
+  `/api/cron/delivery-targets`. `local` keeps the outputs in the run and sends nothing. The message starts with
+  `message` (or the workflow's name and run number); short text, numbers, decisions and notes go in the message,
+  and files, pictures and Markdown over 3,500 characters go as attachments. The plugin runs
+  `hermes send --json` from the computer's own Hermes home, with the attachments in Hermes' cache
+  (`cache/documents/bighelp-workflows/` and `cache/images/bighelp-workflows/`), and removes them when the send ends.
+  A `MEDIA:` in an output's text never attaches anything. The stage fails with `delivery_failed` and Hermes'
+  reason when the send fails, and with `timed_out` after 2 minutes. Validation codes: `delivery_empty`,
+  `delivery_target` and `delivery_source` (an output that doesn't always come first).
 
 ## For the app
 
