@@ -174,7 +174,10 @@
           "agentId": null,
           "approvedAt": null
         }
-      ]
+      ],
+      "trigger": {
+        "kind": "manual"
+      }
     },
     "validation": {
       "valid": true,

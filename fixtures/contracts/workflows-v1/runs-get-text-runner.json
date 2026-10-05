@@ -53,6 +53,10 @@
               "tokens": null,
               "outcomeCode": "accepted"
             }
+          ],
+          "uses": [
+            "inputs.topic",
+            "inputs.audience"
           ]
         },
         {
@@ -79,6 +83,12 @@
               "tokens": null,
               "outcomeCode": null
             }
+          ],
+          "uses": [
+            "inputs.topic",
+            "inputs.audience",
+            "inputs.length",
+            "research.brief"
           ]
         },
         {
@@ -92,7 +102,10 @@
           "minutes": null,
           "startedAt": null,
           "endedAt": null,
-          "attempts": []
+          "attempts": [],
+          "uses": [
+            "draft.draft"
+          ]
         },
         {
           "key": "review",
@@ -105,7 +118,13 @@
           "minutes": 15,
           "startedAt": null,
           "endedAt": null,
-          "attempts": []
+          "attempts": [],
+          "uses": [
+            "inputs.topic",
+            "inputs.audience",
+            "research.brief",
+            "draft.draft"
+          ]
         },
         {
           "key": "review_decision",
@@ -118,7 +137,10 @@
           "minutes": null,
           "startedAt": null,
           "endedAt": null,
-          "attempts": []
+          "attempts": [],
+          "uses": [
+            "review.decision"
+          ]
         },
         {
           "key": "signoff",
@@ -131,7 +153,11 @@
           "minutes": null,
           "startedAt": null,
           "endedAt": null,
-          "attempts": []
+          "attempts": [],
+          "uses": [
+            "draft.draft"
+          ],
+          "decisions": []
         }
       ],
       "outputs": [

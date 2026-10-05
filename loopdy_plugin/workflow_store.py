@@ -24,7 +24,7 @@ from . import workflow_model as model
 from .sensitive import SENSITIVE_CREDENTIAL_RE
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_SLOTS = 2
 MAX_PLANNED = 20
 MAX_RUN_ARTIFACT_BYTES = 50 * 1024 * 1024
@@ -54,7 +54,7 @@ _ID = re.compile(r"(?:wf|run|att)_[0-9a-f]{16}\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _TEMPLATE_ID = re.compile(r"tpl-[0-9a-f]{16}\Z")
 _TABLES = {"workflows", "revisions", "bindings", "runs", "attempts", "artifacts", "approvals", "events",
-           "live_lines", "coordinator", "requests", "templates", "sqlite_sequence"}
+           "live_lines", "coordinator", "requests", "templates", "triggers", "sqlite_sequence"}
 
 
 class WorkflowError(Exception):
@@ -147,6 +147,10 @@ def root_for_home(hermes_root: Path) -> Path:
     return Path(hermes_root) / "plugin-data" / "loopdy" / "workflows"
 
 
+# How a workflow starts: by hand (no row), or on a schedule through a Hermes cron job (workflow_trigger.py).
+_TRIGGERS_TABLE = """CREATE TABLE IF NOT EXISTS triggers (
+        workflow_id TEXT PRIMARY KEY, kind TEXT NOT NULL, schedule TEXT, inputs_json TEXT NOT NULL,
+        job_id TEXT, updated_at REAL NOT NULL)"""
 _TEMPLATES_TABLE = """CREATE TABLE IF NOT EXISTS templates (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, definition_json TEXT NOT NULL,
         stage_count INTEGER NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)"""
@@ -208,6 +212,7 @@ SCHEMA = (
     """CREATE TABLE IF NOT EXISTS requests (
         request_id TEXT PRIMARY KEY, op TEXT NOT NULL, response_json TEXT NOT NULL, at REAL NOT NULL)""",
     _TEMPLATES_TABLE,
+    _TRIGGERS_TABLE,
 )
 # Store version 1 (plugin 3.5.0) to 2: pins, your templates and the text runner's attempts.
 MIGRATE_1_TO_2 = (
@@ -216,6 +221,8 @@ MIGRATE_1_TO_2 = (
     "ALTER TABLE attempts ADD COLUMN tokens_known INTEGER NOT NULL DEFAULT 1",
     _TEMPLATES_TABLE,
 )
+# Store version 2 (plugin 3.6) to 3: triggers.
+MIGRATE_2_TO_3 = (_TRIGGERS_TABLE,)
 
 
 class WorkflowStore:
@@ -256,7 +263,7 @@ class WorkflowStore:
             self._use_wal(connection)
             connection.execute("PRAGMA synchronous=FULL")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, SCHEMA_VERSION):
+            if version not in (0, 1, 2, SCHEMA_VERSION):
                 raise StoreUnavailable("This workflow store needs a newer bighelp plugin.")
             if version != SCHEMA_VERSION:
                 self._migrate(connection)
@@ -296,8 +303,8 @@ class WorkflowStore:
                     connection.execute(statement)
                 connection.execute("INSERT OR IGNORE INTO coordinator (id, epoch, slots_total) VALUES (1, 0, ?)",
                                    (DEFAULT_SLOTS,))
-            elif version == 1:
-                for statement in MIGRATE_1_TO_2:
+            elif version in (1, 2):
+                for statement in (MIGRATE_1_TO_2 if version == 1 else ()) + MIGRATE_2_TO_3:
                     connection.execute(statement)
             if version != SCHEMA_VERSION:
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -451,6 +458,50 @@ class WorkflowStore:
         return model.validate(definition, bindings=bindings, profile_exists=host.profile_exists,
                               toolset_known=host.toolset_known, tool_scope=host.tool_scope)
 
+    @staticmethod
+    def _trigger(connection: sqlite3.Connection, workflow_id: str) -> dict:
+        row = connection.execute("SELECT * FROM triggers WHERE workflow_id=?", (workflow_id,)).fetchone()
+        if row is None or row["kind"] != "schedule":
+            return {"kind": "manual"}
+        return {"kind": "schedule", "schedule": row["schedule"], "inputs": json.loads(row["inputs_json"]),
+                "jobId": row["job_id"]}
+
+    def trigger(self, workflow_id: str) -> dict:
+        with self.read() as connection:
+            self._workflow(connection, workflow_id)
+            return self._trigger(connection, workflow_id)
+
+    def scheduled_start(self, workflow_id: str, inputs: Any, host: HostFacts | None) -> tuple[str, int, dict]:
+        """(name, latest revision, parsed inputs) for a run on a schedule; refuses what couldn't run."""
+        with self.read() as connection:
+            row = self._workflow(connection, workflow_id)
+            if row["archived"]:
+                raise WorkflowError(409, "workflow_archived", "This workflow is archived.")
+            if not row["latest_revision"]:
+                raise WorkflowError(409, "not_published", "Run this workflow once before you schedule it.")
+            definition = self._definition(connection, workflow_id, row["latest_revision"])
+            validation = self._validation(connection, workflow_id, definition, host)
+            if not (validation["valid"] and validation["host"]):
+                raise WorkflowError(409, "not_valid", "Fix the problems in this workflow first.")
+            try:
+                parsed = model.parse_inputs(definition, inputs)
+            except model.InputsError as error:
+                raise WorkflowError(422, "inputs_invalid", str(error)) from None
+            return row["name"], row["latest_revision"], parsed
+
+    def save_trigger(self, workflow_id: str, kind: str, schedule: str | None, inputs: dict,
+                     job_id: str | None) -> dict:
+        with self.transaction() as connection:
+            self._workflow(connection, workflow_id)
+            if kind == "manual":
+                connection.execute("DELETE FROM triggers WHERE workflow_id=?", (workflow_id,))
+            else:
+                connection.execute(
+                    "INSERT OR REPLACE INTO triggers (workflow_id, kind, schedule, inputs_json, job_id, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (workflow_id, kind, schedule, model.canonical_json(inputs), job_id, self.now()))
+            return self._trigger(connection, workflow_id)
+
     def list_workflows(self, include_archived: bool, host: HostFacts | None) -> dict:
         with self.read() as connection:
             rows = connection.execute(
@@ -478,7 +529,7 @@ class WorkflowStore:
                     "draftVersion": row["draft_version"], "hasDraft": has_draft,
                     "stageCount": len(current["stages"]), "needsSetupRoles": missing,
                     "valid": validation["valid"], "archived": bool(row["archived"]), "lastRunAt": iso(last),
-                    "pinned": bool(row["pinned"]),
+                    "pinned": bool(row["pinned"]), "trigger": self._trigger(connection, row["id"]),
                 })
             cache: dict = {}
             waiting = [self._summary(connection, run, cache) for run in connection.execute(
@@ -500,6 +551,7 @@ class WorkflowStore:
                 "draftVersion": row["draft_version"], "archived": bool(row["archived"]),
                 "pinned": bool(row["pinned"]), "definition": definition,
                 "bindings": self._binding_list(connection, workflow_id, definition),
+                "trigger": self._trigger(connection, workflow_id),
             }, "validation": self._validation(connection, workflow_id, definition, host)}
 
     @staticmethod
@@ -964,18 +1016,29 @@ class WorkflowStore:
                 "tokens": {"in": row["tokens_in"], "out": row["tokens_out"]} if row["tokens_known"] else None,
                 "outcomeCode": row["outcome_code"]})
         value["inputs"] = json.loads(run["inputs_json"])
+        decisions: dict[str, list] = {}
+        for row in connection.execute("SELECT * FROM approvals WHERE run_id=? ORDER BY id", (run["id"],)):
+            decisions.setdefault(row["stage_key"], []).append({
+                "iteration": row["iteration"], "decision": row["decision"], "notes": row["notes"][:2_000],
+                "decidedAt": iso(row["decided_at"])})
         value["stages"] = []
         for stage in definition["stages"]:
             current = stages.get(stage["key"], {})
             agent = stage["kind"] == "agent"
-            value["stages"].append({
+            entry = {
                 "key": stage["key"], "kind": stage["kind"], "title": stage["title"],
                 "role": stage.get("role"), "agentId": bindings.get(stage["role"]) if agent else None,
                 "iteration": current.get("iteration", 1), "state": current.get("state", "pending"),
                 "minutes": model.stage_minutes(definition, stage) if agent else None,
                 "startedAt": iso(current.get("startedAt")), "endedAt": iso(current.get("endedAt")),
                 "attempts": attempts.get(stage["key"], [])[-MAX_ATTEMPTS_SHOWN:],
-            })
+                # What the stage read: run inputs ("inputs.topic") and earlier outputs ("draft.file").
+                "uses": stage_reads(stage),
+            }
+            if stage["kind"] == "signoff":
+                # The person's sign-offs, newest last.
+                entry["decisions"] = decisions.get(stage["key"], [])[-20:]
+            value["stages"].append(entry)
         latest: dict[tuple[str, str], sqlite3.Row] = {}
         history: dict[tuple[str, str], list[sqlite3.Row]] = {}
         for row in connection.execute("SELECT * FROM artifacts WHERE run_id=? ORDER BY id", (run["id"],)):
@@ -1037,6 +1100,22 @@ def stage_state(stages: dict, key: str, state: str, now: float, *, start: bool =
         item["startedAt"], item["endedAt"] = now, None
     if end:
         item["endedAt"] = now
+
+
+def stage_reads(stage: dict) -> list[str]:
+    """The references one stage reads, in definition order, without repeats."""
+    kind = stage["kind"]
+    if kind == "agent":
+        reads = list(stage.get("uses") or [])
+    elif kind == "check":
+        reads = [rule["of"] for rule in stage.get("rules") or [] if isinstance(rule.get("of"), str)]
+    elif kind == "decision":
+        reads = [stage["on"]] if isinstance(stage.get("on"), str) else []
+    elif kind == "signoff":
+        reads = [stage["file"]] if isinstance(stage.get("file"), str) else []
+    else:
+        reads = []
+    return list(dict.fromkeys(reads))[:32]
 
 
 def add_event(connection: sqlite3.Connection, run_id: str, now: float, kind: str, text: str,

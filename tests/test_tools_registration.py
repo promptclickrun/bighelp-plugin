@@ -145,6 +145,11 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema["parameters"], PEOPLE_PARAMETERS)
                 self.assertIn("not proof of identity", description)
                 continue
+            if tool_name == "bighelp_workflows":
+                from loopdy_plugin.workflow_tools import SCHEMA as WORKFLOW_SCHEMA
+                self.assertEqual(renderer_schema, WORKFLOW_SCHEMA)
+                self.assertIn("never through this tool", description)
+                continue
             if tool_name.startswith("bighelp_templates_"):
                 from loopdy_plugin.template_tools import SCHEMAS as TEMPLATE_SCHEMAS
                 self.assertEqual(renderer_schema, TEMPLATE_SCHEMAS[tool_name])

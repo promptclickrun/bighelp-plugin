@@ -105,6 +105,19 @@ canonical "Bot Chat" session. Replies, failures and helper results there alert o
 Peer chats in bighelp (`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`);
 it starts off. A question or approval in a peer chat still alerts, since it needs the person.
 
+### Workflows
+
+A workflow stage is a `hermes chat --source workflow` turn. Its replies, failures and Live Activity updates
+never alert; a command it asks to run still asks for approval. The run alerts instead, read from the
+workflow store's run journal by the notification worker:
+
+- needs you (a sign-off waits, or the run needs attention): `clarification.required`
+- succeeded and cancelled: `session.completed`; failed: `session.failed`
+
+The alert's title is the workflow's name, and its chat is `workflow.run.<runId>` (the app opens the run).
+Each kind has a switch per device (`PUT /enrollments/<grantId>/preferences` with `"workflows": {"needsYou",
+"succeeded", "failed", "cancelled"}`); all start on. Capabilities list `preferences.workflows`.
+
 ## Instant alerts while bighelp is open
 
 A push can take 10 seconds or more to arrive. While bighelp is open on a device, the device gets its alerts

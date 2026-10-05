@@ -41,6 +41,7 @@ from .activity_bridge import (
 from .attachments import AttachmentStore
 from .events import BighelpEvent
 from .hooks import normalize_hook
+from .workflow_runner import in_workflow_stage
 from .generative_ui import extract_rendered_envelope
 from .link_client import load_runtime_config
 from .link_contracts import generative_ui_event, notification_event
@@ -227,6 +228,9 @@ def register(
     # bighelp's Template Catalog for agents. Making an agent needs a plugin setting and the person's approval.
     from .template_tools import register as register_template_tools
     register_template_tools(ctx)
+    # Workflows for agents: read, draft and run; publishing and schedules ask the person.
+    from .workflow_tools import register as register_workflow_tools
+    register_workflow_tools(ctx)
     register_legacy_toolset_alias()
     # Workflow runs live in their own coordinator; after a reboot it starts again here when runs wait for it.
     if os.environ.get("HERMES_SESSION_SOURCE") != "workflow":
@@ -484,6 +488,8 @@ def _post_llm_call(
     activity_broker: LinkActivityBroker | Any,
     **payload: Any,
 ) -> None:
+    if in_workflow_stage():
+        return
     publish_hook_activity(
         "post_llm_call",
         broker=activity_broker,
@@ -574,6 +580,9 @@ def _deliver_hook(
     profile_getter: Any | None = None,
     **payload: Any,
 ) -> None:
+    # A workflow stage's turns are machinery: the run alerts when it needs the person or ends.
+    if in_workflow_stage():
+        return
     if hook_name in {"subagent_start", "subagent_stop"} and callable(profile_getter):
         # PluginContext resolves the current profile scope, not load-time defaults.
         profile = str(profile_getter() or profile)

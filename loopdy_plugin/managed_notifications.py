@@ -41,6 +41,7 @@ from .reactions import REACTION_SCHEMA
 from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
 from .sealed_alerts import seal_alert, seal_avatar
 from .session_state import open_profile_store
+from .workflow_runner import in_workflow_stage
 
 ORIGIN = "https://link.loopdy.app"
 ROOT = "/v1/notifications/host-grants"
@@ -54,6 +55,19 @@ _EVENT_TYPES = {
 }
 _APPROVAL_EVENT = "approval.required"
 _CLARIFICATION_EVENT = "clarification.required"
+# Workflow runs alert with the existing event types (the notification service knows only
+# these): a run that needs the person is a question; the rest are completions. Each kind has
+# its own switch per device (workflow_alerts), all on until the device turns one off.
+WORKFLOW_ALERT_KINDS = ("needsYou", "succeeded", "failed", "cancelled")
+_WORKFLOW_RUN_EVENTS = {
+    "waiting_for_you": ("needsYou", _CLARIFICATION_EVENT),
+    "needs_attention": ("needsYou", _CLARIFICATION_EVENT),
+    "succeeded": ("succeeded", "session.completed"),
+    "failed": ("failed", "session.failed"),
+    "cancelled": ("cancelled", "session.completed"),
+}
+_WORKFLOW_COLUMNS = {"needsYou": "needs_you", "succeeded": "succeeded", "failed": "failed", "cancelled": "cancelled"}
+WORKFLOW_SESSION_PREFIX = "workflow.run."
 # The messaging adapter presents a question just after the clarify tool hook saw it.
 _ASKED_WINDOW_SECONDS = 600
 _MAX_RICH_TEXT = 1_600
@@ -293,6 +307,8 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS recipients(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, public_key TEXT NOT NULL, key_id TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS avatar_keys(grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, sha256 TEXT NOT NULL, key BLOB NOT NULL, nonce BLOB NOT NULL, PRIMARY KEY(grant_id,sha256));
                 CREATE TABLE IF NOT EXISTS preferences(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, peer_chats INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS workflow_alerts(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, needs_you INTEGER NOT NULL, succeeded INTEGER NOT NULL, failed INTEGER NOT NULL, cancelled INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS workflow_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_seq INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS quiet_hours(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, time_zone TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
@@ -344,7 +360,7 @@ class ManagedNotifications:
             clarification_loaded = bool(self._clarification_profiles)
         return {"version": 1, "hostKeyId": self.key_id, "hostPublicKey": self.public_key,
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
-                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True},
+                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True},
                 "richLiveActivitySupported": True, "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
@@ -500,19 +516,31 @@ class ManagedNotifications:
         return {"version": 1, "state": "removed", "grantId": grant_id}
 
     def preferences(self, grant_id: str):
-        """This phone's alert preferences for the host. Peer chats start off."""
+        """This phone's alert preferences for the host. Peer chats start off; workflow alerts start on."""
         self._grant(grant_id)
         with self._db() as db:
             row = db.execute("SELECT peer_chats FROM preferences WHERE grant_id=?", (grant_id,)).fetchone()
-        return {"version": 1, "peerChats": bool(row and row["peer_chats"])}
+            workflows = self._workflow_alerts(db, grant_id)
+        return {"version": 1, "peerChats": bool(row and row["peer_chats"]), "workflows": workflows}
 
-    def set_preferences(self, grant_id: str, *, peer_chats: Any):
+    @staticmethod
+    def _workflow_alerts(db, grant_id: str) -> dict[str, bool]:
+        row = db.execute("SELECT * FROM workflow_alerts WHERE grant_id=?", (grant_id,)).fetchone()
+        return {kind: bool(row[column]) if row else True for kind, column in _WORKFLOW_COLUMNS.items()}
+
+    def set_preferences(self, grant_id: str, *, peer_chats: Any, workflows: Any = None):
         self._grant(grant_id)
         if type(peer_chats) is not bool:
+            raise ManagedNotificationError("notification_preferences_invalid", 422)
+        if workflows is not None and (not isinstance(workflows, dict) or set(workflows) != set(WORKFLOW_ALERT_KINDS)
+                                      or any(type(value) is not bool for value in workflows.values())):
             raise ManagedNotificationError("notification_preferences_invalid", 422)
         with self._db() as db:
             db.execute("INSERT INTO preferences VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET peer_chats=excluded.peer_chats",
                        (grant_id, int(peer_chats)))
+            if workflows is not None:
+                db.execute("INSERT OR REPLACE INTO workflow_alerts VALUES(?,?,?,?,?)",
+                           (grant_id, *(int(workflows[kind]) for kind in WORKFLOW_ALERT_KINDS)))
         return self.preferences(grant_id)
 
     def _quiet_window(self, grant_id: str, db=None) -> dict[str, Any] | None:
@@ -865,14 +893,18 @@ class ManagedNotifications:
 
     def _queue_event(self, profile: str, session_id: str, turn_id: str, event_type: str,
                      *, tool_call_id: str | None = None, event_key: str = "",
-                     content_text: str):
+                     content_text: str, title: str | None = None, workflow_kind: str | None = None,
+                     alerted_devices: set[str] | None = None):
         approval = event_type == _APPROVAL_EVENT
         tool_call_id = _identifier(tool_call_id) if approval else ""
         content_text = self._rich_text(content_text)
         agent_name, avatar = self._agent_presentation(profile)
+        if title:
+            agent_name = title
         now = int(self.clock())
         queued: list[str] = []
-        peer_chat = event_type in _PEER_QUIET_EVENTS and self._is_peer_chat(profile, session_id)
+        peer_chat = (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
+                     and self._is_peer_chat(profile, session_id))
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT g.* FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (now, profile)).fetchall()
@@ -881,6 +913,15 @@ class ManagedNotifications:
                 if event_type not in grant["eventTypes"]: continue
                 if peer_chat and not db.execute("SELECT 1 FROM preferences WHERE grant_id=? AND peer_chats=1", (grant["grantId"],)).fetchone():
                     continue
+                if workflow_kind is not None:
+                    if not self._workflow_alerts(db, grant["grantId"])[workflow_kind]:
+                        continue
+                    # One alert per device, though it may hold a grant for more than one agent here.
+                    device = grant.get("instanceId") or grant["grantId"]
+                    if alerted_devices is not None:
+                        if device in alerted_devices:
+                            continue
+                        alerted_devices.add(device)
                 digest = hashlib.sha256(canonical_json_bytes(
                     [profile, session_id, turn_id, event_type, event_key])).hexdigest()
                 event_id = self._approval_event_id(grant["grantId"], profile, session_id, turn_id, tool_call_id) if approval else grant["grantId"] + ":" + digest
@@ -897,7 +938,8 @@ class ManagedNotifications:
                 if not recipient:
                     logger.info("Managed notification skipped: the phone's content key isn't registered yet")
                     continue
-                content_kind = ("approval" if approval else "clarification" if event_type == _CLARIFICATION_EVENT
+                content_kind = ("workflow" if workflow_kind is not None
+                                else "approval" if approval else "clarification" if event_type == _CLARIFICATION_EVENT
                                 else "scheduled" if event_type.startswith("scheduled.")
                                 else "subagent" if event_type.startswith("subagent.")
                                 else "failure" if event_type == "session.failed" else "reply")
@@ -941,6 +983,9 @@ class ManagedNotifications:
 
     def _observe(self, hook: str, *, profile: str, **payload: Any):
         if self._stop.is_set(): return
+        # A workflow stage's turns never alert or drive a Live Activity; a command
+        # it asks to run still needs the person's approval.
+        if in_workflow_stage() and hook not in _APPROVAL_HOOKS: return
         if hook in _APPROVAL_HOOKS:
             self._observe_approval(hook, profile=profile, **payload)
             return
@@ -1171,6 +1216,11 @@ class ManagedNotifications:
 
     def _run(self):
         while not self._stop.is_set():
+            try:
+                # Workflow alerts must never stop the sender for everything else.
+                self.queue_workflow_alerts()
+            except Exception:
+                logger.warning("Workflow alerts unavailable", exc_info=True)
             try: self.queue_sign_in_wakes(); self.drain_pending()
             except (ValueError, OSError, sqlite3.Error): logger.warning("Managed notification journal unavailable")
             # Short wait: another Hermes process may have queued the alert (this process
@@ -1207,6 +1257,75 @@ class ManagedNotifications:
         return (grant["profile"] == attention["profile"] and _APPROVAL_EVENT in grant["eventTypes"]
                 and bytes(current["raw"]) == bytes(row["raw"])
                 and current["session_ref"] == session_reference(attention["profile"], attention["session_id"]))
+
+    def queue_workflow_alerts(self):
+        """Alerts for workflow runs: one when a run needs the person, and when it ends.
+
+        Reads the run journal (the workflow store's `events`) after the last entry seen, so a
+        run that changes in any process alerts once. The first look starts at the newest entry:
+        runs from before this plugin version don't alert.
+        """
+        events = self._workflow_events()
+        if events is None:
+            return
+        rows, newest = events
+        with self._db() as db:
+            seen = db.execute("SELECT last_seq FROM workflow_cursor WHERE id=1").fetchone()
+            if seen is None:
+                db.execute("INSERT INTO workflow_cursor VALUES(1,?)", (newest,))
+                return
+            last = seen["last_seq"]
+            profiles = [row[0] for row in db.execute(
+                "SELECT DISTINCT json_extract(public_json,'$.profile') FROM grants WHERE state='active' AND expires>?",
+                (int(self.clock()),))]
+        for row in rows:
+            if row["seq"] <= last:
+                continue
+            kind, event_type = _WORKFLOW_RUN_EVENTS[row["kind"]]
+            name = " ".join(str(row["name"] or "Workflow").split())[:80] or "Workflow"
+            devices: set[str] = set()
+            for profile in sorted(profile for profile in profiles if isinstance(profile, str)):
+                try:
+                    self._queue_event(profile, WORKFLOW_SESSION_PREFIX + row["run_id"], f"workflow.{row['seq']}",
+                                      event_type, content_text=row["text"] or name, title=name,
+                                      workflow_kind=kind, alerted_devices=devices)
+                except (ValueError, OSError):
+                    logger.warning("Workflow alert presentation unavailable")
+            last = row["seq"]
+            with self._db() as db:
+                db.execute("UPDATE workflow_cursor SET last_seq=? WHERE id=1", (last,))
+
+    def _workflow_events(self):
+        """(new run journal rows that alert, newest seq), or None while there's no workflow store."""
+        try:
+            from .workflow_api import workflows_root
+            database = workflows_root() / "workflows.sqlite3"
+        except Exception:
+            return None
+        if not database.is_file():
+            return None
+        with self._db() as db:
+            seen = db.execute("SELECT last_seq FROM workflow_cursor WHERE id=1").fetchone()
+        try:
+            connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=1)
+        except sqlite3.Error:
+            return None
+        try:
+            connection.row_factory = sqlite3.Row
+            newest = connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
+            if seen is None:
+                return [], newest
+            kinds = ",".join("?" for _ in _WORKFLOW_RUN_EVENTS)
+            rows = connection.execute(
+                "SELECT e.seq,e.run_id,e.kind,e.text,w.name FROM events e JOIN runs r ON r.id=e.run_id "
+                f"LEFT JOIN workflows w ON w.id=r.workflow_id WHERE e.seq>? AND e.kind IN ({kinds}) "
+                "AND r.sample=0 ORDER BY e.seq LIMIT 50",
+                (seen["last_seq"], *_WORKFLOW_RUN_EVENTS)).fetchall()
+            return rows, newest
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
 
     def queue_sign_in_wakes(self):
         """A quiet push every few hours asks each enrolled phone to renew its sign-in.

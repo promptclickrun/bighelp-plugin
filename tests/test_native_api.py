@@ -164,9 +164,11 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.provider_sign_in import available as sign_in_available
         if sign_in_available():
             expected.append("native-provider-sign-in-v1")
-        from loopdy_plugin.workflow_api import available as workflows_available
+        from loopdy_plugin.workflow_api import available as workflows_available, triggers_available
         if workflows_available():
             expected.extend(("native-workflows-v1", "native-workflows-edit-v1"))
+            if triggers_available():
+                expected.append("native-workflows-trigger-v1")
         from loopdy_plugin.live_alerts import available as live_alerts_available
         if live_alerts_available():
             expected.append("native-live-alerts-v1")

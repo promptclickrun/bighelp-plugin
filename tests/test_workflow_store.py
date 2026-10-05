@@ -204,6 +204,7 @@ class EditStoreTests(unittest.TestCase):
             for table in ("workflows", "attempts"):
                 connection.execute(f"ALTER TABLE {table} RENAME TO old_{table}")
             connection.execute("DROP TABLE templates")
+            connection.execute("DROP TABLE triggers")
             old_workflows = SCHEMA_V1_WORKFLOWS
             connection.execute(old_workflows)
             connection.execute("INSERT INTO workflows SELECT id, name, draft_json, draft_version, latest_revision, "
@@ -217,8 +218,20 @@ class EditStoreTests(unittest.TestCase):
         self.assertEqual(upgraded.get_run(run_id)["run"]["state"], "planned")
         upgraded.pin(workflow_id, True)
         self.assertEqual(upgraded.list_templates()["templates"][0]["source"], "builtin")
+        self.assertEqual(upgraded.trigger(workflow_id), {"kind": "manual"})
         with upgraded.read() as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_a_version_two_store_gains_triggers(self):
+        workflow_id, _revision = self.engine.workflow()
+        with sqlite3.connect(str(self.store.database)) as connection:
+            connection.execute("DROP TABLE triggers")
+            connection.execute("PRAGMA user_version=2")
+        upgraded = WorkflowStore(self.engine.root, clock=self.clock)
+        self.assertEqual(upgraded.save_trigger(workflow_id, "schedule", "0 9 * * *", {"topic": "x"}, "job1"),
+                         {"kind": "schedule", "schedule": "0 9 * * *", "inputs": {"topic": "x"}, "jobId": "job1"})
+        with upgraded.read() as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
 
 
 # The 3.5.0 tables that version 2 changed, for the upgrade test.
