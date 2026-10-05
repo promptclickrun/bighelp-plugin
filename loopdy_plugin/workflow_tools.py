@@ -36,7 +36,8 @@ SCHEMA = {
         "failed with a note). Outputs can be Markdown files, text, numbers, decisions, notes, files and pictures. "
         "Actions: list (workflows, runs waiting for the person, "
         "active runs), get (one workflow's definition, roles and problems), templates, create (from a template "
-        "id, or from a definition), save_draft, publish (with role -> agent choices; the person approves), start "
+        "id, or from a definition), save_draft (with role -> agent picks; on a never-published workflow they save "
+        "as is and show in the app's role pickers), publish (with role -> agent choices; the person approves), start "
         "(a run of the newest published version, with inputs), runs, run (one run in full: stages, outputs, "
         "sign-offs), control (pause, resume, cancel or retry a run), set_trigger (manual, or a cron schedule like "
         "'0 9 * * 1-5' with saved inputs; the person approves a schedule) and archive. The person signs off "
@@ -54,7 +55,7 @@ SCHEMA = {
             "name": {"type": "string", "maxLength": 80},
             "definition": {"type": "object", "description": "A workflow definition, as get returns it."},
             "baseDraftVersion": {"type": "integer", "minimum": 0},
-            "bindings": {"type": "object", "description": "Role key -> agent (profile) id, for publish.",
+            "bindings": {"type": "object", "description": "Role key -> agent (profile) id, for save_draft or publish. On a draft that was never published, save_draft keeps them without asking; the person sees them when they publish.",
                          "additionalProperties": {"type": "string", "maxLength": 64}},
             "inputs": {"type": "object", "description": "The workflow's inputs by key, for start or a schedule."},
             "runAction": {"type": "string", "enum": ["pause", "resume", "cancel", "retry"]},
@@ -158,7 +159,47 @@ class WorkflowTools:
     def _save_draft(self, args, store):
         body = self._body(api._Save, workflowId=args.get("workflowId"), baseDraftVersion=args.get("baseDraftVersion"),
                           definition=args.get("definition"))
-        return api._save(store, body, self._mutation())
+        bindings = args.get("bindings") or {}
+        if not isinstance(bindings, dict):
+            return _error("invalid_request", "bindings maps role keys to agent ids.")
+        if bindings:
+            refused = self._check_picks(store, body, bindings)
+            if refused is not None:
+                return refused
+        saved = api._save(store, body, self._mutation())
+        for role, agent in bindings.items():
+            api._bind(store, self._body(api._Bind, workflowId=saved["workflowId"], role=role, agentId=agent),
+                      self._mutation())
+        if bindings:
+            saved["validation"] = api._validate(store, self._body(api._WorkflowBody, workflowId=saved["workflowId"]),
+                                                None)["validation"]
+        return saved
+
+    def _check_picks(self, store, body, bindings: dict) -> dict | None:
+        """Agent picks saved with a draft: checked before anything is written.
+
+        A workflow that was never published can't run until the person publishes it in the app, where they see
+        every pick, so picks on it need no approval. Once it is published, runs use the current picks, so a
+        change asks first, like publish does.
+        """
+        definition = body.definition if isinstance(body.definition, dict) else {}
+        roles = {role.get("key") for role in definition.get("roles") or [] if isinstance(role, dict)}
+        from hermes_cli.profiles import profile_exists
+        for role, agent in bindings.items():
+            if role not in roles:
+                return _error("role_not_found", f"{role} isn't a role in this workflow.")
+            if not isinstance(agent, str) or api.PROFILE_ID.fullmatch(agent) is None or not profile_exists(agent):
+                return _error("profile_not_found", f"There's no agent called {agent} on this computer.")
+        if body.workflowId is None:
+            return None
+        current = api._get(store, self._body(api._Get, workflowId=body.workflowId), None)["workflow"]
+        if not current["latestRevision"]:
+            return None
+        who = ", ".join(f"{role}: {agent}" for role, agent in bindings.items())
+        approved, message = self._approve(
+            f"Change which agents run the published workflow \"{current['name']}\": {who}.",
+            f"bighelp-workflow-bind:{body.workflowId}")
+        return None if approved else _error("not_approved", message)
 
     def _publish(self, args, store):
         workflow_id = args.get("workflowId")
