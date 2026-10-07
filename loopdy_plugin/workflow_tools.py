@@ -1,6 +1,8 @@
 """The `bighelp_workflows` agent tool: agents see, build, run and manage the same workflows as the bighelp app.
 
-Reading, drafting and running are open to any agent that has the tool. Publishing (which also chooses the agent for
+What an agent builds or changes stays a draft: the description tells agents to publish only when the person
+explicitly asks, and the app has its own Publish button. Reading, drafting and running are open to any agent that
+has the tool. Publishing (which also chooses the agent for
 each role) and putting a workflow on a schedule decide what agents will do without anyone watching, so each asks
 the person in Hermes' own approval prompt and refuses when no one can answer. Signing off stays with the person,
 in the app. Inside a workflow stage the tool only reads, so a run can't start or change runs.
@@ -42,6 +44,8 @@ SCHEMA = {
         "sign-offs), control (pause, resume, cancel or retry a run), set_trigger (manual, or a cron schedule like "
         "'0 9 * * 1-5' with saved inputs; the person approves a schedule) and archive. The person signs off "
         "in the bighelp app, never through this tool. Call get before save_draft and send its draftVersion. "
+        "Workflows you create or change stay drafts. Publish only when the person explicitly asks you to publish "
+        "it or make it live, never on your own; the person approves it, as this computer's approval settings say. "
         "Call it directly when it is in your tool list; when Hermes has hidden it, use tool_search, "
         "tool_describe and tool_call to run this exact tool."),
     "parameters": {
