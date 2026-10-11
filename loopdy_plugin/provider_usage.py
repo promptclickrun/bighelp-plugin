@@ -155,6 +155,12 @@ def _money(amount: float, currency: str | None = "USD") -> str:
     return f"{symbol}{amount:,.2f}" if symbol else f"{amount:,.2f} {code}"
 
 
+def _credits(amount: float) -> str:
+    """A count of Codex credits: their own unit, never money ("14,000 credits", "4.5 credits")."""
+    count = f"{amount:,.0f}" if amount == int(amount) else f"{amount:,.2f}".rstrip("0").rstrip(".")
+    return f"{count} credits"
+
+
 def _title(value: Any) -> str | None:
     text = str(value or "").strip()
     return text.replace("_", " ").replace("-", " ").title() if text else None
@@ -563,7 +569,7 @@ def _codex_report(result: dict[str, Any], source: _Source, report_id: str, name:
     if credits.get("unlimited"):
         report.facts.append(("Credits", "Unlimited"))
     elif credits.get("hasCredits") and balance is not None:
-        report.facts.append(("Credits", _money(balance)))
+        report.facts.append(("Credits", _credits(balance)))
     banked = _num((result.get("rateLimitResetCredits") or {}).get("availableCount"))
     if banked:
         report.facts.append(("Banked resets", f"{int(banked)}"))
