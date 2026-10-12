@@ -232,8 +232,24 @@ def _https_request(method: str, path: str, raw: bytes, headers: dict[str, str]) 
 
 
 def _private_directory(path: Path) -> None:
+    """Only this user may open the folder with the host key and journal. One this user owns
+    but something else left wider (755 from an install script, a copy or a volume) is made
+    private: other users could only list it, as its files are private on their own
+    (`_private_file`) and adding or replacing them needs write access it never gave."""
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    info = path.lstat()
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise ManagedNotificationError("notification_private_storage_required", 503) from None
+    try:
+        info = os.fstat(descriptor)
+        if info.st_uid == os.getuid() and info.st_mode & 0o077:
+            os.fchmod(descriptor, 0o700)
+            info = os.fstat(descriptor)
+    except OSError:
+        raise ManagedNotificationError("notification_private_storage_required", 503) from None
+    finally:
+        os.close(descriptor)
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ManagedNotificationError("notification_private_storage_required", 503)
 

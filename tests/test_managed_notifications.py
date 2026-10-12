@@ -170,6 +170,24 @@ class ManagedNotificationTests(unittest.TestCase):
         self.assertEqual(snapshot["outcome"],"cancelled")
         self.assertTrue(snapshot["terminal"])
 
+    def test_a_folder_left_readable_by_others_is_made_private(self):
+        # Found on VM hosts: the folder belonged to the Hermes user but was 755, and setup
+        # failed with notification_private_storage_required.
+        folder = Path(self.temp.name)/"installed"
+        folder.mkdir(mode=0o755)
+        folder.chmod(0o755)
+        service = ManagedNotifications(folder, transport=self.transport, clock=lambda: self.now)
+        try:
+            self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+        finally:
+            service.close()
+        # A link in its place is still refused: the key never goes where it points.
+        link = Path(self.temp.name)/"linked"
+        link.symlink_to(folder, target_is_directory=True)
+        with self.assertRaises(ManagedNotificationError) as refused:
+            ManagedNotifications(link, transport=self.transport, clock=lambda: self.now)
+        self.assertEqual(refused.exception.code, "notification_private_storage_required")
+
     def test_fresh_process_does_not_restore_live_work_from_subscription(self):
         self.service.observe("pre_llm_call",profile="default",session_id="native-session",turn_id="old")
         reopened=ManagedNotifications(Path(self.temp.name)/"managed",transport=self.transport,clock=lambda:self.now,
