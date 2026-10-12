@@ -66,7 +66,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
                             available=Mock(return_value=True))
         self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
         self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[12],
-                              available=Mock(return_value=True))
+                              available=Mock(return_value=True), release_locks_left_by_restart=Mock())
         self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[13],
                             available=Mock(return_value=True))
         self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[14],
