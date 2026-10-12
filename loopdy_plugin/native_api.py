@@ -66,6 +66,8 @@ async def _native_lifespan(app):
     # Hermes mounts this router separately from its profile-scoped plugin
     # registration module. Log the inventory from the namespace serving HTTP.
     log_native_feature_startup()
+    from .host_restart import release_locks_left_by_restart
+    release_locks_left_by_restart()
     yield
 
 
