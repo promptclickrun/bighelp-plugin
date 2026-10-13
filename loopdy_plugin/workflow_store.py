@@ -537,13 +537,19 @@ class WorkflowStore:
                 has_draft = row["latest_revision"] is None or model.definition_sha256(draft) != connection.execute(
                     "SELECT sha256 FROM revisions WHERE workflow_id=? AND revision=?",
                     (row["id"], row["latest_revision"])).fetchone()[0]
-                workflows.append({
+                summary = {
                     "id": row["id"], "name": row["name"], "revision": row["latest_revision"],
                     "draftVersion": row["draft_version"], "hasDraft": has_draft,
                     "stageCount": len(current["stages"]), "needsSetupRoles": missing,
                     "valid": validation["valid"], "archived": bool(row["archived"]), "lastRunAt": iso(last),
                     "pinned": bool(row["pinned"]), "trigger": self._trigger(connection, row["id"]),
-                })
+                    "schemaVersion": current["schemaVersion"],
+                }
+                # Dev Factory lists recipes by their projects without opening each one.
+                if current["schemaVersion"] >= 3:
+                    summary["projects"] = [{"key": project["key"], "label": project["label"]}
+                                           for project in current.get("projects") or []]
+                workflows.append(summary)
             cache: dict = {}
             waiting = [self._summary(connection, run, cache) for run in connection.execute(
                 "SELECT * FROM runs WHERE state='waiting_for_you' ORDER BY waiting_since, seq LIMIT 50")]

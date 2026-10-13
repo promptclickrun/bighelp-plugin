@@ -21,7 +21,9 @@ PREFIX = native_fixtures.PREFIX + "/workflows/"
 OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey",
             "decisions",
             # Dev Factory: only a command stage's attempts and a sign-off on changes carry these.
-            "kind", "exit_code", "tries", "log", "changes"}
+            "kind", "exit_code", "tries", "log", "changes",
+            # Dev Factory: every workflow in `list` says its schemaVersion; a recipe adds its projects.
+            "schemaVersion", "projects"}
 # Fields v2 added to v1 responses: the v1 vectors stay as they were, and apps ignore fields they don't know.
 ADDED_IN_V2 = frozenset({"pinned", "source", "updatedAt", "mode", "uses", "decisions", "trigger"})
 

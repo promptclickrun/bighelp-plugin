@@ -104,6 +104,15 @@ class CodeRunTests(unittest.TestCase):
         listed = self.store.list_runs(workflow_id, "active", None, 20)["runs"]
         self.assertEqual({run["project"]["key"] for run in listed}, {"app", "web"})
 
+    def test_the_list_says_which_workflows_are_recipes_and_their_projects(self):
+        recipe = self.start(code_definition(str(self.repo)))["run"]["workflowId"]
+        older, _ = self.engine.workflow(graph_definition())
+        listed = {item["id"]: item for item in self.store.list_workflows(False, self.engine.facts)["workflows"]}
+        self.assertEqual(listed[recipe]["schemaVersion"], 3)
+        self.assertEqual(listed[recipe]["projects"], [{"key": "app", "label": "App"}])
+        self.assertEqual(listed[older]["schemaVersion"], 2)
+        self.assertNotIn("projects", listed[older])
+
     def test_older_workflows_take_no_projects_and_show_no_code_fields(self):
         workflow_id, revision = self.engine.workflow(graph_definition())
         self.assertEqual(self.error(self.store.start_run, workflow_id, revision, {"topic": "x"},

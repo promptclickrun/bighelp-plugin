@@ -142,6 +142,7 @@ Routes are the [Workflows routes](WORKFLOWS.md#for-the-app). Version 3 adds:
 
 | Path | Request | Response |
 | --- | --- | --- |
+| `list` | unchanged | each workflow adds `schemaVersion`; a recipe (3) adds `projects: [{key, label}]`, so the app lists recipes without opening each one |
 | `templates/list` | `{includeCode?: true}` | Dev Factory templates (and your templates made from version 3 workflows) are listed only with `includeCode: true`, so older apps never see them |
 | `runs/start` | adds `projects?: ["<key>", …]` (1 to 10, some of the recipe's projects; all when left out) | adds `group_id` and `runs: [{run_id, project}]`. `run` is the first run's summary. Each run is `planned` and waits for a slot like any run |
 
