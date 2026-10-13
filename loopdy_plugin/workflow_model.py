@@ -9,12 +9,14 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
+import shlex
 from typing import Any, Callable
 
 
-SCHEMA_VERSION = 2
-SCHEMA_VERSIONS = (1, 2)
+SCHEMA_VERSION = 3
+SCHEMA_VERSIONS = (1, 2, 3)
 MAX_LAYOUT_COORDINATE = 100_000
 KEY = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 TOOLSET = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
@@ -33,7 +35,20 @@ MAX_STAGE_MINUTES = 60
 DEFAULT_STAGE_MINUTES = 20
 MAX_REVISIONS = 5
 DEFAULT_MAX_REVISIONS = 2
-STAGE_KINDS = ("agent", "check", "decision", "signoff", "parallel", "delivery")
+STAGE_KINDS = ("agent", "check", "decision", "signoff", "parallel", "delivery", "command", "pull_request")
+# schemaVersion 3 (Dev Factory, docs/DEV_FACTORY.md): a recipe lists git projects and each run works in one.
+MAX_PROJECTS = 10
+MAX_PATH = 1024
+PROJECT_KEY = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
+# A branch to start from: what git takes, never an option and never a range.
+BRANCH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}\Z")
+PLACEMENTS = ("worktree", "local")
+MAX_COMMAND = 2000
+DEFAULT_COMMAND_MINUTES = 20
+MAX_FIX_TRIES = 3
+DEFAULT_FIX_TRIES = 2
+# What a coding agent gets when its stage lists no tools: files, a terminal and its to-do list.
+CODING_TOOLSETS = ("file", "terminal", "todo")
 # A parallel block runs this many agent stages at once (schemaVersion 2 only).
 MIN_BRANCHES = 2
 MAX_BRANCHES = 5
@@ -147,8 +162,11 @@ def parse_definition(value: Any) -> dict:
     if type(value) is dict and type(value.get("schemaVersion")) is int and value["schemaVersion"] > SCHEMA_VERSION:
         _fail("This workflow needs a newer bighelp plugin.")
     version = value.get("schemaVersion") if type(value) is dict else None
-    top = _object(value, "The workflow", ("schemaVersion", "name", "stages"),
-                  ("description", "roles", "inputs", "limits") + (("layout",) if version == 2 else ()))
+    code = type(version) is int and version >= 3
+    top = _object(value, "The workflow", ("schemaVersion", "name", "stages") + (("projects",) if code else ()),
+                  ("description", "roles", "inputs", "limits")
+                  + (("layout",) if type(version) is int and version >= 2 else ())
+                  + (("workspace",) if code else ()))
     if type(top["schemaVersion"]) is not int or top["schemaVersion"] not in SCHEMA_VERSIONS:
         _fail("This workflow needs a newer bighelp plugin.")
     result: dict[str, Any] = {
@@ -189,9 +207,12 @@ def parse_definition(value: Any) -> dict:
         "maxRevisions": _integer(limits.get("maxRevisions", DEFAULT_MAX_REVISIONS), "The revision limit",
                                  0, MAX_REVISIONS),
     }
+    if code:
+        result["projects"] = _parse_projects(top["projects"])
+        result["workspace"] = _parse_workspace(top.get("workspace", {"placement": "worktree"}))
     stages = []
     for index, stage in enumerate(_list(top["stages"], "Stages", MAX_STAGES)):
-        stages.append(_parse_stage(stage, f"Stage {index + 1}", graph=version == 2))
+        stages.append(_parse_stage(stage, f"Stage {index + 1}", graph=version >= 2, code=code))
     result["stages"] = stages
     if len(all_stages(result)) > MAX_ALL_STAGES:
         _fail(f"A workflow has at most {MAX_ALL_STAGES} stages, counting the agents in parallel blocks.")
@@ -200,6 +221,48 @@ def parse_definition(value: Any) -> dict:
     if encoded_size(result) > MAX_DEFINITION_BYTES:
         _fail("The workflow is too large.")
     return result
+
+
+def _parse_projects(value: Any) -> list[dict]:
+    """The git projects a recipe works on. A draft (or a template) may have none yet; validation says so."""
+    projects = []
+    for index, item in enumerate(_list(value, "Projects", MAX_PROJECTS)):
+        where = f"Project {index + 1}"
+        _object(item, where, ("key", "label", "path"))
+        if type(item["key"]) is not str or PROJECT_KEY.fullmatch(item["key"]) is None:
+            _fail(f"{where} key must be a short lowercase name.")
+        path = item["path"]
+        if (type(path) is not str or not path.startswith("/") or len(path) > MAX_PATH
+                or any(not character.isprintable() for character in path) or os.path.normpath(path) != path):
+            _fail(f"{where} needs the full path of a folder on this computer.")
+        projects.append({"key": item["key"], "label": _text(item["label"], f"{where} label", MAX_TITLE),
+                         "path": path})
+    return projects
+
+
+def _parse_workspace(value: Any) -> dict:
+    """Where a run works: a new worktree for each run (the default), or the repository itself."""
+    _object(value, "The workspace", ("placement",), ("base",))
+    if value["placement"] not in PLACEMENTS:
+        _fail("The workspace is a new worktree or the project folder itself.")
+    result = {"placement": value["placement"]}
+    if "base" in value:
+        base = value["base"]
+        if type(base) is not str or BRANCH.fullmatch(base) is None or ".." in base or base.endswith((".lock", "/")):
+            _fail("The workspace base must be a branch name.")
+        result["base"] = base
+    return result
+
+
+def _command(value: Any, where: str) -> str:
+    text = _text(value, where, MAX_COMMAND)
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = []
+    if not words:
+        _fail(f"{where} can't be read as a command. Check its quotes.")
+    return text
 
 
 def _point(value: Any, where: str) -> dict:
@@ -228,10 +291,12 @@ def _parse_layout(value: Any) -> dict:
     return result
 
 
-def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
+def _parse_stage(stage: Any, where: str, *, graph: bool = False, code: bool = False) -> dict:
     if type(stage) is not dict:
         _fail(f"{where} must be an object.")
     kind = stage.get("kind")
+    if kind in ("command", "pull_request") and not code:
+        _fail(f"{where} is a {kind.replace('_', ' ')} stage, which needs schemaVersion 3.")
     common = ("key", "kind", "title")
     # schemaVersion 2: every stage but a decision may name the stage after it (`next`), or null to end there.
     edge = ("next",) if graph and kind != "decision" else ()
@@ -242,7 +307,19 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
     elif kind == "decision":
         _object(stage, where, common + ("on", "changes"), ("pass", "require"))
     elif kind == "signoff":
-        _object(stage, where, common + ("file",), edge)
+        # schemaVersion 3: a sign-off shows a file, or the project's changes (`"changes": true`).
+        if code:
+            _object(stage, where, common, ("file", "changes") + edge)
+            if ("file" in stage) == ("changes" in stage):
+                _fail(f"{where} shows a file or the project's changes, not both.")
+            if "changes" in stage and stage["changes"] is not True:
+                _fail(f"{where} changes must be true.")
+        else:
+            _object(stage, where, common + ("file",), edge)
+    elif kind == "command":
+        _object(stage, where, common + ("run",), ("minutes", "fix") + edge)
+    elif kind == "pull_request":
+        _object(stage, where, common, ("titleFrom", "draft") + edge)
     elif kind == "parallel":
         if not graph:
             _fail(f"{where} is a parallel block, which needs schemaVersion 2.")
@@ -324,6 +401,38 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
         result["to"] = to
         if "message" in stage:
             result["message"] = _text(stage["message"], f"{where} message", MAX_DELIVERY_MESSAGE, empty=True)
+    elif kind == "command":
+        run = stage["run"]
+        if type(run) is dict:
+            if not 1 <= len(run) <= MAX_PROJECTS + 1:
+                _fail(f"{where} needs a command for its projects.")
+            commands = {}
+            for name, text in run.items():
+                if name != "*" and PROJECT_KEY.fullmatch(name) is None:
+                    _fail(f"{where} names a command for something that isn't a project key.")
+                commands[name] = _command(text, f"{where} command")
+            result["run"] = commands
+        elif type(run) is str:
+            result["run"] = _command(run, f"{where} command")
+        else:
+            _fail(f"{where} command must be text, or text for each project.")
+        if "minutes" in stage:
+            result["minutes"] = _integer(stage["minutes"], f"{where} time limit", 1, MAX_STAGE_MINUTES)
+        if "fix" in stage:
+            fix = _object(stage["fix"], f"{where} fix", ("role", "instructions"), ("maxTries",))
+            result["fix"] = {"role": _key(fix["role"], f"{where} fix role"),
+                             "instructions": _text(fix["instructions"], f"{where} fix instructions", MAX_INSTRUCTIONS,
+                                                   empty=True)}
+            if "maxTries" in fix:
+                result["fix"]["maxTries"] = _integer(fix["maxTries"], f"{where} fix tries", 0, MAX_FIX_TRIES)
+    elif kind == "pull_request":
+        if "titleFrom" in stage:
+            source = stage["titleFrom"]
+            if type(source) is not str or not _is_reference(source) or source.startswith("inputs."):
+                _fail(f"{where} must take its title from a stage's output.")
+            result["titleFrom"] = source
+        if "draft" in stage:
+            result["draft"] = _bool(stage["draft"], f"{where} draft")
     elif kind == "decision":
         # One verdict (`"review.decision"`), or several (a parallel block's agents) with `require`.
         sources = stage["on"] if type(stage["on"]) is list else [stage["on"]]
@@ -352,6 +461,8 @@ def _parse_stage(stage: Any, where: str, *, graph: bool = False) -> dict:
             if "maxRevisions" in changes:
                 result["changes"]["maxRevisions"] = _integer(changes["maxRevisions"], f"{where} revision limit",
                                                              0, MAX_REVISIONS)
+    elif "changes" in stage:
+        result["changes"] = True
     else:
         if type(stage["file"]) is not str or not _is_reference(stage["file"]) or stage["file"].startswith("inputs."):
             _fail(f"{where} must name a stage's file.")
@@ -442,7 +553,43 @@ def output_spec(definition: dict, reference: str) -> dict | None:
 
 
 def stage_minutes(definition: dict, stage: dict) -> int:
+    if stage["kind"] == "command":
+        return int(stage.get("minutes", DEFAULT_COMMAND_MINUTES))
     return int(stage.get("minutes", definition["limits"]["stageMinutes"]))
+
+
+def project_command(stage: dict, project_key: str) -> str | None:
+    """The command a command stage runs for one project: its own, else the one for every project (`*`)."""
+    run = stage["run"]
+    if type(run) is str:
+        return run
+    return run.get(project_key, run.get("*"))
+
+
+def fix_tries(stage: dict) -> int:
+    """How many fix attempts a command stage may make before it waits for you."""
+    fix = stage.get("fix")
+    return 0 if fix is None else int(fix.get("maxTries", DEFAULT_FIX_TRIES))
+
+
+def fill_project(text: str, project: dict | None) -> str:
+    """An agent's instructions with `{project.label}` and `{project.key}` filled in for its run's project."""
+    if not project:
+        return text
+    return text.replace("{project.label}", project["label"]).replace("{project.key}", project["key"])
+
+
+def changes_target(definition: dict, key: str) -> str:
+    """Where Ask for changes on a changes sign-off goes: the nearest agent stage (or parallel block) that always
+    runs before it, else the first stage."""
+    stages = definition["stages"]
+    graph = forward_graph(definition)
+    dominators = _dominators(graph, stages[0]["key"])
+    before = [other for other in dominators.get(key, ()) if other != key
+              and (stage_by_key(definition, other) or {}).get("kind") in ("agent", "parallel")]
+    if not before:
+        return stages[0]["key"]
+    return max(before, key=lambda other: len(dominators[other]))
 
 
 def max_revisions(definition: dict, stage: dict) -> int:
@@ -557,16 +704,25 @@ def _issue(code: str, message: str, severity: str = "error", stage: str | None =
     return value
 
 
-HOST_CODES = frozenset({"role_unbound", "agent_missing", "toolset_unknown", "tool_scope_unsupported"})
+HOST_CODES = frozenset({"role_unbound", "agent_missing", "toolset_unknown", "tool_scope_unsupported",
+                        "project_missing"})
 
 
 def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
              profile_exists: Callable[[str], bool] | None = None,
-             toolset_known: Callable[[str], bool] | None = None, tool_scope: bool = True) -> dict:
-    """{valid, host, issues}. `valid`: the definition has no errors. `host`: it can also run on this computer."""
+             toolset_known: Callable[[str], bool] | None = None, tool_scope: bool = True,
+             repository: Callable[[str], bool] | None = None) -> dict:
+    """{valid, host, issues}. `valid`: the definition has no errors. `host`: it can also run on this computer.
+
+    `repository(path)` says whether a project's folder is a git repository here (schemaVersion 3).
+    """
     issues: list[dict] = []
     stages = definition["stages"]
     graph_mode = definition["schemaVersion"] >= 2
+    code_mode = definition["schemaVersion"] >= 3
+    projects = definition.get("projects", [])
+    if code_mode:
+        issues.extend(_project_issues(projects, repository))
     roles = {role["key"]: role["label"] for role in definition["roles"]}
     inputs = {item["key"]: item for item in definition["inputs"]}
     if not definition["name"].strip():
@@ -574,7 +730,7 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
     if not stages:
         issues.append(_issue("no_stages", "Add at least one stage."))
     for collection, label in ((definition["roles"], "role"), (definition["inputs"], "input"),
-                              (all_stages(definition), "stage")):
+                              (all_stages(definition), "stage"), (projects, "project")):
         keys: set[str] = set()
         for item in collection:
             if item["key"] in keys:
@@ -641,7 +797,8 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
         for tool in stage["tools"]:
             if tool in DENIED_TOOLSETS or tool.startswith("hermes-"):
                 issues.append(_issue("tool_not_allowed", f"{title} can't use {tool} in a workflow.", stage=key))
-            elif tool in WARNED_TOOLSETS:
+            elif tool in WARNED_TOOLSETS and not code_mode:
+                # A coding workflow's agents are meant to run commands in their project.
                 issues.append(_issue("tool_terminal", f"{title} can run commands on this computer.",
                                      "warning", stage=key))
             if toolset_known is not None and tool not in DENIED_TOOLSETS and not toolset_known(tool):
@@ -707,10 +864,37 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
                 if earlier_output(reference, key, position) is None:
                     issues.append(_issue("delivery_source", f"{title} sends {reference}, which no stage before it "
                                          "always makes.", stage=key))
-        elif stage["kind"] == "signoff":
+        elif stage["kind"] == "signoff" and "file" in stage:
             spec = earlier_output(stage["file"], key, position)
             if spec is None or spec["type"] != "markdown_file":
                 issues.append(_issue("signoff_file", f"{title} must show a file an earlier stage wrote.", stage=key))
+        elif stage["kind"] == "command":
+            run = stage["run"]
+            if type(run) is dict:
+                known = {project["key"] for project in projects}
+                if any(name != "*" and name not in known for name in run):
+                    issues.append(_issue("command_project", f"{title} has a command for a project this workflow "
+                                         "doesn't have.", stage=key))
+                if "*" not in run and any(project["key"] not in run for project in projects):
+                    issues.append(_issue("command_missing", f"{title} needs a command for every project.",
+                                         stage=key))
+            if "fix" in stage:
+                used_roles.add(stage["fix"]["role"])
+                if stage["fix"]["role"] not in roles:
+                    issues.append(_issue("role_unknown", f"{title} fixes with a role this workflow doesn't have.",
+                                         stage=key))
+                if not stage["fix"]["instructions"].strip():
+                    issues.append(_issue("instructions_missing", f"Tell {title}'s fixer what to do.", stage=key))
+        elif stage["kind"] == "pull_request":
+            if "titleFrom" in stage:
+                spec = earlier_output(stage["titleFrom"], key, position)
+                if spec is None or spec["type"] not in ("text", "markdown_file"):
+                    issues.append(_issue("pull_request_title", f"{title} must take its title from text an earlier "
+                                         "stage wrote.", stage=key))
+            if key in reach and not any(stage_by_key(definition, other)["kind"] == "signoff"
+                                        for other in dominators.get(key, ()) if other != key):
+                issues.append(_issue("pull_request_signoff", f"{title} must come after your sign-off on every way "
+                                     "to it.", stage=key))
     for role_key, label in roles.items():
         if role_key not in used_roles:
             issues.append(_issue("role_unused", f"No stage uses {label}.", "warning"))
@@ -727,6 +911,18 @@ def validate(definition: dict, *, bindings: dict[str, str | None] | None = None,
     host = bindings is not None and not any(item["severity"] == "error" and item["code"] in HOST_CODES
                                             for item in issues)
     return {"valid": valid, "host": host, "issues": issues}
+
+
+def _project_issues(projects: list[dict], repository: Callable[[str], bool] | None) -> list[dict]:
+    if not projects:
+        return [_issue("no_projects", "Choose at least one project.")]
+    issues = []
+    if repository is not None:
+        for project in projects:
+            if not repository(project["path"]):
+                issues.append(_issue("project_missing", f"{project['label']} isn't a git repository on this "
+                                     "computer."))
+    return issues
 
 
 def _graph_issues(definition: dict, graph: dict[str, list[str]], reach: set[str], index: dict[str, int]) -> list[dict]:
@@ -872,7 +1068,80 @@ THREE_TAKES = {
     ],
 }
 
-TEMPLATES = {"research-draft-review": RESEARCH_DRAFT_REVIEW, "three-takes": THREE_TAKES}
+def _code_steps(work: dict) -> list[dict]:
+    """A Dev Factory recipe's steps after the coding agent: tests with fixes, your review, then a pull request."""
+    return [
+        work,
+        {"key": "tests", "kind": "command", "title": "Run the tests", "run": {"*": "make test"},
+         "fix": {"role": "coder", "maxTries": 2,
+                 "instructions": "The tests fail. Read their output, find the cause and fix the code. Change a test "
+                                 "only when the test itself is wrong."},
+         "next": "review"},
+        {"key": "review", "kind": "signoff", "title": "Review the changes", "changes": True, "next": "open_pr"},
+        {"key": "open_pr", "kind": "pull_request", "title": "Open a pull request", "titleFrom": f"{work['key']}.title",
+         "next": None},
+    ]
+
+
+_CODE_OUTPUTS = [{"name": "title", "type": "text"}, {"name": "summary", "type": "markdown_file"}]
+_CODE_HANDOFF = (" Leave the changes in the folder. Hand off a short pull request title and a summary of what you "
+                 "changed and why.")
+
+# Dev Factory templates (schemaVersion 3) start with no projects: the app fills `projects` in (and each project's
+# test command), and until then the draft has the issue `no_projects`.
+FIX_TEST_PR = {
+    "schemaVersion": 3,
+    "name": "Fix, test, open a PR",
+    "description": "An agent fixes what you describe in each project, the tests run (the agent fixes what they find), "
+                   "you review the changes and a pull request opens.",
+    "roles": [{"key": "coder", "label": "Coder"}],
+    "inputs": [{"key": "task", "label": "What to fix", "type": "long_text", "required": True,
+                "sample": "The settings screen crashes when the name field is empty."}],
+    "limits": {"stageMinutes": 30, "maxRevisions": 2},
+    "projects": [],
+    "workspace": {"placement": "worktree"},
+    "stages": _code_steps({
+        "key": "fix", "kind": "agent", "title": "Fix it", "role": "coder",
+        "instructions": "Fix this in {project.label}: find the cause in the code, change it and add or update a "
+                        "test that covers it. Keep the change small." + _CODE_HANDOFF,
+        "uses": ["inputs.task"], "outputs": _CODE_OUTPUTS, "next": "tests"}),
+}
+
+BUMP_DEPENDENCY = {
+    "schemaVersion": 3,
+    "name": "Bump a dependency everywhere",
+    "description": "In each project an agent moves one package to a new version and fixes what breaks, the tests "
+                   "run, you review the changes and a pull request opens.",
+    "roles": [{"key": "coder", "label": "Coder"}],
+    "inputs": [{"key": "package", "label": "Package", "type": "text", "required": True, "sample": "left-pad"},
+               {"key": "version", "label": "Version", "type": "text", "required": True, "sample": "2.0.0"}],
+    "limits": {"stageMinutes": 30, "maxRevisions": 2},
+    "projects": [],
+    "workspace": {"placement": "worktree"},
+    "stages": _code_steps({
+        "key": "bump", "kind": "agent", "title": "Bump the package", "role": "coder",
+        "instructions": "Move the package to the version given everywhere {project.label} uses it: manifests, lock "
+                        "files and code that has to change with it. Use the project's own package tool. If "
+                        "{project.label} doesn't use the package, change nothing and say so." + _CODE_HANDOFF,
+        "uses": ["inputs.package", "inputs.version"], "outputs": _CODE_OUTPUTS, "next": "tests"}),
+}
+
+TEST_SWEEP = {
+    "schemaVersion": 3,
+    "name": "Nightly test sweep",
+    "description": "Runs each project's tests on its current branch. A project whose tests fail waits for you; "
+                   "nothing is changed and no AI runs.",
+    "roles": [],
+    "inputs": [],
+    "limits": {"stageMinutes": 20, "maxRevisions": 0},
+    "projects": [],
+    "workspace": {"placement": "local"},
+    "stages": [{"key": "tests", "kind": "command", "title": "Run the tests", "run": {"*": "make test"},
+                "minutes": 30, "next": None}],
+}
+
+TEMPLATES = {"research-draft-review": RESEARCH_DRAFT_REVIEW, "three-takes": THREE_TAKES,
+             "fix-test-pr": FIX_TEST_PR, "bump-dependency": BUMP_DEPENDENCY, "test-sweep": TEST_SWEEP}
 
 
 def template(template_id: str) -> dict | None:
@@ -880,7 +1149,8 @@ def template(template_id: str) -> dict | None:
     return copy.deepcopy(value) if value is not None else None
 
 
-def template_summaries() -> list[dict]:
+def template_summaries(*, include_code: bool = False) -> list[dict]:
+    """The built-in templates. Dev Factory ones (schemaVersion 3) only for an app that asks for them."""
     return [{"id": key, "name": value["name"], "description": value["description"],
              "stageCount": len(value["stages"]), "roles": copy.deepcopy(value["roles"])}
-            for key, value in TEMPLATES.items()]
+            for key, value in TEMPLATES.items() if include_code or value["schemaVersion"] < 3]
