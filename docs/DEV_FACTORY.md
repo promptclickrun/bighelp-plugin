@@ -19,7 +19,8 @@ except the fix agent of a command stage, up to the tries you set.
      `git -C <repo> worktree add -b factory/<recipe>-<run> <repo>/.worktrees/factory-<recipe>-<run> <base>`.
      `<recipe>` is the recipe's name in lowercase letters, digits and hyphens; `<run>` is 6 characters of the run's
      id. `.worktrees/` is where Hermes keeps worktrees too.
-   - `local`: the project folder itself, on the branch it is on.
+   - `local`: the project folder itself, on the branch it is on. Runs in `local` share the folder, so start one
+     at a time per project.
    - The plugin never removes a worktree. Hermes' own worktree upkeep may remove one later, only when it is clean
      and its work is merged.
    - If the folder can't be made (no such branch, not a repository), the run needs attention with the reason, and
