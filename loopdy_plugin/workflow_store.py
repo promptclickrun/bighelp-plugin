@@ -230,7 +230,8 @@ MIGRATE_2_TO_3 = (_TRIGGERS_TABLE,)
 # Store version 3 to 4: Dev Factory runs (a project, its workspace and pull request, why a run waits) and the fix
 # tries a command attempt had used. Added only where missing.
 COLUMNS_4 = (("runs", "group_id", "TEXT"), ("runs", "project_json", "TEXT"), ("runs", "workspace_json", "TEXT"),
-             ("runs", "pull_request_json", "TEXT"), ("runs", "waiting_reason", "TEXT"), ("attempts", "tries", "INTEGER"))
+             ("runs", "pull_request_json", "TEXT"), ("runs", "waiting_reason", "TEXT"),
+             ("attempts", "tries", "INTEGER"))
 
 
 class WorkflowStore:

@@ -5,11 +5,12 @@ import functools
 import inspect
 import logging
 import os
+import shutil
 import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Annotated, Any, Callable, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -18,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .native_api import _NativeRoute, _body, _precondition, _response
 from .native_context import NativeAPIError, PROFILE_ID, native_context
+from . import workflow_factory as factory
 from . import workflow_runner as runner
 from .workflow_store import HostFacts, Mutation, WorkflowError, WorkflowStore, root_for_home
 
@@ -34,6 +36,8 @@ PARALLEL_CAPABILITY = "native-workflows-parallel-v1"
 DELIVERY_CAPABILITY = "native-workflows-delivery-v1"
 # A decision's way can end the run as succeeded, cancelled or failed, with a note.
 OUTCOMES_CAPABILITY = "native-workflows-outcomes-v1"
+# Dev Factory (docs/DEV_FACTORY.md): schemaVersion 3 coding recipes, one run per git project. Needs git.
+CODE_CAPABILITY = "native-workflows-code-v1"
 # Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
 REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)
@@ -43,6 +47,7 @@ _WORKFLOW = r"^wf_[0-9a-f]{16}$"
 _RUN = r"^run_[0-9a-f]{16}$"
 _KEY = r"^[a-z][a-z0-9_]{0,31}$"
 _SHA = r"^[0-9a-f]{64}$"
+_PROJECT = r"^[a-z0-9][a-z0-9_-]{0,39}$"
 _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 
@@ -104,6 +109,11 @@ def available() -> bool:
     return probe() is None
 
 
+def code_available() -> bool:
+    """Coding workflows need git on this computer (the GitHub CLI only for pull requests, checked when used)."""
+    return shutil.which("git") is not None
+
+
 def host_name() -> str:
     name = socket.gethostname().split(".")[0].strip()
     return name[:64] or "Hermes"
@@ -117,7 +127,8 @@ def _host_facts() -> HostFacts:
         known = validate_toolset
     except Exception:
         known = None
-    return HostFacts(profile_exists=profile_exists, toolset_known=known, tool_scope="toolsets" in hermes_features())
+    return HostFacts(profile_exists=profile_exists, toolset_known=known, tool_scope="toolsets" in hermes_features(),
+                     repository=factory.is_repository_root)
 
 
 def ensure_on_start() -> None:
@@ -173,6 +184,8 @@ class _Start(_WorkflowBody):
     inputs: dict[str, Any]
     clientRunToken: str = Field(pattern=_UUID)
     sample: StrictBool = False
+    # Dev Factory: some of the recipe's projects, by key (all when left out).
+    projects: list[Annotated[str, Field(pattern=_PROJECT)]] | None = Field(default=None, max_length=10)
 
 
 class _Runs(_Strict):
@@ -207,6 +220,11 @@ class _Read(_RunBody):
     sha256: str = Field(pattern=_SHA)
     offset: StrictInt = Field(ge=0, le=2**40)
     length: StrictInt = Field(ge=1, le=98_304)
+
+
+class _Templates(_Strict):
+    # Dev Factory templates are listed only for an app that asks (older apps can't open them).
+    includeCode: StrictBool = False
 
 
 class _Use(_Strict):
@@ -305,7 +323,7 @@ def _start(store, body: _Start, mutation):
     if probe() is not None:
         raise WorkflowError(503, "runner_unavailable", "This computer can't run workflow stages right now.")
     return store.start_run(body.workflowId, body.revision, body.inputs, body.clientRunToken, body.sample,
-                           _host_facts(), mutation)
+                           _host_facts(), mutation, projects=body.projects)
 
 
 def _runs(store, body: _Runs, mutation):
@@ -340,8 +358,8 @@ def _pin(store, body: _Pin, mutation):
     return store.pin(body.workflowId, body.pinned, mutation)
 
 
-def _templates(store, body: _Empty, mutation):
-    return store.list_templates()
+def _templates(store, body: _Templates, mutation):
+    return store.list_templates(include_code=body.includeCode)
 
 
 def _use(store, body: _Use, mutation):
@@ -376,7 +394,7 @@ _ROUTES: dict[str, tuple[type[BaseModel], Callable[..., dict], bool]] = {
     "runs/control": (_Control, _control, True),
     "runs/signoff": (_Signoff, _signoff, True),
     "artifacts/read": (_Read, _read, False),
-    "templates/list": (_Empty, _templates, False),
+    "templates/list": (_Templates, _templates, False),
     "templates/use": (_Use, _use, False),
     "templates/save": (_SaveTemplate, _save_template, False),
     "templates/delete": (_TemplateBody, _delete_template, False),

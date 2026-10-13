@@ -1035,9 +1035,9 @@ class Coordinator:
               stages: dict, **extra: Any) -> None:
         """The run waits for you at `key` (a command or pull request): Try again runs that step again."""
         stage_state(stages, key, "waiting_for_you", now)
-        update_run(connection, run, now, state="waiting_for_you", stage_key=key, stages_json=model.canonical_json(stages),
-                   waiting_sha256=None, waiting_since=now, waiting_reason=clean_text(reason, 300), next_stage=None,
-                   **extra)
+        update_run(connection, run, now, state="waiting_for_you", stage_key=key,
+                   stages_json=model.canonical_json(stages), waiting_sha256=None, waiting_since=now,
+                   waiting_reason=clean_text(reason, 300), next_stage=None, **extra)
         add_event(connection, run["id"], now, "waiting_for_you", reason, key)
 
     def _prepare(self, run: sqlite3.Row, definition: dict, from_states: tuple[str, ...]) -> sqlite3.Row | None:
@@ -1110,7 +1110,7 @@ class Coordinator:
             update_run(connection, fresh, now, state="running", stage_key=stage["key"], next_stage=None,
                        stages_json=model.canonical_json(stages),
                        started_at=fresh["started_at"] if fresh["started_at"] is not None else now)
-            add_event(connection, fresh["id"], now, "stage_launched", f"{stage['title']}: running {command}",
+            add_event(connection, fresh["id"], now, "stage_launched", f"{stage['title']}: running {command}.",
                       stage["key"], number)
             return True
 

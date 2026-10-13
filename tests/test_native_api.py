@@ -170,6 +170,9 @@ class NativeAPITests(unittest.TestCase):
                              "native-workflows-delivery-v1", "native-workflows-outcomes-v1"))
             if triggers_available():
                 expected.append("native-workflows-trigger-v1")
+            from loopdy_plugin.workflow_api import code_available
+            if code_available():
+                expected.append("native-workflows-code-v1")
         from loopdy_plugin.live_alerts import available as live_alerts_available
         if live_alerts_available():
             expected.append("native-live-alerts-v1")
