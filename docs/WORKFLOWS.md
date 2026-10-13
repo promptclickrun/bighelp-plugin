@@ -81,6 +81,9 @@ stages read-only copies.
 
 ## Definition (schemaVersion 1 and 2)
 
+Version 3 is Dev Factory: coding recipes that run once per git project, with command and pull request stages. See
+[Dev Factory](DEV_FACTORY.md).
+
 ```json
 {
   "schemaVersion": 1,
@@ -178,6 +181,9 @@ code is `not_posix`, `profile_helpers_missing`, `chat_runner_missing` (update He
 `native-workflows-edit-v1` is listed together with `native-workflows-v1` when the plugin has everything marked
 "version 2" here: the stage graph and layout, your templates, pin and unarchive. With only `native-workflows-v1`
 the app shows a workflow's flow read-only.
+
+`native-workflows-code-v1` adds Dev Factory (schemaVersion 3, [Dev Factory](DEV_FACTORY.md)), listed when git is
+on this computer.
 
 `native-workflows-trigger-v1` (3.7.0) adds triggers, listed when this Hermes has cron jobs. Each workflow has one:
 `{"kind": "manual"}` (someone, or an agent, starts each run) or `{"kind": "schedule", "schedule", "inputs",

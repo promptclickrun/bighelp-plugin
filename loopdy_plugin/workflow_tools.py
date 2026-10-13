@@ -36,6 +36,10 @@ SCHEMA = {
         "`hermes send --to` takes, and parallel blocks that run 2 to 5 agent stages at once; a decision can read "
         "all their verdicts; each of its two ways can go on or back, or end the run as succeeded, cancelled or "
         "failed with a note). Outputs can be Markdown files, text, numbers, decisions, notes, files and pictures. "
+        "Coding recipes (schemaVersion 3, Dev Factory) list git `projects` ({key, label, path}) and a `workspace` "
+        "(a new worktree per run, or the project folder) and add command stages (tests, with an optional fix agent), "
+        "sign-offs on a project's changes (`changes: true`) and pull_request stages after a sign-off; start makes one "
+        "run per project (`projects` picks some). "
         "Actions: list (workflows, runs waiting for the person, "
         "active runs), get (one workflow's definition, roles and problems), templates, create (from a template "
         "id, or from a definition), save_draft (with role -> agent picks; on a never-published workflow they save "
@@ -62,6 +66,8 @@ SCHEMA = {
             "bindings": {"type": "object", "description": "Role key -> agent (profile) id, for save_draft or publish. On a draft that was never published, save_draft keeps them without asking; the person sees them when they publish.",
                          "additionalProperties": {"type": "string", "maxLength": 64}},
             "inputs": {"type": "object", "description": "The workflow's inputs by key, for start or a schedule."},
+            "projects": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 40},
+                         "description": "For start on a coding recipe: the project keys to run (all when left out)."},
             "runAction": {"type": "string", "enum": ["pause", "resume", "cancel", "retry"]},
             "trigger": {"type": "string", "enum": ["manual", "schedule"]},
             "schedule": {"type": "string", "maxLength": 200,
@@ -141,7 +147,7 @@ class WorkflowTools:
         return api._get(store, self._body(api._Get, workflowId=args.get("workflowId")), None)
 
     def _templates(self, args, store):
-        return store.list_templates()
+        return store.list_templates(include_code=True)
 
     def _runs(self, args, store):
         body = self._body(api._Runs, workflowId=args.get("workflowId"), filter=args.get("filter"),
@@ -233,7 +239,7 @@ class WorkflowTools:
         if not revision:
             return _error("not_published", "Publish this workflow before you run it.")
         body = self._body(api._Start, workflowId=workflow_id, revision=revision, inputs=args.get("inputs") or {},
-                          clientRunToken=str(uuid.uuid4()))
+                          clientRunToken=str(uuid.uuid4()), projects=args.get("projects"))
         result = api._start(store, body, self._mutation())
         self._ensure_runner(store)
         return result

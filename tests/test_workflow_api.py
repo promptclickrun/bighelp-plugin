@@ -12,14 +12,18 @@ from unittest.mock import patch
 from loopdy_plugin import workflow_api, workflow_coordinator
 from loopdy_plugin import workflow_model as model
 import test_native_api as native_fixtures
-from workflow_fixtures import AGENTS, BINDINGS, DRAFT, Engine, INPUTS, graph_definition
+from workflow_fixtures import AGENTS, BINDINGS, DRAFT, Engine, INPUTS, fake_gh, git_project, graph_definition
 
 
 VECTORS = Path(__file__).resolve().parents[1] / "fixtures" / "contracts" / "workflows-v1"
 PREFIX = native_fixtures.PREFIX + "/workflows/"
 # Keys a response leaves out when they don't apply (docs/WORKFLOWS.md marks them with ?).
 OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey",
-            "decisions"}
+            "decisions",
+            # Dev Factory: only a command stage's attempts and a sign-off on changes carry these.
+            "kind", "exit_code", "tries", "log", "changes",
+            # Dev Factory: every workflow in `list` says its schemaVersion; a recipe adds its projects.
+            "schemaVersion", "projects"}
 # Fields v2 added to v1 responses: the v1 vectors stay as they were, and apps ignore fields they don't know.
 ADDED_IN_V2 = frozenset({"pinned", "source", "updatedAt", "mode", "uses", "decisions", "trigger"})
 
@@ -28,6 +32,10 @@ V2_VECTORS = {"draft-save-new.json", "draft-save-v2.json", "validate-v2.json", "
               "list-v2.json", "get-v2.json", "templates-save.json", "templates-list-v2.json",
               "templates-use-yours.json", "templates-delete.json", "status-v2.json", "runs-get-text-runner.json",
               "context-unavailable.json"}
+# Dev Factory (schemaVersion 3, docs/DEV_FACTORY.md): new files, no changed ones.
+CODE_VECTORS = {"templates-list-code.json", "draft-save-code.json", "runs-start-code.json",
+                "runs-get-code-command.json", "runs-get-code-review.json", "runs-signoff-code.json",
+                "runs-get-code-done.json"}
 
 
 def vector(name: str) -> dict:
@@ -90,7 +98,7 @@ class WorkflowRouteTests(unittest.TestCase):
         value = response.json()
         if vector_name is not None:
             assert_shape(self, vector(vector_name)["response"], value,
-                         added=frozenset() if vector_name in V2_VECTORS else ADDED_IN_V2)
+                         added=frozenset() if vector_name in V2_VECTORS | CODE_VECTORS else ADDED_IN_V2)
         return value
 
     def error(self, path, body, status, code):
@@ -112,6 +120,100 @@ class WorkflowRouteTests(unittest.TestCase):
                 assert_shape(self, vector("context-unavailable.json")["response"],
                              {key: value[key] for key in vector("context-unavailable.json")["response"]})
                 self.error("status", {}, 503, "workflows_unavailable")
+
+    def test_context_advertises_coding_workflows_where_git_is(self):
+        self.assertIn("native-workflows-code-v1", self.fixture.context().json()["features"])
+        with patch.object(workflow_api, "code_available", return_value=False):
+            context = self.fixture.context().json()
+            self.assertNotIn("native-workflows-code-v1", context["features"])
+            self.assertIn("native-workflows-v1", context["features"])
+
+    def coding_workflow(self, fix_tries: int = 2) -> tuple[str, dict]:
+        """A Dev Factory recipe from its template, with two real projects filled in, bound and published."""
+        listed = [item["id"] for item in self.ok("templates/list", {})["templates"]]
+        self.assertNotIn("fix-test-pr", listed, "Apps without Dev Factory never see its templates")
+        listed = [item["id"] for item in self.ok("templates/list", {"includeCode": True},
+                                                 "templates-list-code.json")["templates"]]
+        self.assertIn("fix-test-pr", listed)
+        used = self.ok("templates/use", {"templateId": "fix-test-pr", "name": "Fix the check"})
+        # A template has no projects yet; the app fills them in (and picks the coder) before it can run.
+        self.assertEqual([issue["code"] for issue in used["validation"]["issues"]], ["no_projects", "role_unbound"])
+        definition = self.ok("get", {"workflowId": used["workflowId"]})["workflow"]["definition"]
+        projects = {"app": git_project(self, "app"), "web": git_project(self, "web")}
+        definition["projects"] = [{"key": key, "label": key.title(), "path": str(path)}
+                                  for key, path in projects.items()]
+        definition["stages"][1]["run"] = {"*": "sh check.sh"}
+        definition["stages"][1]["fix"]["maxTries"] = fix_tries
+        self.ok("bind", {"workflowId": used["workflowId"], "role": "coder", "agentId": "writer"})
+        saved = self.ok("draft/save", {"workflowId": used["workflowId"], "baseDraftVersion": used["draftVersion"],
+                                       "definition": definition}, "draft-save-code.json")
+        self.assertEqual(saved["validation"], {"valid": True, "host": True, "issues": []})
+        self.ok("publish", {"workflowId": used["workflowId"], "draftVersion": saved["draftVersion"]})
+        return used["workflowId"], projects
+
+    def test_coding_runs_through_the_routes(self):
+        workflow_id, projects = self.coding_workflow()
+        body = {"workflowId": workflow_id, "revision": 1, "inputs": {"task": "Make the check pass"},
+                "clientRunToken": str(uuid.uuid4())}
+        started = self.ok("runs/start", body)
+        self.assertEqual([item["project"] for item in started["runs"]], ["app", "web"])
+        self.assertEqual(started["run"]["group_id"], started["group_id"])
+        one = self.ok("runs/start", dict(body, clientRunToken=str(uuid.uuid4()), projects=["web"]))
+        self.assertEqual([item["project"] for item in one["runs"]], ["web"])
+        self.error("runs/start", dict(body, clientRunToken=str(uuid.uuid4()), projects=["mobile"]), 422,
+                   "projects_invalid")
+        self.error("runs/start", dict(body, clientRunToken=str(uuid.uuid4()), projects=["Not A Key"]), 422,
+                   "invalid_request")
+        run = self.ok("runs/get", {"runId": started["runs"][1]["run_id"]})["run"]
+        self.assertEqual((run["project"], run["workspace"], run["pull_request"], run["reason"]),
+                         ({"key": "web", "label": "Web", "path": str(projects["web"])}, None, None, None))
+        self.assertEqual([(item["key"], item["state"]) for item in run["stages"]],
+                         [("fix", "pending"), ("tests", "pending"), ("review", "pending"), ("open_pr", "pending")])
+        listed = self.ok("runs/list", {"workflowId": workflow_id})["runs"]
+        self.assertEqual({item["group_id"] for item in listed}, {started["group_id"], one["group_id"]})
+
+    def test_coding_routes_match_the_vectors(self):
+        """One project's run end to end: a fix that doesn't help, Try again, your review, a pull request."""
+        workflow_id, projects = self.coding_workflow(fix_tries=1)
+        started = self.ok("runs/start", {"workflowId": workflow_id, "revision": 1, "inputs": {"task": "Fix it"},
+                                         "clientRunToken": str(uuid.uuid4()), "projects": ["app"]},
+                          "runs-start-code.json")
+        run_id = started["runs"][0]["run_id"]
+        engine = Engine(self, home=self.home)
+        engine.host.real_enabled = True
+        gh = fake_gh(self, number=42)
+        engine.coordinator.environ["PATH"] = f"{gh}:/usr/bin:/bin"
+        engine.start()
+        engine.tick()
+        engine.finish_stage({"title": "Make the check pass", "summary": {"content": "# Summary\n\nA first try."}})
+        engine.wait(run_id, lambda run: engine.host.latest().alive)
+        engine.finish_stage({"summary": "Looked at the check."})
+        engine.wait(run_id, lambda run: run["state"] == "waiting_for_you")
+        waiting = self.ok("runs/get", {"runId": run_id}, "runs-get-code-command.json")["run"]
+        self.assertEqual((waiting["waiting"]["kind"], waiting["reason"]),
+                         ("command", "Run the tests: still failing after 1 try."))
+        (Path(waiting["workspace"]["path"]) / "fixed.txt").write_text("fixed\n")
+        self.ok("runs/control", {"runId": run_id, "action": "retry", "expectedVersion": waiting["version"]})
+        engine.wait(run_id, lambda run: run["state"] == "waiting_for_you")
+        review = self.ok("runs/get", {"runId": run_id}, "runs-get-code-review.json")["run"]
+        self.assertEqual(review["signoff"]["changes"]["files"], 1)
+        self.ok("runs/signoff", {"runId": run_id, "stageKey": "review", "decision": "approve",
+                                 "artifactSha256": review["signoff"]["sha256"]}, "runs-signoff-code.json")
+        engine.wait(run_id, lambda run: run["state"] == "succeeded")
+        done = self.ok("runs/get", {"runId": run_id}, "runs-get-code-done.json")["run"]
+        self.assertEqual(done["pull_request"], {"url": "https://github.example/fixture/app/pull/42", "number": 42})
+        self.assertNotIn(str(projects["web"]), json.dumps(done))
+
+    def test_agents_build_and_start_coding_workflows(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        tools = WorkflowTools(approve=lambda description, rule_key: (True, ""))
+        self.assertIn("fix-test-pr", [item["id"] for item in tools.call({"action": "templates"})["templates"]])
+        workflow_id, _projects = self.coding_workflow()
+        started = tools.call({"action": "start", "workflowId": workflow_id, "inputs": {"task": "x"},
+                              "projects": ["app"]})
+        self.assertEqual([item["project"] for item in started["runs"]], ["app"])
+        created = tools.call({"action": "create", "templateId": "bump-dependency"})
+        self.assertEqual([issue["code"] for issue in created["validation"]["issues"]], ["no_projects", "role_unbound"])
 
     def test_probe_reasons_are_fixed_codes(self):
         with patch.object(workflow_api, "hermes_features", return_value=frozenset({"toolsets"})):

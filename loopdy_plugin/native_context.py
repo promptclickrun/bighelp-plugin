@@ -314,7 +314,8 @@ def _native_features(
                                    PARALLEL_CAPABILITY as workflows_parallel_capability,
                                    DELIVERY_CAPABILITY as workflows_delivery_capability,
                                    OUTCOMES_CAPABILITY as workflows_outcomes_capability,
-                                   probe as workflows_probe, triggers_available)
+                                   CODE_CAPABILITY as workflows_code_capability,
+                                   probe as workflows_probe, triggers_available, code_available)
         reason = workflows_probe()
         if reason is None:
             features.extend((workflows_capability, workflows_edit_capability, workflows_parallel_capability,
@@ -323,6 +324,10 @@ def _native_features(
                 features.append(workflows_trigger_capability)
             else:
                 skip(workflows_trigger_capability, "this Hermes has no cron jobs.")
+            if code_available():
+                features.append(workflows_code_capability)
+            else:
+                skip(workflows_code_capability, "git isn't installed on this computer.")
         else:
             why = {
                 "not_posix": "workflows need a POSIX host.",
@@ -335,6 +340,7 @@ def _native_features(
             skip(workflows_delivery_capability, why)
             skip(workflows_outcomes_capability, why)
             skip(workflows_trigger_capability, why)
+            skip(workflows_code_capability, why)
             if unavailable is not None:
                 # A fixed code, so the app can say what to do (update Hermes, for example).
                 unavailable[workflows_capability] = reason
@@ -345,6 +351,7 @@ def _native_features(
         skip("native-workflows-delivery-v1", "workflow support is unimportable.")
         skip("native-workflows-outcomes-v1", "workflow support is unimportable.")
         skip("native-workflows-trigger-v1", "workflow support is unimportable.")
+        skip("native-workflows-code-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
     if live_alerts_available():
         features.append(live_alerts_capability)

@@ -220,7 +220,7 @@ class EditStoreTests(unittest.TestCase):
         self.assertEqual(upgraded.list_templates()["templates"][0]["source"], "builtin")
         self.assertEqual(upgraded.trigger(workflow_id), {"kind": "manual"})
         with upgraded.read() as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
 
     def test_a_version_two_store_gains_triggers(self):
         workflow_id, _revision = self.engine.workflow()
@@ -231,7 +231,7 @@ class EditStoreTests(unittest.TestCase):
         self.assertEqual(upgraded.save_trigger(workflow_id, "schedule", "0 9 * * *", {"topic": "x"}, "job1"),
                          {"kind": "schedule", "schedule": "0 9 * * *", "inputs": {"topic": "x"}, "jobId": "job1"})
         with upgraded.read() as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
 
 
 # The 3.5.0 tables that version 2 changed, for the upgrade test.
