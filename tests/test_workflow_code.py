@@ -6,10 +6,14 @@ and a stand-in `gh`. Nothing reaches GitHub.
 from __future__ import annotations
 
 import base64
+import io
+import json
+import os
 from pathlib import Path
 import sqlite3
 import unittest
 
+from loopdy_plugin import workflow_factory as factory
 from loopdy_plugin.workflow_store import WorkflowError, WorkflowStore
 from workflow_fixtures import Engine, code_definition, fake_gh, git, git_project, graph_definition
 
@@ -35,9 +39,9 @@ class CodeRunTests(unittest.TestCase):
         return saved["workflowId"], self.store.publish(saved["workflowId"], saved["draftVersion"],
                                                         self.engine.facts)["revision"]
 
-    def start(self, definition=None, token="6f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b", projects=None) -> dict:
+    def start(self, definition=None, client_run="6f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b", projects=None) -> dict:
         workflow_id, revision = self.publish(definition or code_definition(str(self.repo)))
-        return self.store.start_run(workflow_id, revision, {"task": "Make the check pass"}, token, False,
+        return self.store.start_run(workflow_id, revision, {"task": "Make the check pass"}, client_run, False,
                                     self.engine.facts, projects=projects)
 
     def run_id(self, definition=None) -> str:
@@ -337,6 +341,64 @@ class CodeRunTests(unittest.TestCase):
         gh = fake_gh(self)
         run = self.approve(self.run_id(code_definition(str(self.repo), placement="local")), gh)
         self.assertEqual(run["reason"], "Pick a new worktree or a branch other than main to open a pull request.")
+        self.assertNotIn("pr create", (gh / "calls.txt").read_text())
+
+
+class FactoryHelperTests(unittest.TestCase):
+    """The git and GitHub helpers on their own, in throwaway repositories."""
+
+    def setUp(self):
+        self.repo = git_project(self, files={"README.md": "# App\n", "notes.txt": "one\ntwo\n"})
+        self.env = dict(factory.git_env({"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                                         "HOME": str(self.repo.parent)}), GIT_CONFIG_NOSYSTEM="1")
+
+    def test_environments_are_allowlists(self):
+        environ = {"PATH": "/bin", "HOME": "/home/you", "OPENAI_API_KEY": "x", "GH_TOKEN": "y", "JAVA_HOME": "/jdk",
+                   "HERMES_HOME": "/home/you/.hermes", "PYTHONPATH": "/elsewhere", "SSH_AUTH_SOCK": "/agent.sock"}
+        command = factory.command_env(environ)
+        self.assertEqual((command["PATH"], command["HOME"], command["JAVA_HOME"], command["CI"]),
+                         ("/bin", "/home/you", "/jdk", "1"))
+        pull = factory.pull_request_env(environ)
+        self.assertEqual((pull["GH_TOKEN"], pull["SSH_AUTH_SOCK"], pull["GH_PROMPT_DISABLED"]),
+                         ("y", "/agent.sock", "1"))
+        for env in (command, pull, factory.git_env(environ)):
+            for name in ("OPENAI_API_KEY", "HERMES_HOME", "PYTHONPATH"):
+                self.assertNotIn(name, env)
+        self.assertNotIn("GH_TOKEN", command)
+        self.assertNotIn("GH_TOKEN", factory.git_env(environ))
+
+    def test_changes_count_commits_work_and_new_files_and_bind_to_the_exact_folder(self):
+        folder = Path(factory.prepare_workspace(str(self.repo), "worktree", None, "fix-abc123", self.env)["path"])
+        (folder / "notes.txt").write_text("one\n2\nthree\n")
+        git(folder, "commit", "-q", "-am", "Change the notes", home=self.repo.parent)
+        (folder / "README.md").write_text("# App\n\nMore.\n")
+        (folder / "new.txt").write_text("a\nb\n")
+        summary, digest = factory.changes(str(folder), "main", self.env)
+        self.assertEqual(summary, {"files": 3, "additions": 6, "deletions": 1, "branch": "factory/fix-abc123",
+                                   "base": "main"})
+        self.assertEqual(factory.changes(str(folder), "main", self.env)[1], digest, "Nothing changed, same hash")
+        (folder / "new.txt").write_text("a\nc\n")
+        self.assertNotEqual(factory.changes(str(folder), "main", self.env)[1], digest)
+        # The main checkout sees .worktrees/ as new, but it is never part of the changes.
+        self.assertEqual(factory.changes(str(self.repo), "main", self.env)[0]["files"], 0)
+
+    def test_a_worktree_made_before_a_restart_is_used_again(self):
+        first = factory.prepare_workspace(str(self.repo), "worktree", "main", "fix-abc123", self.env)
+        self.assertEqual(factory.prepare_workspace(str(self.repo), "worktree", "main", "fix-abc123", self.env), first)
+        (self.repo / ".worktrees" / "factory-other-000000").mkdir()
+        with self.assertRaises(factory.FactoryError) as caught:
+            factory.prepare_workspace(str(self.repo), "worktree", "main", "other-000000", self.env)
+        self.assertEqual(caught.exception.code, "worktree_exists")
+
+    def test_a_pull_request_with_nothing_to_push_commits_nothing(self):
+        gh = fake_gh(self)
+        folder = Path(factory.prepare_workspace(str(self.repo), "worktree", None, "fix-abc123", self.env)["path"])
+        step = folder.parent / "step"
+        step.mkdir()
+        (step / "request.json").write_text(json.dumps({"base": "main", "title": "Nothing", "draft": False}))
+        env = factory.pull_request_env(dict(self.env, PATH=f"{gh}:{self.env['PATH']}"))
+        result = factory.open_pull_request(step, str(folder), dict(env, GIT_CONFIG_NOSYSTEM="1"), io.StringIO())
+        self.assertEqual(result, {"ok": False, "code": "no_changes"})
         self.assertNotIn("pr create", (gh / "calls.txt").read_text())
 
 

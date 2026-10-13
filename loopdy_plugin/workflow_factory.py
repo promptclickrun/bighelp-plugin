@@ -20,7 +20,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, TextIO
 
 
 GIT_SECONDS = 60
@@ -279,7 +279,8 @@ def changes(path: str, base: str, env: Mapping[str, str]) -> tuple[dict, str]:
 
 # MARK: The pull request step (its own process)
 
-def _run(argv: list[str], env: Mapping[str, str], timeout: float, cwd: str) -> subprocess.CompletedProcess:
+def _run(argv: list[str], env: Mapping[str, str], timeout: float, cwd: str,
+         log: TextIO) -> subprocess.CompletedProcess:
     try:
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
                                 env=dict(env), cwd=cwd, check=False)
@@ -287,11 +288,11 @@ def _run(argv: list[str], env: Mapping[str, str], timeout: float, cwd: str) -> s
         return subprocess.CompletedProcess(argv, 124, b"", b"timed out")
     except OSError:
         return subprocess.CompletedProcess(argv, 127, b"", b"couldn't start")
-    # The step's own output goes to its log in the attempt folder; the app never sees it.
-    sys.stdout.write(f"$ {' '.join([os.path.basename(argv[0]), *argv[1:]])} (exit {result.returncode})\n")
-    sys.stdout.write(result.stdout.decode("utf-8", "replace")[-4000:])
-    sys.stdout.write(result.stderr.decode("utf-8", "replace")[-4000:])
-    sys.stdout.flush()
+    # The step's own log, in the attempt folder; the app never sees it.
+    log.write(f"$ {' '.join([os.path.basename(argv[0]), *argv[1:]])} (exit {result.returncode})\n")
+    log.write(result.stdout.decode("utf-8", "replace")[-4000:])
+    log.write(result.stderr.decode("utf-8", "replace")[-4000:])
+    log.flush()
     return result
 
 
@@ -303,12 +304,17 @@ def _pull_url(text: str) -> tuple[str, int] | None:
     return None
 
 
-def open_pull_request(folder: Path, cwd: str, env: Mapping[str, str]) -> dict:
+def open_pull_request(folder: Path, cwd: str, env: Mapping[str, str], log: TextIO | None = None) -> dict:
     """Commit everything in `cwd`, push its branch and open a pull request with the GitHub CLI.
 
     `folder` holds request.json ({base, title, draft}) and body.md. Returns {"ok": true, "url", "number"} or
     {"ok": false, "code", "detail"?}. Nothing is committed before gh is known to be installed and signed in.
     """
+    log = log or sys.stdout
+
+    def run(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
+        return _run(argv, env, timeout, cwd, log)
+
     request = json.loads((folder / "request.json").read_text(encoding="utf-8"))
     base, title, draft = request.get("base"), request.get("title"), request.get("draft") is True
     if not isinstance(base, str) or BRANCH.fullmatch(base) is None or not isinstance(title, str) or not title:
@@ -316,37 +322,37 @@ def open_pull_request(folder: Path, cwd: str, env: Mapping[str, str]) -> dict:
     gh = shutil.which("gh", path=env.get("PATH"))
     if gh is None:
         return {"ok": False, "code": "gh_missing"}
-    if _run([gh, "auth", "status"], env, GH_SECONDS, cwd).returncode != 0:
+    if run([gh, "auth", "status"], GH_SECONDS).returncode != 0:
         return {"ok": False, "code": "gh_signed_out"}
     git = shutil.which("git", path=env.get("PATH"))
     if git is None:
         return {"ok": False, "code": "git_missing"}
-    head = _run([git, "rev-parse", "--abbrev-ref", "HEAD"], env, GIT_SECONDS, cwd)
+    head = run([git, "rev-parse", "--abbrev-ref", "HEAD"], GIT_SECONDS)
     branch = head.stdout.decode("utf-8", "replace").strip()
     if head.returncode != 0 or branch == "HEAD" or BRANCH.fullmatch(branch) is None:
         return {"ok": False, "code": "not_on_branch"}
     if branch == base:
         return {"ok": False, "code": "same_branch"}
-    if _run([git, "add", "-A", "--", *EXCLUDE_WORKTREES], env, GIT_SECONDS, cwd).returncode != 0:
+    if run([git, "add", "-A", "--", *EXCLUDE_WORKTREES], GIT_SECONDS).returncode != 0:
         return {"ok": False, "code": "commit_failed"}
-    if _run([git, "diff", "--cached", "--quiet"], env, GIT_SECONDS, cwd).returncode != 0:
-        commit = _run([git, "commit", "-m", title], env, GIT_SECONDS * 3, cwd)
+    if run([git, "diff", "--cached", "--quiet"], GIT_SECONDS).returncode != 0:
+        commit = run([git, "commit", "-m", title], GIT_SECONDS * 3)
         if commit.returncode != 0:
             who = b"tell me who you are" in (commit.stderr + commit.stdout).lower()
             return {"ok": False, "code": "commit_identity" if who else "commit_failed"}
-    ahead = _run([git, "rev-list", "--count", f"{base}..HEAD"], env, GIT_SECONDS, cwd)
+    ahead = run([git, "rev-list", "--count", f"{base}..HEAD"], GIT_SECONDS)
     if ahead.returncode == 0 and ahead.stdout.strip() == b"0":
         return {"ok": False, "code": "no_changes"}
-    push = _run([git, "push", "-u", "origin", branch], env, PUSH_SECONDS, cwd)
+    push = run([git, "push", "-u", "origin", branch], PUSH_SECONDS)
     if push.returncode != 0:
         return {"ok": False, "code": "push_failed", "detail": last_line(push.stderr)}
     argv = [gh, "pr", "create", "--base", base, "--head", branch, "--title", title,
             "--body-file", str(folder / "body.md")]
-    created = _run(argv + (["--draft"] if draft else []), env, GH_SECONDS, cwd)
+    created = run(argv + (["--draft"] if draft else []), GH_SECONDS)
     found = _pull_url(created.stdout.decode("utf-8", "replace")) if created.returncode == 0 else None
     if found is None:
         # Opened before (a retry after a lost answer): use the open one for this branch.
-        view = _run([gh, "pr", "view", branch, "--json", "url,number"], env, GH_SECONDS, cwd)
+        view = run([gh, "pr", "view", branch, "--json", "url,number"], GH_SECONDS)
         try:
             value = json.loads(view.stdout.decode("utf-8", "replace")) if view.returncode == 0 else None
         except ValueError:
