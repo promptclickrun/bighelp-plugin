@@ -243,11 +243,12 @@ class FakeHost:
                    {"type": "text", "text": "Working on it.\nAlmost done.\n"},
                    {"type": "result", "exit_code": exit_code, "text": text,
                     "tokens": {"input": tokens[0], "output": tokens[1], "total": sum(tokens)}}]
-        with open(process.cwd / "stream.jsonl", "a", encoding="utf-8") as handle:
+        # Like Hermes: the stream goes to stdout and the turn report to the file its environment names.
+        with open(process.stdout_path, "a", encoding="utf-8") as handle:
             for record in records:
                 handle.write(json.dumps(record) + "\n")
         if report:
-            (process.cwd / "report.json").write_text(json.dumps(
+            Path(process.env.get("HERMES_QUIET_TURN_REPORT_FILE", process.cwd / "report.json")).write_text(json.dumps(
                 {"pid": pid, "exit_code": exit_code, "error": "", "reply": text}), encoding="utf-8")
         if exit:
             process.alive, process.code = False, exit_code

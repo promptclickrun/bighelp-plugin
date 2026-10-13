@@ -117,11 +117,12 @@ def hermes_argv(environ: Mapping[str, str] = os.environ, *, importable: bool | N
 
 
 def worker_argv(base: list[str], profile: str, tools: list[str], features: frozenset[str] = FULL_FEATURES,
-                *, query: str | None = None) -> list[str]:
+                *, query: str | None = None, brief: str = "brief.md") -> list[str]:
     """The stage's Hermes command, with only the flags this Hermes has.
 
     The stream runner reads brief.md and writes JSON lines. The text runner reads brief.md too when Hermes has
     `--query-file`, and otherwise gets `query` (the brief itself, or a short prompt that points to brief.md).
+    `brief` is its full path when the agent works in a project folder instead of the attempt folder.
     """
     argv = [*base, "-p", profile]
     if "cli" in features:
@@ -132,9 +133,9 @@ def worker_argv(base: list[str], profile: str, tools: list[str], features: froze
     if "toolsets" in features:
         argv += ["--toolsets", ",".join(tools) if tools else EMPTY_TOOLSET]
     if runner_mode(features) == "stream":
-        return argv + ["--query-file", "brief.md", "--format", "stream-json"]
+        return argv + ["--query-file", brief, "--format", "stream-json"]
     if "query_file" in features:
-        argv += ["--query-file", "brief.md"]
+        argv += ["--query-file", brief]
     else:
         argv += ["-q", query or text_query(None)]
     if "quiet" in features:
@@ -156,17 +157,23 @@ def send_env(base: Mapping[str, str], *, home: Path, import_path: list[str] | tu
     return env
 
 
-def text_query(brief: str | None) -> str:
-    """The `-q` text when Hermes can't read a query file: the brief when it is small enough, else a pointer."""
+def text_query(brief: str | None, path: Path | None = None) -> str:
+    """The `-q` text when Hermes can't read a query file: the brief when it is small enough, else a pointer
+    (to `path` when the agent works somewhere else than its attempt folder)."""
     if brief is not None and len(brief.encode("utf-8")) <= MAX_INLINE_QUERY_BYTES:
         return brief
-    return ("You are one stage of a bighelp workflow. Your full task is in the file brief.md in your working "
-            "folder. Read it first and follow it exactly, including how to hand off at the end.")
+    where = str(path) if path is not None else "brief.md in your working folder"
+    return (f"You are one stage of a bighelp workflow. Your full task is in the file {where}. Read it first and "
+            "follow it exactly, including how to hand off at the end.")
 
 
 def worker_env(base: Mapping[str, str], *, home: Path, profile: str, attempt_dir: Path,
-               import_path: list[str] | tuple[str, ...] = (), report: bool = True) -> dict[str, str]:
+               import_path: list[str] | tuple[str, ...] = (), report: bool = True,
+               cwd: Path | None = None) -> dict[str, str]:
     """An allowlist, not a copy: the agent's own keys come from its profile's .env, never from this process.
+
+    `cwd` is where the agent's terminal and file tools work: its project folder in a coding workflow, else the
+    attempt folder.
 
     `import_path` is where `hermes_cli` (and its dependencies) live for a module-form worker. A bundled bare
     interpreter only finds them in-process, so the scrubbed child gets them pinned like Hermes' own Kanban and
@@ -174,7 +181,7 @@ def worker_env(base: Mapping[str, str], *, home: Path, profile: str, attempt_dir
     """
     env = {key: base[key] for key in _SAFE_ENV if key in base}
     env.update({
-        "HERMES_HOME": str(home), "HERMES_PROFILE": profile, "TERMINAL_CWD": str(attempt_dir),
+        "HERMES_HOME": str(home), "HERMES_PROFILE": profile, "TERMINAL_CWD": str(cwd or attempt_dir),
         "HERMES_SESSION_SOURCE": SESSION_SOURCE, "PYTHONUTF8": "1",
     })
     if report:
@@ -497,26 +504,57 @@ def _example(outputs: list[dict]) -> str:
     return json.dumps({"outputs": example}, ensure_ascii=False)
 
 
+FIX_LOG_CHARS = 8000
+
+
 def render_brief(*, workflow_name: str, run_number: int, stage: dict, iteration: int,
-                 uses: list[dict], change_notes: dict | None) -> str:
-    """The query file. `uses` items: {reference, label, type, text?, file?}."""
-    lines = [f"# Workflow stage: {stage['title']}", "",
-             f"You are one stage of the bighelp workflow \"{workflow_name}\" (run {run_number}"
-             + (f", round {iteration}" if iteration > 1 else "") + ").",
-             "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
-             "yourself. Your working folder is this stage's own folder; read-only copies of earlier work are in "
-             "inputs/ and any file you hand off goes in out/.", "", "## Your task", "",
+                 uses: list[dict], change_notes: dict | None, project: dict | None = None,
+                 workspace: dict | None = None, folder: Path | None = None, failure: dict | None = None) -> str:
+    """The query file. `uses` items: {reference, label, type, text?, file?}.
+
+    In a coding workflow the agent works in its run's `workspace` (a worktree or the project folder) and
+    `folder` is the attempt folder that holds this brief, its inputs and what it hands off. `failure` is the
+    command a fix attempt must make pass: {command, exit_code, timed_out, minutes, log}.
+    """
+    run = f"run {run_number}" + (f", round {iteration}" if iteration > 1 else "")
+    if workspace is None or folder is None:
+        intro = [f"You are one stage of the bighelp workflow \"{workflow_name}\" ({run}).",
+                 "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
+                 "yourself. Your working folder is this stage's own folder; read-only copies of earlier work are in "
+                 "inputs/ and any file you hand off goes in out/."]
+    else:
+        intro = [f"You are one stage of the bighelp workflow \"{workflow_name}\" ({run}) for the project "
+                 f"{project['label'] if project else 'you work on'}.",
+                 "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
+                 "yourself.",
+                 f"You work in the project folder {workspace['path']} (branch {workspace['branch']}). You may read "
+                 "and change files there and run commands in it. Leave your changes in the folder; don't push them "
+                 "or open pull requests yourself.",
+                 f"Your hand-off folder is {folder}: read-only copies of earlier work are in {folder}/inputs/, and a "
+                 f"file you hand off goes in {folder}/out/ (hand it off as out/<name>)."]
+    lines = [f"# Workflow stage: {stage['title']}", "", *intro, "", "## Your task", "",
              stage["instructions"].strip() or "Do the stage's task.", ""]
+    if failure is not None:
+        what = (f"ran out of time after {failure['minutes']} min" if failure.get("timed_out")
+                else f"failed with exit code {failure['exit_code']}")
+        log = failure.get("log") or ""
+        lines += ["## What failed", "",
+                  f"The command `{failure['command']}` {what} in the project folder. The end of its output:", "",
+                  "~~~~text", log[-FIX_LOG_CHARS:].rstrip() or "(no output)", "~~~~", ""]
+        if folder is not None and failure.get("file"):
+            lines += [f"Its whole output (the last 64 KB) is in {folder}/{failure['file']}.", ""]
+        lines += ["Fix the cause in the project folder. The workflow runs the command again when you are done.", ""]
     if uses:
         lines += ["## What you have", ""]
         for item in uses:
             lines.append(f"### {item['label']} ({item['reference']})")
             lines.append("")
+            shown = f"{folder}/{item['file']}" if item.get("file") and folder is not None else item.get("file")
             if item.get("file") and item.get("text") is None:
-                lines.append(f"Too long to include here. Read it from {item['file']}.")
+                lines.append(f"Too long to include here. Read it from {shown}.")
             else:
                 if item.get("file"):
-                    lines.append(f"(Also in {item['file']}.)")
+                    lines.append(f"(Also in {shown}.)")
                     lines.append("")
                 lines.append(item.get("text") or "(empty)")
             lines.append("")

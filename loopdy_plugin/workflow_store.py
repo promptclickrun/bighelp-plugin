@@ -1207,7 +1207,7 @@ def reset_stage(stages: dict, definition: dict, key: str, now: float, *, iterati
     except `rerun` (the one whose work a check refused)."""
     stage_state(stages, key, "pending", now, iteration=iteration)
     stages[key]["startedAt"] = stages[key]["endedAt"] = None
-    for name in ("outcome", "note", "tries", "changes"):
+    for name in ("outcome", "note", "tries", "fixing", "changes"):
         stages[key].pop(name, None)
     stage = model.stage_by_key(definition, key) or {}
     for branch in stage.get("branches", ()):

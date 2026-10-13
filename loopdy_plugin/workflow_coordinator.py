@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -27,8 +28,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import workflow_factory as factory
 from . import workflow_model as model
 from . import workflow_runner as runner
+from .sensitive import SENSITIVE_CREDENTIAL_RE
 from .workflow_contract import ContractError, check_rule, parse_outputs
 from .workflow_store import (
     ACTIVE_STATES, LIVE_ATTEMPT_STATES, MAX_LIVE_LINES, MAX_RUN_ARTIFACT_BYTES, RETENTION_SECONDS,
@@ -51,6 +54,37 @@ _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}")
 _SPACES = re.compile(r"\s+")
 # Under Hermes' cache: images/ and documents/ each get a folder per delivery, removed when it ends.
 OUTBOX = "bighelp-workflows"
+# Dev Factory: a command's output is kept to its last 64 KB (the `log` artifact); while it runs, its log file is cut
+# back to that once it passes 1 MB.
+COMMAND_LOG_BYTES = 64 * 1024
+COMMAND_LOG_TRIM = 1024 * 1024
+PULL_REQUEST_SECONDS = 600
+MAX_PULL_REQUEST_BODY = 4000
+FIX_OUTPUTS = [{"name": "summary", "type": "text"}]
+# Why a pull request step needs you, by the step's result code.
+PULL_REQUEST_REASONS = {
+    "gh_missing": "Install the GitHub CLI (gh) on this computer to open pull requests.",
+    "gh_signed_out": "Sign in to the GitHub CLI on this computer (gh auth login) to open pull requests.",
+    "git_missing": "Git isn't installed on this computer.",
+    "not_on_branch": "{label} isn't on a branch, so there is nothing to open a pull request from.",
+    "same_branch": "Pick a new worktree or a branch other than {base} to open a pull request.",
+    "no_changes": "There are no changes in {label} to open a pull request with.",
+    "commit_identity": "Git doesn't know your name and email on this computer. Set them, then try again.",
+    "commit_failed": "Git couldn't commit the changes in {label}.",
+    "push_failed": "Git couldn't push {branch} to origin.",
+    "create_failed": "GitHub didn't open the pull request.",
+    "timed_out": "Opening the pull request took too long.",
+}
+# Why a run's workspace couldn't be prepared, by FactoryError code.
+WORKSPACE_REASONS = {
+    "not_repository": "{label} isn't a git repository on this computer.",
+    "no_commits": "{label} has no commits yet.",
+    "not_on_branch": "{label} isn't on a branch. Choose a branch to start from.",
+    "base_missing": "{label} has no branch {base} to start from.",
+    "worktree_exists": "{label} already has a worktree for this run.",
+    "worktree_failed": "Git couldn't make a worktree in {label}.",
+    "git_missing": "Git isn't installed on this computer.",
+}
 
 
 class DeliveryError(Exception):
@@ -278,6 +312,8 @@ class Coordinator:
         report = runner.read_report(directory / "report.json", pid)
         if alive:
             runner.trim_stderr(directory / "stderr.log")
+            if attempt["runner"] == "command":
+                runner.trim_stderr(directory / "command.log", above=COMMAND_LOG_TRIM, keep=COMMAND_LOG_BYTES)
             if attempt["runner"] == "text":
                 self._coarse(attempt, now)
             with self.store.read() as connection:
@@ -414,13 +450,22 @@ class Coordinator:
                        stages_json=model.canonical_json(stages))
             add_event(connection, run["id"], now, "cancelled", "The run was cancelled.", top)
 
-        if reason in ("timeout", "cancel", "sibling"):
-            self._with_run(attempt["run_id"], stopped)
-            return
         with self.store.read() as connection:
             cancelled = connection.execute("SELECT cancel_requested FROM runs WHERE id=?",
                                            (attempt["run_id"],)).fetchone()
-        if cancelled is not None and cancelled["cancel_requested"]:
+        cancel = reason in ("cancel", "sibling") or (cancelled is not None and cancelled["cancel_requested"])
+        special = self._factory_attempt(attempt)
+        if special is not None and not cancel:
+            # Dev Factory: a command, the agent that fixes what it found, or the pull request step.
+            timed_out = reason == "timeout"
+            if special == "command":
+                self._command_ended(attempt, exit_code, timed_out=timed_out)
+            elif special == "pr":
+                self._pull_request_ended(attempt, exit_code, timed_out=timed_out)
+            else:
+                self._fix_ended(attempt, exit_code, report, timed_out=timed_out)
+            return
+        if reason in ("timeout", "cancel", "sibling") or cancel:
             self._with_run(attempt["run_id"], stopped)
             return
         if exit_code is None:
@@ -468,12 +513,7 @@ class Coordinator:
                 message = f"{stage['title']} stopped before its turn began. {explain}"
             self._attempt_failed(attempt, "agent_exit", message, explain=explain)
             return
-        reply = report.get("reply") if report is not None and isinstance(report.get("reply"), str) else None
-        if reply is None and stream:
-            reply = self._last_result_text(output_path)
-        elif reply is None:
-            data = runner.read_tail(output_path, runner.MAX_REPORT_BYTES)
-            reply = data.decode("utf-8", "replace") if data is not None else None
+        reply = self._reply(attempt, report)
         try:
             outputs = parse_outputs(reply or "", stage["outputs"], attempt_dir=Path(attempt["dir"]),
                                     stage_title=stage["title"])
@@ -528,6 +568,16 @@ class Coordinator:
                 update_run(connection, run, now, stages_json=model.canonical_json(stages), **counts)
 
         self._with_run(attempt["run_id"], accept)
+
+    def _reply(self, attempt: sqlite3.Row, report: dict | None) -> str | None:
+        """The agent's final reply: from Hermes' turn report, else its stream or stdout."""
+        directory = Path(attempt["dir"])
+        if report is not None and isinstance(report.get("reply"), str):
+            return report["reply"]
+        if attempt["runner"] == "stream":
+            return self._last_result_text(directory / "stream.jsonl")
+        data = runner.read_tail(directory / "reply.txt", runner.MAX_REPORT_BYTES)
+        return data.decode("utf-8", "replace") if data is not None else None
 
     @staticmethod
     def _last_result_text(path: Path) -> str | None:
@@ -634,6 +684,11 @@ class Coordinator:
             if run is None or run["state"] not in from_states:
                 return False
             definition = self.store._definition(connection, run["workflow_id"], run["revision"])
+        if run["project_json"] is not None and run["workspace_json"] is None:
+            # A Dev Factory run works in its own folder, made before its first stage.
+            run = self._prepare(run, definition, from_states)
+            if run is None:
+                return False
         stage = model.stage_by_key(definition, stage_key)
         if stage["kind"] == "agent":
             return self._launch(run, definition, stage, from_states)
@@ -641,6 +696,12 @@ class Coordinator:
             return self._start_parallel(run, definition, stage, from_states)
         if stage["kind"] == "delivery":
             return self._deliver(run, definition, stage, from_states)
+        if stage["kind"] == "command":
+            return self._run_command(run, definition, stage, from_states)
+        if stage["kind"] == "pull_request":
+            return self._open_pull_request(run, definition, stage, from_states)
+        if stage["kind"] == "signoff" and stage.get("changes"):
+            return self._wait_for_changes(run, definition, stage, from_states)
 
         def change(connection, run, definition, now):
             if run["state"] not in from_states:
@@ -799,13 +860,16 @@ class Coordinator:
                        f"{stage['title']} has no file to show.", stages=stages)
             return
         stage_state(stages, stage["key"], "waiting_for_you", now)
+        extra = {"waiting_reason": f"{stage['title']} is waiting for you."} if run["group_id"] is not None else {}
         update_run(connection, run, now, state="waiting_for_you", stage_key=stage["key"],
                    stages_json=model.canonical_json(stages), waiting_sha256=row["sha256"], waiting_since=now,
-                   next_stage=None)
+                   next_stage=None, **extra)
         add_event(connection, run["id"], now, "waiting_for_you", f"{stage['title']} is waiting for you.", stage["key"])
 
     def _uses(self, connection: sqlite3.Connection, run: sqlite3.Row, definition: dict, stage: dict,
-              directory: Path) -> list[dict]:
+              directory: Path, *, absolute: bool = False) -> list[dict]:
+        """What the stage reads, with copies of earlier files in its inputs/ (named by full path when the agent
+        works in a project folder, `absolute`)."""
         inputs = json.loads(run["inputs_json"])
         labels = {item["key"]: item["label"] for item in definition["inputs"]}
         result = []
@@ -840,15 +904,20 @@ class Coordinator:
                 file_name = f"inputs/{head}.{name}{extension}"
                 runner.write_private(directory / file_name, data, read_only=True)
                 kind = "picture" if row["type"] == "image" else "file"
-                item["text"] = f"A {kind} ({shown}, {_kilobytes(len(data))}). Open it from {file_name}."
+                where = str(directory / file_name) if absolute else file_name
+                item["text"] = f"A {kind} ({shown}, {_kilobytes(len(data))}). Open it from {where}."
             else:
                 item["text"] = str(json.loads(row["value_json"]))
             result.append(item)
         return result
 
     def _launch(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...],
-                *, group: dict | None = None) -> bool:
-        """One agent stage, or one agent of the parallel block `group` (the run stays on the block)."""
+                *, group: dict | None = None, failure: dict | None = None) -> bool:
+        """One agent stage, or one agent of the parallel block `group` (the run stays on the block).
+
+        In a Dev Factory run the agent works in the run's project folder, with file and terminal tools when its
+        stage lists none. `failure` makes this the agent that fixes what a command stage found.
+        """
         bindings = json.loads(run["bindings_json"])
         agent = bindings.get(stage["role"])
         home = runner.profile_home(self.hermes_root, agent) if agent else None
@@ -862,19 +931,26 @@ class Coordinator:
                 return False
             self._with_run(run["id"], missing)
             return False
+        project = json.loads(run["project_json"]) if run["project_json"] else None
+        workspace = json.loads(run["workspace_json"]) if run["workspace_json"] else None
         with self.store.read() as connection:
             number = connection.execute("SELECT COUNT(*) FROM attempts WHERE run_id=? AND stage_key=?",
                                         (run["id"], stage["key"])).fetchone()[0] + 1
             iteration = run["iteration"]
             directory = runner.attempt_dir(self.store.runs_dir, run["id"], stage["key"], iteration, number)
             runner.prepare_attempt(directory)
-            uses = self._uses(connection, run, definition, stage, directory)
+            uses = self._uses(connection, run, definition, stage, directory, absolute=workspace is not None)
             workflow = connection.execute("SELECT name FROM workflows WHERE id=?", (run["workflow_id"],)).fetchone()
+        if failure is not None:
+            failure = dict(failure, file=f"inputs/{stage['key']}.log")
+            runner.write_private(directory / failure["file"], failure["log"].encode("utf-8"), read_only=True)
         os.chmod(directory / "inputs", 0o500)
-        notes = json.loads(run["change_notes_json"]) if run["change_notes_json"] else None
+        notes = json.loads(run["change_notes_json"]) if run["change_notes_json"] and failure is None else None
         brief = runner.render_brief(workflow_name=workflow["name"] if workflow else definition["name"],
-                                    run_number=run["number"], stage=stage, iteration=iteration, uses=uses,
-                                    change_notes=notes)
+                                    run_number=run["number"], iteration=iteration, uses=uses, change_notes=notes,
+                                    stage=dict(stage, instructions=model.fill_project(stage["instructions"], project)),
+                                    project=project, workspace=workspace, folder=directory if workspace else None,
+                                    failure=failure)
         runner.write_private(directory / "brief.md", brief.encode("utf-8"))
         attempt_id = new_id("att")
         minutes = model.stage_minutes(definition, stage)
@@ -891,7 +967,9 @@ class Coordinator:
                 (attempt_id, fresh["id"], stage["key"], iteration, number, agent, self.epoch, now,
                  now + minutes * 60, str(directory), self.mode, 1 if stream else 0))
             stages = json.loads(fresh["stages_json"])
-            stage_state(stages, stage["key"], "launched", now, start=True, iteration=iteration)
+            # A fix runs inside its command stage, which keeps its start time.
+            stage_state(stages, stage["key"], "launched", now, start=failure is None, iteration=iteration)
+            stages[stage["key"]].pop("fixing", None)
             update_run(connection, fresh, now, state=fresh["state"] if group is not None else "launched",
                        stage_key=group["key"] if group is not None else stage["key"], next_stage=None,
                        stages_json=model.canonical_json(stages),
@@ -902,14 +980,18 @@ class Coordinator:
 
         if not self._with_run(run["id"], launched):
             return False
-        argv = runner.worker_argv(self.hermes, agent, stage["tools"], self.features, query=runner.text_query(brief))
+        tools = stage["tools"] or (list(model.CODING_TOOLSETS) if workspace is not None else [])
+        cwd = Path(workspace["path"]) if workspace is not None else directory
+        argv = runner.worker_argv(self.hermes, agent, tools, self.features,
+                                  query=runner.text_query(brief, directory / "brief.md" if workspace else None),
+                                  brief=str(directory / "brief.md") if workspace else "brief.md")
         env = runner.worker_env(self.environ, home=home, profile=agent, attempt_dir=directory,
-                                import_path=self.import_path, report=stream)
+                                import_path=self.import_path, report=stream, cwd=cwd)
         try:
             if "toolsets" not in self.features:
                 # Without --toolsets the agent would get every tool it has, messaging included.
                 raise ValueError("this Hermes can't limit a stage's tools")
-            pid = self.host.spawn(argv, env=env, cwd=directory,
+            pid = self.host.spawn(argv, env=env, cwd=cwd,
                                   stdout_path=directory / ("stream.jsonl" if stream else "reply.txt"),
                                   stderr_path=directory / "stderr.log")
         except (OSError, ValueError, StoreUnavailable):
@@ -934,6 +1016,385 @@ class Coordinator:
                       stage["key"], number)
         self._with_run(run["id"], running)
         return True
+
+    # MARK: Dev Factory
+
+    def _factory_attempt(self, attempt: sqlite3.Row) -> str | None:
+        """"command", "pr" or "fix" (an agent turn inside a command stage) for Dev Factory attempts, else None."""
+        if attempt["runner"] in ("command", "pr"):
+            return attempt["runner"]
+        with self.store.read() as connection:
+            run = connection.execute("SELECT workflow_id, revision FROM runs WHERE id=?",
+                                     (attempt["run_id"],)).fetchone()
+            if run is None:
+                return None
+            definition = self.store._definition(connection, run["workflow_id"], run["revision"])
+        return "fix" if (model.stage_by_key(definition, attempt["stage_key"]) or {}).get("kind") == "command" else None
+
+    def _wait(self, connection: sqlite3.Connection, run: sqlite3.Row, now: float, key: str, reason: str,
+              stages: dict, **extra: Any) -> None:
+        """The run waits for you at `key` (a command or pull request): Try again runs that step again."""
+        stage_state(stages, key, "waiting_for_you", now)
+        update_run(connection, run, now, state="waiting_for_you", stage_key=key, stages_json=model.canonical_json(stages),
+                   waiting_sha256=None, waiting_since=now, waiting_reason=clean_text(reason, 300), next_stage=None,
+                   **extra)
+        add_event(connection, run["id"], now, "waiting_for_you", reason, key)
+
+    def _prepare(self, run: sqlite3.Row, definition: dict, from_states: tuple[str, ...]) -> sqlite3.Row | None:
+        """A Dev Factory run's folder, before its first stage: a new worktree, or the project folder itself.
+
+        Worktrees are never removed by the plugin. A folder that can't be prepared needs attention.
+        """
+        project = json.loads(run["project_json"])
+        wanted = definition["workspace"]
+        name = f"{factory.slug(definition['name'])}-{run['id'][4:10]}"
+        try:
+            workspace = factory.prepare_workspace(project["path"], wanted["placement"], wanted.get("base"), name,
+                                                  factory.git_env(self.environ))
+            problem = None
+        except factory.FactoryError as error:
+            workspace = None
+            problem = WORKSPACE_REASONS.get(error.code, "Git couldn't prepare {label}.").format(
+                label=project["label"], base=wanted.get("base", ""))
+            if error.code == "worktree_failed" and error.detail:
+                problem += " " + clean_text(error.detail, 160)
+        except OSError:
+            workspace, problem = None, f"Git couldn't prepare {project['label']}."
+
+        def change(connection, fresh, definition, now):
+            if fresh["state"] not in from_states or fresh["workspace_json"] is not None:
+                return None
+            if problem is not None:
+                self._attention(connection, fresh, now, "workspace_failed", problem, stage_key=fresh["stage_key"])
+                return None
+            update_run(connection, fresh, now, workspace_json=model.canonical_json(workspace))
+            where = "the project folder" if workspace["placement"] == "local" else "a new worktree"
+            add_event(connection, fresh["id"], now, "workspace_ready",
+                      f"{project['label']}: working in {where} on {workspace['branch']}.")
+            return connection.execute("SELECT * FROM runs WHERE id=?", (fresh["id"],)).fetchone()
+        return self._with_run(run["id"], change)
+
+    def _run_command(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...]) -> bool:
+        """Run the stage's command for this run's project, in its folder: never a shell, an allowlisted
+        environment and a time limit. Its output goes to command.log.
+
+        After a failure with tries left, the stage is `fixing`: this starts the fix agent instead, and the
+        command runs again after it. Both hand-offs go through `accepted`, so a restart in between loses nothing.
+        """
+        if json.loads(run["stages_json"]).get(stage["key"], {}).get("fixing"):
+            return self._launch_fix(run, definition, stage, from_states)
+        project = json.loads(run["project_json"])
+        workspace = json.loads(run["workspace_json"])
+        command = model.project_command(stage, project["key"]) or ""
+        tries = int(json.loads(run["stages_json"]).get(stage["key"], {}).get("tries", 0))
+        iteration = run["iteration"]
+        with self.store.read() as connection:
+            number = connection.execute("SELECT COUNT(*) FROM attempts WHERE run_id=? AND stage_key=?",
+                                        (run["id"], stage["key"])).fetchone()[0] + 1
+        directory = runner.attempt_dir(self.store.runs_dir, run["id"], stage["key"], iteration, number)
+        runner.prepare_attempt(directory)
+        attempt_id = new_id("att")
+        minutes = model.stage_minutes(definition, stage)
+
+        def launched(connection, fresh, definition, now):
+            if fresh["state"] not in from_states or fresh["cancel_requested"]:
+                return False
+            connection.execute(
+                "INSERT INTO attempts (id, run_id, stage_key, iteration, number, state, agent_id, coordinator_epoch, "
+                "launched_at, deadline_at, dir, runner, tokens_known, tries) "
+                "VALUES (?, ?, ?, ?, ?, 'launched', '', ?, ?, ?, ?, 'command', 1, ?)",
+                (attempt_id, fresh["id"], stage["key"], iteration, number, self.epoch, now, now + minutes * 60,
+                 str(directory), tries))
+            stages = json.loads(fresh["stages_json"])
+            stage_state(stages, stage["key"], "running", now, start=tries == 0, iteration=iteration)
+            update_run(connection, fresh, now, state="running", stage_key=stage["key"], next_stage=None,
+                       stages_json=model.canonical_json(stages),
+                       started_at=fresh["started_at"] if fresh["started_at"] is not None else now)
+            add_event(connection, fresh["id"], now, "stage_launched", f"{stage['title']}: running {command}",
+                      stage["key"], number)
+            return True
+
+        if not self._with_run(run["id"], launched):
+            return False
+        log = directory / "command.log"
+        try:
+            pid = self.host.spawn(shlex.split(command), env=factory.command_env(self.environ),
+                                  cwd=Path(workspace["path"]), stdout_path=log, stderr_path=log)
+        except (OSError, ValueError, StoreUnavailable) as error:
+            program = (shlex.split(command) or ["the command"])[0] if command else "the command"
+            why = "isn't on this computer's PATH" if isinstance(error, FileNotFoundError) else "couldn't start"
+            runner.write_private(log, f"bighelp: {program} {why}.\n".encode("utf-8"))
+            with self.store.read() as connection:
+                attempt = connection.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+            self._command_ended(attempt, 127, timed_out=False)
+            return True
+        fingerprint = self.host.fingerprint(pid) or "unverified"
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE attempts SET state='running', pid=?, pid_fingerprint=? WHERE id=?",
+                               (pid, fingerprint, attempt_id))
+        return True
+
+    def _command_ended(self, attempt: sqlite3.Row, exit_code: int | None, *, timed_out: bool) -> None:
+        """Exit code 0 passes. Otherwise a fix agent tries (while the stage has tries left), else the run waits
+        for you with the reason. The output's last 64 KB is kept as the attempt's `log`."""
+        if exit_code is None and not timed_out:
+            def unknown(connection, run, definition, now):
+                stage = model.stage_by_key(definition, attempt["stage_key"])
+                connection.execute("UPDATE attempts SET state='unknown', outcome_code='unknown', ended_at=? "
+                                   "WHERE id=?", (now, attempt["id"]))
+                if run["state"] in ACTIVE_STATES:
+                    self._attention(connection, run, now, "coordinator_restarted",
+                                    f"We don't know how {stage['title']} ended.", stage_key=stage["key"])
+            self._with_run(attempt["run_id"], unknown)
+            return
+        tail = runner.read_tail(Path(attempt["dir"]) / "command.log", COMMAND_LOG_BYTES) or b""
+        text = SENSITIVE_CREDENTIAL_RE.sub("[hidden]", tail.decode("utf-8", "replace"))
+        data = text.encode("utf-8")
+        digest = self.store.write_artifact(data)
+        passed = exit_code == 0 and not timed_out
+
+        def change(connection, run, definition, now):
+            stage = model.stage_by_key(definition, attempt["stage_key"])
+            key, title = stage["key"], stage["title"]
+            outcome = "accepted" if passed else ("timed_out" if timed_out else "command_failed")
+            connection.execute("UPDATE attempts SET state=?, outcome_code=?, exit_code=?, ended_at=? WHERE id=?",
+                               ("accepted" if passed else ("timed_out" if timed_out else "failed"), outcome,
+                                exit_code, now, attempt["id"]))
+            connection.execute(
+                "INSERT INTO artifacts (sha256, run_id, stage_key, iteration, attempt_id, name, type, bytes) "
+                "VALUES (?, ?, ?, ?, ?, 'log', 'text', ?)",
+                (digest, run["id"], key, attempt["iteration"], attempt["id"], len(data)))
+            if run["state"] not in ACTIVE_STATES:
+                return
+            stages = json.loads(run["stages_json"])
+            counted = run["artifact_bytes"] + len(data)
+            if passed:
+                stage_state(stages, key, "accepted", now, end=True)
+                update_run(connection, run, now, state="accepted", stages_json=model.canonical_json(stages),
+                           next_stage=model.next_stage_key(definition, key), artifact_bytes=counted)
+                add_event(connection, run["id"], now, "command_passed", f"{title} passed.", key, attempt["number"])
+                return
+            # "<title>: …" reads right whatever the stage is called ("Tests", "Run the tests").
+            why = (f"{title}: ran out of time ({model.stage_minutes(definition, stage)} min)." if timed_out
+                   else f"{title}: failed with exit code {exit_code}.")
+            tries, limit = int(stages.get(key, {}).get("tries", 0)), model.fix_tries(stage)
+            if tries < limit:
+                stages[key].update(tries=tries + 1, fixing=True)
+                update_run(connection, run, now, state="accepted", stages_json=model.canonical_json(stages),
+                           next_stage=key, artifact_bytes=counted)
+                add_event(connection, run["id"], now, "command_failed",
+                          f"{why[:-1]}. Fixing it (try {tries + 1} of {limit}).", key, attempt["number"])
+                return
+            add_event(connection, run["id"], now, "command_failed", why, key, attempt["number"])
+            reason = f"{title}: still failing after {tries} {'try' if tries == 1 else 'tries'}." if tries else why
+            self._wait(connection, run, now, key, reason, stages, artifact_bytes=counted)
+
+        self._with_run(attempt["run_id"], change)
+
+    def _launch_fix(self, run: sqlite3.Row, definition: dict, stage: dict, from_states: tuple[str, ...]) -> bool:
+        """The command stage's fix role, in the project folder, with the last failure and the fix instructions."""
+        project = json.loads(run["project_json"])
+        with self.store.read() as connection:
+            last = connection.execute("SELECT * FROM attempts WHERE run_id=? AND stage_key=? AND runner='command' "
+                                      "ORDER BY launched_at DESC, number DESC LIMIT 1",
+                                      (run["id"], stage["key"])).fetchone()
+            log = connection.execute("SELECT sha256 FROM artifacts WHERE attempt_id=? AND name='log'",
+                                     (last["id"],)).fetchone() if last is not None else None
+        text = self.store.read_artifact_bytes(log["sha256"]).decode("utf-8", "replace") if log is not None else ""
+        fixer = {"key": stage["key"], "kind": "agent", "title": f"{stage['title']} (fix)", "role": stage["fix"]["role"],
+                 "instructions": stage["fix"]["instructions"], "tools": [], "uses": [], "outputs": FIX_OUTPUTS}
+        failure = {"command": model.project_command(stage, project["key"]),
+                   "exit_code": last["exit_code"] if last is not None else None,
+                   "timed_out": last is not None and last["outcome_code"] == "timed_out",
+                   "minutes": model.stage_minutes(definition, stage), "log": text}
+        return self._launch(run, definition, fixer, from_states, failure=failure)
+
+    def _fix_ended(self, attempt: sqlite3.Row, exit_code: int | None, report: dict | None, *,
+                   timed_out: bool) -> None:
+        """However the fix went, the command runs again: it is what says whether the fix worked. The fixer's
+        summary (if it handed one off) is kept as `<stage>.summary`."""
+        summary = None
+        if exit_code == 0 and not timed_out:
+            try:
+                (summary,) = parse_outputs(self._reply(attempt, report) or "", FIX_OUTPUTS,
+                                           attempt_dir=Path(attempt["dir"]), stage_title="The fix")
+            except ContractError:
+                summary = None
+        digest = self.store.write_artifact(summary.data) if summary is not None else None
+
+        def change(connection, run, definition, now):
+            stage = model.stage_by_key(definition, attempt["stage_key"])
+            row = connection.execute("SELECT tokens_in, tokens_out FROM attempts WHERE id=?",
+                                     (attempt["id"],)).fetchone()
+            state = "accepted" if summary is not None else ("timed_out" if timed_out else "failed")
+            connection.execute("UPDATE attempts SET state=?, outcome_code=?, exit_code=?, ended_at=? WHERE id=?",
+                               (state, state if state != "failed" else "fix_failed", exit_code, now, attempt["id"]))
+            connection.execute("UPDATE runs SET tokens_in=tokens_in+?, tokens_out=tokens_out+? WHERE id=?",
+                               (row["tokens_in"], row["tokens_out"], run["id"]))
+            if summary is not None:
+                connection.execute(
+                    "INSERT INTO artifacts (sha256, run_id, stage_key, iteration, attempt_id, name, type, bytes, "
+                    "word_count, value_json) VALUES (?, ?, ?, ?, ?, ?, 'text', ?, ?, ?)",
+                    (digest, run["id"], stage["key"], attempt["iteration"], attempt["id"], summary.name,
+                     len(summary.data), summary.word_count, model.canonical_json(summary.value)))
+            fresh = connection.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone()
+            if fresh["state"] not in ACTIVE_STATES:
+                return
+            # The command runs again on the next pass.
+            update_run(connection, fresh, now, state="accepted", next_stage=stage["key"])
+            add_event(connection, run["id"], now, "fix_done", f"{stage['title']}: the fix is done. Running it again.",
+                      stage["key"], attempt["number"])
+
+        self._with_run(attempt["run_id"], change)
+
+    def _wait_for_changes(self, run: sqlite3.Row, definition: dict, stage: dict,
+                          from_states: tuple[str, ...]) -> bool:
+        """A sign-off on the project's changes: a summary to show and a hash of the folder, so approving binds
+        to exactly what the person saw. Read before the write transaction, because git can take a while."""
+        project = json.loads(run["project_json"])
+        workspace = json.loads(run["workspace_json"])
+        try:
+            summary, digest = factory.changes(workspace["path"], workspace["base"], factory.git_env(self.environ))
+            problem = None
+        except (factory.FactoryError, OSError):
+            summary, digest, problem = None, None, f"Couldn't read the changes in {project['label']}."
+
+        def change(connection, fresh, definition, now):
+            if fresh["state"] not in from_states:
+                return False
+            stages = json.loads(fresh["stages_json"])
+            stage_state(stages, stage["key"], "running", now, start=True, iteration=fresh["iteration"])
+            if problem is not None:
+                self._attention(connection, fresh, now, "changes_unreadable", problem, stage_key=stage["key"],
+                                stages=stages)
+                return True
+            stages[stage["key"]]["changes"] = summary
+            stage_state(stages, stage["key"], "waiting_for_you", now)
+            update_run(connection, fresh, now, state="waiting_for_you", stage_key=stage["key"],
+                       stages_json=model.canonical_json(stages), waiting_sha256=digest, waiting_since=now,
+                       waiting_reason=f"Look at the changes in {project['label']} and approve them.", next_stage=None)
+            add_event(connection, fresh["id"], now, "waiting_for_you", f"{stage['title']} is waiting for you.",
+                      stage["key"])
+            return True
+        return bool(self._with_run(run["id"], change))
+
+    def _pull_request_text(self, run: sqlite3.Row, definition: dict, stage: dict, project: dict) -> tuple[str, str]:
+        """The title (the stage's, or the first line of `titleFrom`) and a short body from the newest summary."""
+        title, rest = stage["title"], ""
+        with self.store.read() as connection:
+            if stage.get("titleFrom"):
+                row = self._latest(connection, run["id"], stage["titleFrom"])
+                text = self.store.read_artifact_bytes(row["sha256"]).decode("utf-8", "replace") if row else ""
+                lines = text.strip().splitlines()
+                first = clean_text(lines[0].lstrip("#").strip(), factory.MAX_TITLE) if lines else ""
+                title, rest = first or title, "\n".join(lines[1:]).strip()
+            if not rest:
+                source = model.split_reference(stage["titleFrom"]) if stage.get("titleFrom") else None
+                for row in connection.execute("SELECT * FROM artifacts WHERE run_id=? AND type IN "
+                                              "('text', 'markdown_file') AND name != 'log' ORDER BY id DESC",
+                                              (run["id"],)):
+                    if (row["stage_key"], row["name"]) != source:
+                        rest = self.store.read_artifact_bytes(row["sha256"]).decode("utf-8", "replace").strip()
+                        break
+            workflow = connection.execute("SELECT name FROM workflows WHERE id=?", (run["workflow_id"],)).fetchone()
+        name = workflow["name"] if workflow else definition["name"]
+        footer = f"Opened by the bighelp workflow \"{name}\" (run {run['number']}) for {project['label']}."
+        body = rest[:MAX_PULL_REQUEST_BODY].strip()
+        return title, (f"{body}\n\n---\n{footer}\n" if body else f"{footer}\n")
+
+    def _open_pull_request(self, run: sqlite3.Row, definition: dict, stage: dict,
+                           from_states: tuple[str, ...]) -> bool:
+        """Commit, push and open a pull request: a short process (workflow_factory.py) in the project folder,
+        with the person's own git and GitHub CLI sign-ins."""
+        project = json.loads(run["project_json"])
+        workspace = json.loads(run["workspace_json"])
+        title, body = self._pull_request_text(run, definition, stage, project)
+        iteration = run["iteration"]
+        with self.store.read() as connection:
+            number = connection.execute("SELECT COUNT(*) FROM attempts WHERE run_id=? AND stage_key=?",
+                                        (run["id"], stage["key"])).fetchone()[0] + 1
+        directory = runner.attempt_dir(self.store.runs_dir, run["id"], stage["key"], iteration, number)
+        runner.prepare_attempt(directory)
+        request = {"base": workspace["base"], "title": title, "draft": stage.get("draft") is True}
+        runner.write_private(directory / "request.json", json.dumps(request).encode("utf-8"))
+        runner.write_private(directory / "body.md", body.encode("utf-8"))
+        attempt_id = new_id("att")
+
+        def launched(connection, fresh, definition, now):
+            if fresh["state"] not in from_states or fresh["cancel_requested"]:
+                return False
+            connection.execute(
+                "INSERT INTO attempts (id, run_id, stage_key, iteration, number, state, agent_id, coordinator_epoch, "
+                "launched_at, deadline_at, dir, runner, tokens_known) "
+                "VALUES (?, ?, ?, ?, ?, 'launched', '', ?, ?, ?, ?, 'pr', 1)",
+                (attempt_id, fresh["id"], stage["key"], iteration, number, self.epoch, now,
+                 now + PULL_REQUEST_SECONDS, str(directory)))
+            stages = json.loads(fresh["stages_json"])
+            stage_state(stages, stage["key"], "running", now, start=True, iteration=iteration)
+            update_run(connection, fresh, now, state="running", stage_key=stage["key"], next_stage=None,
+                       stages_json=model.canonical_json(stages),
+                       started_at=fresh["started_at"] if fresh["started_at"] is not None else now)
+            add_event(connection, fresh["id"], now, "stage_launched",
+                      f"{stage['title']}: opening a pull request for {project['label']}.", stage["key"], number)
+            return True
+
+        if not self._with_run(run["id"], launched):
+            return False
+        log = directory / "pr.log"
+        argv = [sys.executable, "-I", str(Path(factory.__file__).resolve()), "pull-request", str(directory)]
+        try:
+            pid = self.host.spawn(argv, env=factory.pull_request_env(self.environ), cwd=Path(workspace["path"]),
+                                  stdout_path=log, stderr_path=log)
+        except (OSError, ValueError, StoreUnavailable):
+            with self.store.read() as connection:
+                attempt = connection.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+            self._pull_request_ended(attempt, None, timed_out=False)
+            return True
+        fingerprint = self.host.fingerprint(pid) or "unverified"
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE attempts SET state='running', pid=?, pid_fingerprint=? WHERE id=?",
+                               (pid, fingerprint, attempt_id))
+        return True
+
+    def _pull_request_ended(self, attempt: sqlite3.Row, exit_code: int | None, *, timed_out: bool) -> None:
+        """The step's result.json says how it went; anything but an open pull request waits for you."""
+        data = runner.read_tail(Path(attempt["dir"]) / "result.json", factory.MAX_RESULT_BYTES) or b""
+        try:
+            result = json.loads(data.decode("utf-8", "replace"))
+        except ValueError:
+            result = None
+        result = result if isinstance(result, dict) else {}
+        url, number = result.get("url"), result.get("number")
+        opened = (result.get("ok") is True and isinstance(url, str) and type(number) is int
+                  and factory._pull_url(url) == (url, number))
+
+        def change(connection, run, definition, now):
+            stage = model.stage_by_key(definition, attempt["stage_key"])
+            code = "accepted" if opened else (result.get("code") if isinstance(result.get("code"), str) else
+                                              "timed_out" if timed_out else "step_failed")
+            connection.execute("UPDATE attempts SET state=?, outcome_code=?, exit_code=?, ended_at=? WHERE id=?",
+                               ("accepted" if opened else "failed", code[:40], exit_code, now, attempt["id"]))
+            if run["state"] not in ACTIVE_STATES:
+                return
+            stages = json.loads(run["stages_json"])
+            if opened:
+                stage_state(stages, stage["key"], "accepted", now, end=True)
+                update_run(connection, run, now, state="accepted", stages_json=model.canonical_json(stages),
+                           next_stage=model.next_stage_key(definition, stage["key"]),
+                           pull_request_json=model.canonical_json({"url": url, "number": number}))
+                add_event(connection, run["id"], now, "pull_request_opened",
+                          f"{stage['title']}: opened pull request #{number}.", stage["key"], attempt["number"])
+                return
+            project = json.loads(run["project_json"])
+            workspace = json.loads(run["workspace_json"])
+            reason = PULL_REQUEST_REASONS.get(code, "The pull request step stopped without a result.").format(
+                label=project["label"], base=workspace["base"], branch=workspace["branch"])
+            detail = result.get("detail")
+            if code in ("push_failed", "create_failed") and isinstance(detail, str) and detail.strip():
+                reason += " " + clean_text(detail, 160)
+            self._wait(connection, run, now, stage["key"], reason, stages)
+
+        self._with_run(attempt["run_id"], change)
 
     # MARK: Delivery
 
@@ -1236,7 +1697,9 @@ def coordinator_command(root: Path, *, environ: dict[str, str] | None = None) ->
     command = [env_tool, "-i", f"PATH={environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}",
                f"HOME={Path.home()}", f"HERMES_HOME={root.parents[2]}", "LANG=C.UTF-8", "PYTHONUTF8=1",
                f"PYTHONPATH={python_path}"]
-    for key in ("HERMES_BIN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+    # Dev Factory commands need the person's toolchains, and git push their SSH agent. Paths and settings only:
+    # tokens would show in the process list, so the GitHub CLI uses its own stored sign-in.
+    for key in ("HERMES_BIN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS") + factory.TOOLCHAIN_ENV:
         if environ.get(key):
             command.append(f"{key}={environ[key]}")
     command += [sys.executable, "-m", "loopdy_plugin.workflow_coordinator", "--data-root", str(root),

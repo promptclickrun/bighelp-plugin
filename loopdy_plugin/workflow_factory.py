@@ -168,6 +168,12 @@ def prepare_workspace(repo: str, placement: str, base: str | None, name: str,
     branch = f"factory/{name}"
     folder = os.path.join(repo, WORKTREES, f"factory-{name}")
     if os.path.lexists(folder):
+        # Made for this run before a restart cut in: use it again. Anything else there is left alone.
+        try:
+            if current_branch(folder, env) == branch:
+                return {"placement": "worktree", "path": folder, "branch": branch, "base": base}
+        except FactoryError:
+            pass
         raise FactoryError("worktree_exists")
     os.makedirs(os.path.join(repo, WORKTREES), exist_ok=True)
     _git(repo, ["worktree", "add", "-b", branch, folder, base], env, timeout=WORKTREE_SECONDS,
@@ -282,8 +288,7 @@ def _run(argv: list[str], env: Mapping[str, str], timeout: float, cwd: str) -> s
     except OSError:
         return subprocess.CompletedProcess(argv, 127, b"", b"couldn't start")
     # The step's own output goes to its log in the attempt folder; the app never sees it.
-    sys.stdout.write(f"$ {' '.join(os.path.basename(argv[0]) if index == 0 else part for index, part in enumerate(argv))}"
-                     f" (exit {result.returncode})\n")
+    sys.stdout.write(f"$ {' '.join([os.path.basename(argv[0]), *argv[1:]])} (exit {result.returncode})\n")
     sys.stdout.write(result.stdout.decode("utf-8", "replace")[-4000:])
     sys.stdout.write(result.stderr.decode("utf-8", "replace")[-4000:])
     sys.stdout.flush()
