@@ -62,6 +62,7 @@ provides_tools:
   - iphone_calendar
   - iphone_reminders
   - iphone_location
+  - iphone_appearance
   - bighelp_render_summary
   - bighelp_render_metrics
   - bighelp_render_list
