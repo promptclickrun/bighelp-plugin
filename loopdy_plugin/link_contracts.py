@@ -87,13 +87,19 @@ DEVICE_TOOL_OPERATIONS = frozenset(
         "calendar.list", "calendar.create", "calendar.update", "calendar.delete",
         "reminders.list", "reminders.create", "reminders.update", "reminders.delete",
         "location.current",
+        "appearance.get", "appearance.set",
     }
 )
 # Operations that only read. Their results are private and never kept for a retry.
 DEVICE_TOOL_READ_OPERATIONS = frozenset(
-    {"health.read", "calendar.list", "reminders.list", "location.current"}
+    {"health.read", "calendar.list", "reminders.list", "location.current", "appearance.get"}
 )
-DEVICE_TOOL_KINDS = ("health", "calendar", "reminders", "location")
+DEVICE_TOOL_KINDS = ("health", "calendar", "reminders", "location", "appearance")
+# iphone_appearance: the app's light or dark mode, and its chat color as one of
+# the app's own color names (the phone checks the name) or #rrggbb.
+APPEARANCE_MODES = ("system", "light", "dark")
+APPEARANCE_COLOR_PATTERN = r"^(#[0-9A-Fa-f]{6}|[A-Za-z][A-Za-z-]{0,23})$"
+MAX_APPEARANCE_COLOR_LENGTH = 24
 HEALTH_TYPES = (
     "step_count",
     "distance_walking_running",
@@ -2569,9 +2575,11 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
         allowed = {"id", "expectedRevision", "span", "occurrenceStart"}
     elif operation == "reminders.update":
         allowed = {"id", "expectedRevision", "title", "dueDate", "startDate", "timeZone", "notes", "priority", "completed"}
-    elif operation == "location.current":
-        # Where the phone is right now; nothing for the model to choose.
+    elif operation in {"location.current", "appearance.get"}:
+        # Where the phone is right now, or how the app looks; nothing to choose.
         allowed = set()
+    elif operation == "appearance.set":
+        allowed = {"mode", "color"}
     else:
         allowed = {"id", "expectedRevision"}
     if not set(value).issubset(allowed):
@@ -2641,6 +2649,16 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             raise ValueError("bighelp Link device tool priority is invalid")
         if "completed" in result and type(result["completed"]) is not bool:
             raise ValueError("bighelp Link device tool completed is invalid")
+    if operation == "appearance.set":
+        if not result:
+            raise ValueError("bighelp Link device tool appearance needs a mode or a color")
+        if "mode" in result and result["mode"] not in APPEARANCE_MODES:
+            raise ValueError("bighelp Link device tool mode is invalid")
+        if "color" in result and (
+            not isinstance(result["color"], str)
+            or not re.fullmatch(APPEARANCE_COLOR_PATTERN, result["color"])
+        ):
+            raise ValueError("bighelp Link device tool color is invalid")
     return _device_tool_json(result)
 
 
@@ -2919,6 +2937,9 @@ __all__ = [
     "DEVICE_TOOL_OPERATIONS",
     "DEVICE_TOOL_READ_OPERATIONS",
     "DEVICE_TOOL_KINDS",
+    "APPEARANCE_MODES",
+    "APPEARANCE_COLOR_PATTERN",
+    "MAX_APPEARANCE_COLOR_LENGTH",
     "HEALTH_TYPES",
     "MAX_DEVICE_TOOL_PAYLOAD_BYTES",
     "MAX_DEVICE_TOOL_ARGUMENT_BYTES",

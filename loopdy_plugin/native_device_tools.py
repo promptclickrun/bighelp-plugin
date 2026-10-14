@@ -34,6 +34,8 @@ logger = logging.getLogger("hermes.plugins.bighelp")
 CAPABILITY = "native-device-tools-v1"
 # Phones may share their location (iphone_location) only with plugins that list this.
 LOCATION_CAPABILITY = "native-device-location-v1"
+# Phones may let agents change how bighelp looks (iphone_appearance) only with plugins that list this.
+APPEARANCE_CAPABILITY = "native-device-appearance-v1"
 LEASE_SECONDS = 30
 MAX_CHANNELS = 64
 MAX_QUEUE = 128
@@ -43,7 +45,9 @@ _UUID = r"\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{
 _SESSION = r"\A[A-Za-z0-9_-]{1,180}\z"
 _PROFILE = r"\A[a-z0-9][a-z0-9_-]{0,63}\z"
 _HOST = r"\A[A-Za-z0-9_-]{1,96}\z"
-_TOOL_NAMES = frozenset({"iphone_health", "iphone_calendar", "iphone_reminders", "iphone_location"})
+_TOOL_NAMES = frozenset({
+    "iphone_health", "iphone_calendar", "iphone_reminders", "iphone_location", "iphone_appearance",
+})
 
 
 class NativeDeviceToolError(ValueError):
@@ -536,6 +540,10 @@ def _operation_for_tool(tool_name: str, args: Any) -> tuple[str, dict[str, Any]]
         if selected != "current":
             raise NativeDeviceToolError("invalid_arguments", status=422)
         return "location.current", values
+    if tool_name == "iphone_appearance":
+        if selected not in {"get", "set"}:
+            raise NativeDeviceToolError("invalid_arguments", status=422)
+        return f"appearance.{selected}", values
     if selected not in {"list", "create", "update", "delete"}:
         raise NativeDeviceToolError("invalid_arguments", status=422)
     return f"{tool_name.removeprefix('iphone_')}.{selected}", values
@@ -737,7 +745,8 @@ class _Connect(_Scope):
     authorizationEpoch: StrictInt = Field(ge=1, le=1)
     agentId: str = Field(pattern=_PROFILE)
     sessionId: str = Field(pattern=_SESSION)
-    enabled: list[Literal["health", "calendar", "reminders", "location"]] = Field(min_length=0, max_length=4)
+    enabled: list[Literal["health", "calendar", "reminders", "location", "appearance"]] = Field(
+        min_length=0, max_length=5)
 
     @field_validator("enabled")
     @classmethod
