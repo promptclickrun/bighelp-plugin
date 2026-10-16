@@ -957,7 +957,8 @@ class RegistrationTests(unittest.TestCase):
                 "kanban_task_claimed",
                 "kanban_task_completed",
                 "kanban_task_blocked",
-            } | ({"on_room_member_activity"} if "on_room_member_activity" in VALID_HOOKS else set()),
+            } | ({"on_room_member_activity"} if "on_room_member_activity" in VALID_HOOKS else set())
+              | ({"on_stream_delta"} if {"on_room_member_activity", "on_stream_delta"} <= VALID_HOOKS else set()),
         )
         self.assertEqual(set(context.skills), {"bighelp-marketplace-publish", "bighelp-feed-and-ideas", "bighelp",
                                                "generative-ui", "custom-theme-authoring"})
