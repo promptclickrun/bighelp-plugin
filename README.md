@@ -70,7 +70,7 @@ systemd and Hermes Desktop keep supervising it; chats running on that process st
 | Live voice | Talk with your agent in real time. It uses the Codex subscription signed in on the host (or an API key); the work itself runs as a normal Hermes chat. | [Live voice](docs/LIVE_VOICE.md) |
 | Files and projects | Browse workspace folders you grant, and see a project's Git status and diffs. Read-only. | [Workspace files](docs/WORKSPACE_FILES.md), [Project Git](docs/NATIVE_PROJECT_GIT.md) |
 | Wiki | Connect a folder of Markdown notes and read or edit it from the app, using your Hermes login. | [Wiki](docs/NATIVE_WIKI.md) |
-| Group chat activity | See which tools each agent in a group chat is using, live. Needs a Hermes host with the `on_room_member_activity` hook. | [Room activity](docs/NATIVE_ROOM_ACTIVITY.md) |
+| Group chat activity | See which agents in a group chat are typing and which tools they use, live. Needs a Hermes host with the `on_room_member_activity` hook. | [Room activity](docs/NATIVE_ROOM_ACTIVITY.md) |
 | Context usage | How much of the model's context the last request used. | [Context usage](docs/CONTEXT_USAGE.md) |
 | Provider usage | How much of each AI plan or balance you've used: Claude, Codex, GitHub Copilot, OpenCode, OpenRouter, DeepSeek, Nous Portal and more. Found automatically from the tools installed on the computer and the providers set up in Hermes. Read-only. | [Provider usage](docs/PROVIDER_USAGE.md) |
 | Workflows | Fixed steps your agents work through one after another, such as research, draft and review, with your sign-off at the end. Runs keep going on the computer when the app is closed. Nothing runs until you tap Run. | [Workflows](docs/WORKFLOWS.md) |

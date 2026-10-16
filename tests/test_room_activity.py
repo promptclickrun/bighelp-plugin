@@ -133,6 +133,37 @@ class RoomActivityTests(unittest.TestCase):
         self.assertEqual(result["events"], [])
         self.assertEqual(result["projectionDrops"], 1)
 
+    def test_feeds_that_ask_see_which_member_is_writing_without_the_text(self):
+        now = [100.0]
+        self.hub._clock = lambda: now[0]
+        result = self.call("open", {"roomId": SCOPE.room_id, "include": ["member.responding"]})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.stream = result.json()["streamId"]
+        delta = {"text": "Private draft words"}
+        self.emit(kind="message.delta", seq=1, payload=delta)
+        self.emit(kind="reasoning.delta", seq=2, payload=delta)  # within the interval: coalesced
+        self.emit(kind="message.delta", seq=3, member_id="bob", task_id="dtask:2", payload=delta)
+        now[0] += room_activity.RESPONDING_INTERVAL_SECONDS
+        self.emit(kind="message.interim", seq=4, payload=delta)
+        page = self.poll()
+        self.assertEqual(page.status_code, 200, page.text)
+        events = page.json()["events"]
+        self.assertEqual([(row["memberId"], row["sourceSequence"]) for row in events],
+                         [("alice", 1), ("bob", 3), ("alice", 4)])
+        self.assertEqual(set(events[0]), {"observationSequence", "observedAt", "roomId", "memberId", "threadId",
+                                          "turnId", "taskId", "executionGeneration", "sourceSequence", "kind"})
+        self.assertEqual({row["kind"] for row in events}, {"member.responding"})
+        self.assertNotIn("Private draft words", page.text)
+
+    def test_feeds_that_dont_ask_never_see_member_writing(self):
+        self.open()
+        self.emit(kind="message.delta", payload={"text": "words"})
+        self.emit()
+        events = self.poll().json()["events"]
+        self.assertEqual([row["kind"] for row in events], ["tool.started"])
+        self.assertIn(room_activity.TYPING_CAPABILITY, self.fixture.context().json()["features"])
+        self.assertEqual(self.call("open", {"roomId": SCOPE.room_id, "include": ["message.delta"]}).status_code, 422)
+
     def test_count_and_byte_overflow_are_bounded_and_require_reset_only_for_lost_cursor(self):
         self.open()
         for index in range(129):

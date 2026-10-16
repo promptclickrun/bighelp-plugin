@@ -26,7 +26,7 @@ rules in [Native workspace API](NATIVE_WORKSPACE_API.md).
 
 | Suffix | Exact request | Successful result |
 | --- | --- | --- |
-| `open` | `{roomId}` | Empty `FeedPage`, cursor/highWater 0 |
+| `open` | `{roomId}` or `{roomId,include:["member.responding"]}` | Empty `FeedPage`, cursor/highWater 0 |
 | `poll` | `{roomId,streamId,after,limit}` | `FeedPage` |
 | `close` | `{roomId,streamId}` | `{schemaVersion:1,roomId,streamId,closed:true}` |
 
@@ -46,9 +46,24 @@ FeedPage = {
     kind:"tool.started"|"tool.completed",
     tool:{id,name,durationMs:integer|null},
     arguments:{state,text}, result:{state,text}
+  } | {
+    observationSequence:integer, observedAt:UnixMilliseconds,
+    roomId, memberId, threadId, turnId, taskId, executionGeneration:integer,
+    sourceSequence:integer|null,
+    kind:"member.responding"
   }]
 }
 ```
+
+`member.responding` events appear only in feeds opened with
+`include:["member.responding"]`, which needs `native-room-typing-v1` in native
+context (listed with `native-room-activity-v1`). Older apps never ask, so their
+feeds keep exactly the tool events above. Hermes' `message.delta`,
+`message.interim` and `reasoning.delta` mean the member is writing; the plugin
+sends at most one such event per member turn (member, task, execution
+generation) every 2 seconds, and never the text. The app shows "is typing"
+from them and drops it when the member's message or terminal turn event reaches
+the room log, or when the events stop. Nothing about it is stored.
 
 Every shown property is required. Detail `state` is exactly `available`,
 `unavailable`, `omitted_size` or `omitted_sensitive`; `text` is a string only
@@ -79,8 +94,9 @@ non-JSON, invalid-control or oversized data is explicitly unavailable/omitted;
 escaping can require omission to satisfy the encoded observation ceiling.
 Existing known-credential patterns and credential-bearing object keys suppress
 details. This is conservative screening, not universal secret detection.
-Details never replace or enter durable history. Messages, reasoning, approval
-payloads, duplicate preview text and tool-success inference are excluded.
+Details never replace or enter durable history. Message and reasoning text,
+approval payloads, duplicate preview text and tool-success inference are
+excluded.
 
 Hermes' upstream observer queue silently drops oldest entries and has no public
 drop counter. `upstreamLoss` therefore ALWAYS says `unobservable`; gaps in its

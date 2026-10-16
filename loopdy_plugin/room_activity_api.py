@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from .native_api import _NativeRoute, _body, _precondition, _response
 from .native_context import NativeAPIError, native_context
-from .room_activity import CAPABILITY, RoomScope, activity_hub
+from .room_activity import CAPABILITY, TYPING_CAPABILITY, RoomScope, activity_hub
 
 
 router = APIRouter(prefix="/groups/activity", route_class=_NativeRoute)
@@ -16,6 +18,10 @@ router = APIRouter(prefix="/groups/activity", route_class=_NativeRoute)
 class _Room(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     roomId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+class _Open(_Room):
+    include: list[Literal["member.responding"]] = Field(default_factory=list, max_length=1)
 
 
 class _Stream(_Room):
@@ -56,11 +62,13 @@ async def open_feed(request: Request) -> Response:
     request_id = _precondition(request, owner)
     if CAPABILITY not in owner.features:
         raise NativeAPIError(503, "activity_unavailable", "The public room observer is unavailable.")
-    body = await _body(request, _Room)
+    body = await _body(request, _Open)
+    if body.include and TYPING_CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "activity_unavailable", "The public room observer is unavailable.")
     _same_owner(request, owner)
     scope = await read_room_scope(body.roomId)
     _same_owner(request, owner)
-    page = activity_hub().open(owner, scope)
+    page = activity_hub().open(owner, scope, responding=bool(body.include))
     return _response(page, owner, request_id)
 
 
