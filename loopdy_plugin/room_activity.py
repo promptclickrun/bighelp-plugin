@@ -20,6 +20,13 @@ from .sensitive import contains_sensitive_credential
 
 HOOK = "on_room_member_activity"
 CAPABILITY = "native-room-activity-v1"
+# Feeds opened with `include: ["member.responding"]` also say which member is
+# writing. Older apps never ask, so they never see the new kind.
+TYPING_CAPABILITY = "native-room-typing-v1"
+RESPONDING = "member.responding"
+RESPONDING_SOURCES = frozenset({"message.delta", "message.interim", "reasoning.delta"})
+# Deltas arrive per token; one observation per member turn this often is enough.
+RESPONDING_INTERVAL_SECONDS = 2.0
 MAX_FEEDS = 16
 MAX_EVENTS = 128
 MAX_FEED_BYTES = 256 * 1024
@@ -92,9 +99,7 @@ def _detail(value: Any, *, present: bool) -> dict:
     return {"state": "available", "text": text}
 
 
-def project_observation(value: dict) -> dict | None:
-    if value.get("kind") not in {"tool.started", "tool.completed"}:
-        return None
+def _coordinates(value: dict) -> dict:
     if value.get("telemetry_schema_version") != "hermes.observer.v1":
         raise ValueError("Unsupported observation schema")
     fields = {"room_id": "roomId", "member_id": "memberId", "thread_id": "threadId",
@@ -103,6 +108,20 @@ def project_observation(value: dict) -> dict | None:
     result["executionGeneration"] = _integer(value.get("execution_generation"), minimum=1)
     sequence = value.get("seq")
     result["sourceSequence"] = None if sequence is None else _integer(sequence)
+    return result
+
+
+def project_responding(value: dict) -> dict | None:
+    """A member is writing: its coordinates only, never the text."""
+    if value.get("kind") not in RESPONDING_SOURCES:
+        return None
+    return {**_coordinates(value), "kind": RESPONDING}
+
+
+def project_observation(value: dict) -> dict | None:
+    if value.get("kind") not in {"tool.started", "tool.completed"}:
+        return None
+    result = _coordinates(value)
     payload = value.get("payload")
     if not isinstance(payload, dict):
         raise ValueError("Invalid observation payload")
@@ -164,6 +183,8 @@ class _Feed:
     dropped: int = 0
     projection_drops: int = 0
     source_state: str = "registered_unobserved"
+    responding: bool = False
+    responding_at: dict = field(default_factory=dict)
 
 
 class RoomActivityHub:
@@ -208,7 +229,7 @@ class RoomActivityHub:
         with self._lock:
             self._feed(stream_id, owner, room_id)
 
-    def open(self, owner: NativeContext, scope: RoomScope) -> dict:
+    def open(self, owner: NativeContext, scope: RoomScope, *, responding: bool = False) -> dict:
         with self._lock:
             self._purge()
             if not self._registrations:
@@ -216,7 +237,8 @@ class RoomActivityHub:
             if len(self._feeds) >= MAX_FEEDS:
                 raise NativeAPIError(429, "activity_capacity", "The observation feed limit was reached.")
             stream_id = uuid.uuid4().hex
-            feed = _Feed(owner, scope, int(self._wall_clock() * 1000), self._clock() + LEASE_SECONDS)
+            feed = _Feed(owner, scope, int(self._wall_clock() * 1000), self._clock() + LEASE_SECONDS,
+                         responding=responding)
             self._feeds[stream_id] = feed
             return self._page(stream_id, feed, 0, 8)
 
@@ -263,8 +285,13 @@ class RoomActivityHub:
             feeds = [feed for feed in self._feeds.values() if feed.scope.room_id == room_id]
             if not feeds:
                 return
+            responding = value.get("kind") in RESPONDING_SOURCES
+            if responding:
+                feeds = [feed for feed in feeds if feed.responding]
+                if not feeds:
+                    return
             try:
-                observation = project_observation(value)
+                observation = project_responding(value) if responding else project_observation(value)
                 if observation is None:
                     return
             except (ValueError, TypeError, UnicodeError, OverflowError):
@@ -278,12 +305,21 @@ class RoomActivityHub:
                     feed.projection_drops += 1
                     feed.source_state = "unsupported_payload"
                     continue
-                fingerprint = hashlib.sha256(_encoded(observation)).digest()
-                if observation["sourceSequence"] is not None and fingerprint in feed.seen:
-                    continue
-                feed.seen.append(fingerprint)
-                while len(feed.seen) > MAX_EVENTS:
-                    feed.seen.popleft()
+                if responding:
+                    key = (observation["memberId"], observation["taskId"], observation["executionGeneration"])
+                    last = feed.responding_at.get(key)
+                    if last is not None and self._clock() - last < RESPONDING_INTERVAL_SECONDS:
+                        continue
+                    feed.responding_at[key] = self._clock()
+                    while len(feed.responding_at) > MAX_EVENTS:
+                        del feed.responding_at[next(iter(feed.responding_at))]
+                else:
+                    fingerprint = hashlib.sha256(_encoded(observation)).digest()
+                    if observation["sourceSequence"] is not None and fingerprint in feed.seen:
+                        continue
+                    feed.seen.append(fingerprint)
+                    while len(feed.seen) > MAX_EVENTS:
+                        feed.seen.popleft()
                 feed.high_water += 1
                 event = {**observation, "observationSequence": feed.high_water,
                          "observedAt": int(self._wall_clock() * 1000)}

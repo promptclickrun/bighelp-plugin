@@ -19,7 +19,7 @@ SUMMARY = "bighelp native features advertised at startup: "
 PROCESS_FEATURES = (
     "native-context-v1", "serving-profile-v1", "native-card-templates-v1",
     "native-voice-v1", "native-device-tools-v1", "native-device-location-v1", "native-device-appearance-v1",
-    "native-room-activity-v1",
+    "native-room-activity-v1", "native-room-typing-v1",
     "native-project-git-read-v1", "native-agent-templates-v1",
     "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
     "native-host-restart-v1",
@@ -57,30 +57,31 @@ class NativeStartupLoggingTests(unittest.TestCase):
                              LOCATION_CAPABILITY=PROCESS_FEATURES[5], APPEARANCE_CAPABILITY=PROCESS_FEATURES[6],
                              available=Mock(return_value=True), register_middleware=Mock(return_value=True))
         self.room = module("loopdy_plugin.room_activity", CAPABILITY=PROCESS_FEATURES[7],
+                           TYPING_CAPABILITY=PROCESS_FEATURES[8],
                            activity_hub=Mock(return_value=self.hub), register_room_activity=Mock())
-        self.git = module("loopdy_plugin.native_project_git", CAPABILITY=PROCESS_FEATURES[8],
+        self.git = module("loopdy_plugin.native_project_git", CAPABILITY=PROCESS_FEATURES[9],
                           supported=Mock(return_value=True))
-        self.templates = module("loopdy_plugin.agent_templates", CAPABILITY=PROCESS_FEATURES[9],
+        self.templates = module("loopdy_plugin.agent_templates", CAPABILITY=PROCESS_FEATURES[10],
                                 available=Mock(return_value=True))
-        self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[10],
-                            RECENT_CAPABILITY=PROCESS_FEATURES[11], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[12],
+        self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[11],
+                            RECENT_CAPABILITY=PROCESS_FEATURES[12], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[13],
                             available=Mock(return_value=True))
         self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
-        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[13],
+        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[14],
                               available=Mock(return_value=True), release_locks_left_by_restart=Mock())
-        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[14],
+        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[15],
                             available=Mock(return_value=True))
-        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[15],
+        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[16],
                               available=Mock(return_value=True))
-        self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[16],
-                                EDIT_CAPABILITY=PROCESS_FEATURES[17], PARALLEL_CAPABILITY=PROCESS_FEATURES[18],
-                                DELIVERY_CAPABILITY=PROCESS_FEATURES[19], OUTCOMES_CAPABILITY=PROCESS_FEATURES[20],
-                                TRIGGER_CAPABILITY=PROCESS_FEATURES[21], CODE_CAPABILITY=PROCESS_FEATURES[22],
+        self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[17],
+                                EDIT_CAPABILITY=PROCESS_FEATURES[18], PARALLEL_CAPABILITY=PROCESS_FEATURES[19],
+                                DELIVERY_CAPABILITY=PROCESS_FEATURES[20], OUTCOMES_CAPABILITY=PROCESS_FEATURES[21],
+                                TRIGGER_CAPABILITY=PROCESS_FEATURES[22], CODE_CAPABILITY=PROCESS_FEATURES[23],
                                 probe=Mock(return_value=None), triggers_available=Mock(return_value=True),
                                 code_available=Mock(return_value=True))
-        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[23],
+        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[24],
                                   available=Mock(return_value=True))
-        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[24],
+        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[25],
                             available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
@@ -220,7 +221,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         for feature in WIKI_FEATURES:
             self.assertIn(feature, notes)
         self.assertEqual(native_context.native_context(self.request(principal=True)).features,
-                         PROCESS_FEATURES[:8] + WIKI_FEATURES + PROCESS_FEATURES[8:])
+                         PROCESS_FEATURES[:9] + WIKI_FEATURES + PROCESS_FEATURES[9:])
         self.wiki.available_wiki_operations.return_value = False
         self.assertEqual(native_context.native_context(self.request(principal=True)).features, PROCESS_FEATURES)
         self.profiles.profile_exists = None
@@ -278,6 +279,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.assertEqual(self.logged_features(logs.records),
                          native_context.native_context(self.request()).features)
         self.assertNotIn("native-room-activity-v1", self.logged_features(logs.records))
+        self.assertNotIn("native-room-typing-v1", self.logged_features(logs.records))
 
     def test_registration_does_not_claim_http_namespace_inventory(self):
         self.hub.available = False
