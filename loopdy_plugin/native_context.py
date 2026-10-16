@@ -213,12 +213,16 @@ def _native_features(
         skip("native-device-tools-v1", "native device-tool support is unimportable.")
         skip("native-device-location-v1", "native device-tool support is unimportable.")
         skip("native-device-appearance-v1", "native device-tool support is unimportable.")
-    from .room_activity import CAPABILITY, TYPING_CAPABILITY, activity_hub
+    from .room_activity import CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, activity_hub
     if activity_hub().available:
         features.extend((CAPABILITY, TYPING_CAPABILITY))
     else:
         skip(CAPABILITY, "the room activity hub is unavailable after registration.")
         skip(TYPING_CAPABILITY, "the room activity hub is unavailable after registration.")
+    if activity_hub().peer_typing_available:
+        features.append(PEER_TYPING_CAPABILITY)
+    else:
+        skip(PEER_TYPING_CAPABILITY, "Hermes has no agent stream hook here.")
     from .wiki_contract import available_wiki_operations
     if provider is not None and "native-card-templates-v1" in features and available_wiki_operations():
         features.extend(("native-wiki-v1", "native-wiki-disconnect-v1"))

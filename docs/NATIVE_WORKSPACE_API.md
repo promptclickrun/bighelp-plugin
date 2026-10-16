@@ -58,8 +58,9 @@ memory/logs/webhooks; an ignored `?profile` is not scope selection.
 
 Features are finite: `native-context-v1`, `serving-profile-v1` when proven, and
 `native-card-templates-v1` when the implemented routes' public profile helpers
-are available. `native-room-activity-v1` and `native-room-typing-v1` are added only with an
-actual supported live public-hook registration. These are not universal Hermes capability or runtime health claims.
+are available. `native-room-activity-v1`, `native-room-typing-v1` and
+`native-room-peer-typing-v1` are added only with an actual supported live
+public-hook registration. These are not universal Hermes capability or runtime health claims.
 `native-wiki-v1` advertises the fixed principal-owned Wiki adapter on secure
 traversal platforms; folder policy and local journal availability still apply.
 `native-project-git-read-v1` exposes the distinct fixed read-only Project Git

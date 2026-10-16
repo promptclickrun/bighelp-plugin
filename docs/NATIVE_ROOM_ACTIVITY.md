@@ -26,7 +26,7 @@ rules in [Native workspace API](NATIVE_WORKSPACE_API.md).
 
 | Suffix | Exact request | Successful result |
 | --- | --- | --- |
-| `open` | `{roomId}` or `{roomId,include:["member.responding"]}` | Empty `FeedPage`, cursor/highWater 0 |
+| `open` | `{roomId}`, `{roomId,include:["member.responding"]}` or `{roomId,include:["member.responding"],peer:{homeInstallId,members:[{memberId,profile}]}}` | Empty `FeedPage`, cursor/highWater 0 |
 | `poll` | `{roomId,streamId,after,limit}` | `FeedPage` |
 | `close` | `{roomId,streamId}` | `{schemaVersion:1,roomId,streamId,closed:true}` |
 
@@ -63,7 +63,30 @@ feeds keep exactly the tool events above. Hermes' `message.delta`,
 sends at most one such event per member turn (member, task, execution
 generation) every 2 seconds, and never the text. The app shows "is typing"
 from them and drops it when the member's message or terminal turn event reaches
-the room log, or when the events stop. Nothing about it is stored.
+the room log, or when the events stop.
+
+A member's turn can run in any Hermes process on the computer (the gateway, a
+`hermes serve` backend), while the feed is served by the dashboard. So the
+hooks write a short note (coordinates and time, never text) to
+`plugin-data/loopdy/room-presence.sqlite3` at the Hermes root, at most every 2
+seconds per member turn, and each poll reads the notes newer than its last.
+Notes older than 30 seconds are deleted.
+
+### Agents in a room homed on another computer
+
+With `native-room-peer-typing-v1` (Hermes has the `on_stream_delta` hook), a
+feed can be opened for agents on this computer that are members of a room
+whose home is another computer (RoomLink): `peer` names the home's
+installation ID and each member's ID and profile. This computer must hold a
+live RoomLink reservation for each profile (`probe_peer_room_reservation`),
+and such a feed must ask for `member.responding`; it carries nothing else.
+Those turns run here through the API server, which fires the agent's stream
+hooks but not `on_room_member_activity`. The plugin matches the stream's
+session to Hermes' hidden room session
+(`room_` + sha256 of home install ID, room ID, member ID and profile, as in
+`api_server_room_dispatch`). Its events use `threadId: "peer"`, the session ID
+as `taskId` and generation 1, since this computer doesn't know the home's
+thread or turn.
 
 Every shown property is required. Detail `state` is exactly `available`,
 `unavailable`, `omitted_size` or `omitted_sensitive`; `text` is a string only

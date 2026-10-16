@@ -9,12 +9,15 @@ import json
 import logging
 import math
 import re
+import sys
 import threading
 import time
+import types
 import uuid
 from typing import Any, Callable
 
 from .native_context import NativeAPIError, NativeContext
+from .room_presence import RoomPresence, room_presence
 from .sensitive import contains_sensitive_credential
 
 
@@ -27,6 +30,11 @@ RESPONDING = "member.responding"
 RESPONDING_SOURCES = frozenset({"message.delta", "message.interim", "reasoning.delta"})
 # Deltas arrive per token; one observation per member turn this often is enough.
 RESPONDING_INTERVAL_SECONDS = 2.0
+# An agent on this computer in a room homed on another one (RoomLink): its
+# turns run here through the API server, which fires the agent's stream hooks
+# but not the room hook. Feeds for such a room say when it is writing.
+PEER_TYPING_CAPABILITY = "native-room-peer-typing-v1"
+STREAM_HOOK = "on_stream_delta"
 MAX_FEEDS = 16
 MAX_EVENTS = 128
 MAX_FEED_BYTES = 256 * 1024
@@ -169,10 +177,35 @@ class RoomScope:
             raise NativeAPIError(503, "room_state_invalid", "The room state could not be verified.") from None
 
 
+def peer_session_id(home_install_id: str, room_id: str, member_id: str, target_profile: str) -> str:
+    """Hermes' hidden session on this computer for a RoomLink member's turns
+    (`api_server_room_dispatch._ensure_hosted_member_session`)."""
+    seed = f"{home_install_id}\0{room_id}\0{member_id}\0{target_profile}"
+    return f"room_{hashlib.sha256(seed.encode()).hexdigest()[:32]}"
+
+
+def _is_peer(scope: Any) -> bool:
+    """By shape: each copy of this module has its own scope classes."""
+    return hasattr(scope, "home_install_id")
+
+
+@dataclass(frozen=True)
+class PeerScope:
+    """Agents on this computer in a room whose home is another computer."""
+    room_id: str
+    home_install_id: str
+    members: tuple[tuple[str, str], ...]
+
+    @property
+    def sessions(self) -> dict[str, str]:
+        return {peer_session_id(self.home_install_id, self.room_id, member_id, profile): member_id
+                for member_id, profile in self.members}
+
+
 @dataclass
 class _Feed:
     owner: NativeContext
-    scope: RoomScope
+    scope: RoomScope | PeerScope
     opened_at: int
     deadline: float
     events: deque = field(default_factory=deque)
@@ -184,15 +217,55 @@ class _Feed:
     projection_drops: int = 0
     source_state: str = "registered_unobserved"
     responding: bool = False
-    responding_at: dict = field(default_factory=dict)
+    # Presence notes newer than this (wall clock seconds) are still to show.
+    presence_after: float = 0.0
+
+
+_SHARED_STATE = "_loopdy_room_activity_state"
+
+
+def _shared_state() -> types.ModuleType:
+    """Registrations and feeds shared by every copy of this module.
+
+    A dashboard imports this package twice: Hermes' plugin loader (hooks) and
+    the dashboard router (the /groups/activity routes). Without one shared
+    state, the routes' copy never saw a registration, so native context never
+    listed `native-room-activity-v1`. Only plain containers and a lock live here.
+    """
+    state = sys.modules.get(_SHARED_STATE)
+    if state is None:
+        candidate = types.ModuleType(_SHARED_STATE)
+        candidate.lock, candidate.registrations, candidate.stream_registrations = threading.Lock(), set(), set()
+        candidate.feeds = {}
+        state = sys.modules.setdefault(_SHARED_STATE, candidate)
+    return state
 
 
 class RoomActivityHub:
-    def __init__(self, *, clock: Callable = time.monotonic, wall_clock: Callable = time.time):
+    def __init__(self, *, clock: Callable = time.monotonic, wall_clock: Callable = time.time,
+                 presence: RoomPresence | None = None, shared: types.ModuleType | None = None):
         self._clock, self._wall_clock = clock, wall_clock
-        self._lock = threading.Lock()
-        self._registrations: set[str] = set()
-        self._feeds: dict[str, _Feed] = {}
+        self._presence = presence or room_presence()
+        if shared is None:
+            shared = types.SimpleNamespace(lock=threading.Lock(), registrations=set(), stream_registrations=set(),
+                                           feeds={})
+        self._lock = shared.lock
+        self._registrations: set[str] = shared.registrations
+        self._stream_registrations: set[str] = shared.stream_registrations
+        self._feeds: dict[str, _Feed] = shared.feeds
+
+    @property
+    def peer_typing_available(self) -> bool:
+        with self._lock:
+            return bool(self._registrations) and bool(self._stream_registrations)
+
+    def attach_stream(self, lease: str) -> None:
+        with self._lock:
+            self._stream_registrations.add(lease)
+
+    def detach_stream(self, lease: str) -> None:
+        with self._lock:
+            self._stream_registrations.discard(lease)
 
     @property
     def available(self) -> bool:
@@ -229,7 +302,11 @@ class RoomActivityHub:
         with self._lock:
             self._feed(stream_id, owner, room_id)
 
-    def open(self, owner: NativeContext, scope: RoomScope, *, responding: bool = False) -> dict:
+    def scope(self, stream_id: str, owner: NativeContext, room_id: str) -> RoomScope | PeerScope:
+        with self._lock:
+            return self._feed(stream_id, owner, room_id).scope
+
+    def open(self, owner: NativeContext, scope: RoomScope | PeerScope, *, responding: bool = False) -> dict:
         with self._lock:
             self._purge()
             if not self._registrations:
@@ -238,11 +315,14 @@ class RoomActivityHub:
                 raise NativeAPIError(429, "activity_capacity", "The observation feed limit was reached.")
             stream_id = uuid.uuid4().hex
             feed = _Feed(owner, scope, int(self._wall_clock() * 1000), self._clock() + LEASE_SECONDS,
-                         responding=responding)
+                         responding=responding,
+                         # A member already writing shows within one note interval.
+                         presence_after=self._wall_clock() - RESPONDING_INTERVAL_SECONDS)
             self._feeds[stream_id] = feed
             return self._page(stream_id, feed, 0, 8)
 
-    def poll(self, stream_id: str, owner: NativeContext, scope: RoomScope, after: int, limit: int) -> dict:
+    def poll(self, stream_id: str, owner: NativeContext, scope: RoomScope | PeerScope,
+             after: int, limit: int) -> dict:
         with self._lock:
             feed = self._feed(stream_id, owner, scope.room_id)
             if feed.scope != scope:
@@ -251,7 +331,37 @@ class RoomActivityHub:
             if type(after) is not int or not 0 <= after <= feed.high_water or type(limit) is not int or not 1 <= limit <= 8:
                 raise NativeAPIError(422, "invalid_request", "The observation cursor or limit is invalid.")
             feed.deadline = self._clock() + LEASE_SECONDS
+            if feed.responding:
+                self._pull_presence(feed)
             return self._page(stream_id, feed, after, limit)
+
+    def _pull_presence(self, feed: _Feed) -> None:
+        """Adds who is writing, from notes any Hermes process here wrote."""
+        if _is_peer(feed.scope):
+            sessions = feed.scope.sessions
+            notes = self._presence.since(feed.presence_after, session_ids=tuple(sessions))
+        else:
+            sessions = {}
+            notes = self._presence.since(feed.presence_after, room_id=feed.scope.room_id)
+        members = {member for member, _profile in feed.scope.members}
+        for note in notes:
+            feed.presence_after = max(feed.presence_after, note["seen_at"])
+            try:
+                if sessions:
+                    observation = {"roomId": feed.scope.room_id, "memberId": sessions[note["session_id"]],
+                                   # The home's thread and turn aren't known here.
+                                   "threadId": "peer", "turnId": _peer_turn(note.get("turn_id")),
+                                   "taskId": note["session_id"], "executionGeneration": 1}
+                else:
+                    observation = {"roomId": feed.scope.room_id, "memberId": _identifier(note["member_id"]),
+                                   "threadId": _identifier(note["thread_id"]), "turnId": _identifier(note["turn_id"]),
+                                   "taskId": _identifier(note["task_id"]),
+                                   "executionGeneration": _integer(note["execution_generation"], minimum=1)}
+            except (KeyError, TypeError, ValueError):
+                continue
+            if observation["memberId"] not in members:
+                continue
+            self._record(feed, {**observation, "sourceSequence": None, "kind": RESPONDING})
 
     def _page(self, stream_id: str, feed: _Feed, after: int, limit: int) -> dict:
         reason = ("projection_loss" if feed.projection_drops else
@@ -278,20 +388,31 @@ class RoomActivityHub:
 
     def observe(self, lease: str, value: dict) -> None:
         room_id = value.get("room_id")
+        if value.get("kind") in RESPONDING_SOURCES:
+            # The turn may run in another process than the feed: note it for all.
+            if lease in self._registrations and isinstance(room_id, str):
+                try:
+                    observation = project_responding(value)
+                except (ValueError, TypeError, UnicodeError, OverflowError):
+                    return
+                if observation is not None:
+                    self._presence.note(
+                        "\0".join(("room", observation["roomId"], observation["memberId"], observation["taskId"],
+                                    str(observation["executionGeneration"]))),
+                        room_id=observation["roomId"], member_id=observation["memberId"],
+                        thread_id=observation["threadId"], turn_id=observation["turnId"],
+                        task_id=observation["taskId"], execution_generation=observation["executionGeneration"])
+            return
         with self._lock:
             self._purge()
             if lease not in self._registrations or not isinstance(room_id, str):
                 return
-            feeds = [feed for feed in self._feeds.values() if feed.scope.room_id == room_id]
+            feeds = [feed for feed in self._feeds.values()
+                     if not _is_peer(feed.scope) and feed.scope.room_id == room_id]
             if not feeds:
                 return
-            responding = value.get("kind") in RESPONDING_SOURCES
-            if responding:
-                feeds = [feed for feed in feeds if feed.responding]
-                if not feeds:
-                    return
             try:
-                observation = project_responding(value) if responding else project_observation(value)
+                observation = project_observation(value)
                 if observation is None:
                     return
             except (ValueError, TypeError, UnicodeError, OverflowError):
@@ -305,36 +426,47 @@ class RoomActivityHub:
                     feed.projection_drops += 1
                     feed.source_state = "unsupported_payload"
                     continue
-                if responding:
-                    key = (observation["memberId"], observation["taskId"], observation["executionGeneration"])
-                    last = feed.responding_at.get(key)
-                    if last is not None and self._clock() - last < RESPONDING_INTERVAL_SECONDS:
-                        continue
-                    feed.responding_at[key] = self._clock()
-                    while len(feed.responding_at) > MAX_EVENTS:
-                        del feed.responding_at[next(iter(feed.responding_at))]
-                else:
-                    fingerprint = hashlib.sha256(_encoded(observation)).digest()
-                    if observation["sourceSequence"] is not None and fingerprint in feed.seen:
-                        continue
-                    feed.seen.append(fingerprint)
-                    while len(feed.seen) > MAX_EVENTS:
-                        feed.seen.popleft()
-                feed.high_water += 1
-                event = {**observation, "observationSequence": feed.high_water,
-                         "observedAt": int(self._wall_clock() * 1000)}
-                size = len(_encoded(event))
-                feed.events.append((event, size))
-                feed.size += size
-                feed.source_state = "observed"
-                while len(feed.events) > MAX_EVENTS or feed.size > MAX_FEED_BYTES:
-                    discarded, count = feed.events.popleft()
-                    feed.size -= count
-                    feed.lost_through = discarded["observationSequence"]
-                    feed.dropped += 1
+                fingerprint = hashlib.sha256(_encoded(observation)).digest()
+                if observation["sourceSequence"] is not None and fingerprint in feed.seen:
+                    continue
+                feed.seen.append(fingerprint)
+                while len(feed.seen) > MAX_EVENTS:
+                    feed.seen.popleft()
+                self._record(feed, observation)
+
+    def observe_stream(self, lease: str, value: dict) -> None:
+        """An agent's own writing; only RoomLink member sessions matter here."""
+        session_id = value.get("session_id")
+        if (lease not in self._stream_registrations or not isinstance(session_id, str)
+                or not session_id.startswith("room_") or len(session_id) > 128):
+            return
+        self._presence.note("\0".join(("session", session_id)), session_id=session_id,
+                            turn_id=_peer_turn(value.get("turn_id")))
+
+    def _record(self, feed: _Feed, observation: dict) -> None:
+        feed.high_water += 1
+        event = {**observation, "observationSequence": feed.high_water,
+                 "observedAt": int(self._wall_clock() * 1000)}
+        size = len(_encoded(event))
+        feed.events.append((event, size))
+        feed.size += size
+        feed.source_state = "observed"
+        while len(feed.events) > MAX_EVENTS or feed.size > MAX_FEED_BYTES:
+            discarded, count = feed.events.popleft()
+            feed.size -= count
+            feed.lost_through = discarded["observationSequence"]
+            feed.dropped += 1
 
 
-_HUB = RoomActivityHub()
+def _peer_turn(value: Any) -> str:
+    """The agent's own turn ID when it is a usable identifier."""
+    try:
+        return _identifier(value)
+    except ValueError:
+        return "peer"
+
+
+_HUB = RoomActivityHub(shared=_shared_state())
 
 
 def activity_hub() -> RoomActivityHub:
@@ -352,4 +484,12 @@ def register_room_activity(ctx: Any) -> Callable[[], None]:
     lease = uuid.uuid4().hex
     ctx.register_hook(HOOK, lambda **payload: hub.observe(lease, payload))
     hub.attach(lease)
-    return lambda: hub.detach(lease)
+    if STREAM_HOOK not in VALID_HOOKS:
+        return lambda: hub.detach(lease)
+    ctx.register_hook(STREAM_HOOK, lambda **payload: hub.observe_stream(lease, payload))
+    hub.attach_stream(lease)
+
+    def stop() -> None:
+        hub.detach_stream(lease)
+        hub.detach(lease)
+    return stop
