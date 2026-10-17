@@ -703,3 +703,39 @@ async def provider_sign_in(operation: str, request: Request) -> Response:
     body = await _body(request, model)
     value = await run_in_threadpool(_sign_in, operation, body)
     return _response({"agentId": body.agentId, **value}, owner, request_id)
+
+
+def _composio(operation: str, agent_id: str) -> dict:
+    from . import composio
+    try:
+        value = composio.install(agent_id) if operation == "install" else composio.status(agent_id)
+    except composio.ComposioError as error:
+        raise NativeAPIError(error.status, error.code, error.message) from None
+    return {"agentId": agent_id, **value}
+
+
+async def _composio_request(request: Request, operation: str) -> Response:
+    from .composio import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "composio_unavailable", "This Hermes can't set up Composio from the app.")
+    body = await _body(request, _Body)
+    if PROFILE_ID.fullmatch(body.agentId) is None:
+        raise NativeAPIError(422, "invalid_request", "The profile is invalid.")
+    value = await run_in_threadpool(_composio, operation, body.agentId)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+@router.post("/composio/status")
+async def composio_status(request: Request) -> Response:
+    """Composio MCP servers in the agent's Hermes config (bighelp app: Settings › Apps)."""
+    return await _composio_request(request, "status")
+
+
+@router.post("/composio/install")
+async def composio_install(request: Request) -> Response:
+    """Turn on or add Composio Connect's MCP server for the agent; the app then signs it in with Hermes' MCP OAuth."""
+    return await _composio_request(request, "install")

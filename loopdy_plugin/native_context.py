@@ -370,4 +370,9 @@ def _native_features(
         features.append(quiet_capability)
     else:
         skip(quiet_capability, "notifications need a POSIX host that can read time zones.")
+    from .composio import CAPABILITY as composio_capability, available as composio_available
+    if composio_available():
+        features.append(composio_capability)
+    else:
+        skip(composio_capability, "Hermes' MCP config helpers are unimportable.")
     return profile, tuple(features)
