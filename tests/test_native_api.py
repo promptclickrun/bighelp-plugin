@@ -182,6 +182,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.composio import available as composio_available
         if composio_available():
             expected.append("native-composio-v1")
+        from loopdy_plugin.agent_talk import available as agent_talk_available
+        if agent_talk_available():
+            expected.append("native-agent-talk-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
