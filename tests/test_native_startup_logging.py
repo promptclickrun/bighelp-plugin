@@ -28,6 +28,7 @@ PROCESS_FEATURES = (
     "native-workflows-trigger-v1", "native-workflows-code-v1",
     "native-live-alerts-v1", "native-notification-quiet-hours-v1", "native-composio-v1",
     "native-agent-talk-v1",
+    "native-chat-activity-v1",
     "native-team-v1",
 )
 WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
@@ -89,11 +90,13 @@ class NativeStartupLoggingTests(unittest.TestCase):
                                available=Mock(return_value=True))
         self.agent_talk = module("loopdy_plugin.agent_talk", CAPABILITY=PROCESS_FEATURES[28],
                                  available=Mock(return_value=True))
-        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[29],
+        self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[29],
+                                    available=Mock(return_value=True))
+        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[30],
                            available=Mock(return_value=True), register=Mock())
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
-                   self.live_alerts, self.quiet, self.composio, self.agent_talk, self.team,
+                   self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.team,
                    module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
@@ -143,6 +146,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.quiet.available.return_value = False
         self.composio.available.return_value = False
         self.agent_talk.available.return_value = False
+        self.chat_activity.available.return_value = False
         self.team.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")

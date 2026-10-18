@@ -535,6 +535,45 @@ async def agents_talk(request: Request) -> Response:
     return _response(value, owner, request_id)
 
 
+class _ChatActivity(_Body):
+    sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _chat_activity(body: _ChatActivity, stopping: bool) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from . import chat_activity
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    if stopping:
+        return {"stopped": chat_activity.stop(body.agentId, body.sessionId)}
+    return chat_activity.activity(body.agentId, body.sessionId)
+
+
+async def _chat_activity_route(request: Request, stopping: bool) -> Response:
+    from .chat_activity import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "chat_activity_unavailable", "Chat activity isn't available on this host.")
+    body = await _body(request, _ChatActivity)
+    value = await run_in_threadpool(_chat_activity, body, stopping)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+@router.post("/chat/activity")
+async def chat_activity(request: Request) -> Response:
+    """Whether another Hermes process is running this chat now (an agent another one asked), read-only."""
+    return await _chat_activity_route(request, stopping=False)
+
+
+@router.post("/chat/stop")
+async def chat_stop(request: Request) -> Response:
+    """Stops the run another Hermes process has on this chat, as Ctrl-C would."""
+    return await _chat_activity_route(request, stopping=True)
+
+
 class _Team(_Body):
     enabled: StrictBool | None = None
 
