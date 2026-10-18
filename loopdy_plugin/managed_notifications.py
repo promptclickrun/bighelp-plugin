@@ -124,6 +124,9 @@ _PEER_CHAT_TITLE = "Bot Chat"
 # Replies and helper results from a peer chat alert only phones that asked for them;
 # a question or approval there still needs the person, so it always alerts.
 _PEER_QUIET_EVENTS = frozenset({"session.completed", "session.failed", "subagent.completed", "subagent.failed"})
+# Hermes' signature on a message one agent here sends another (tools/bot_mode_dm.py). The handle
+# is the sender's profile, @hermes for the default one; a relayed `@x@peer` isn't from this computer.
+_AGENT_MESSAGE = re.compile(r"^Message from [^\n()]{1,80}\(@([A-Za-z0-9][A-Za-z0-9_-]{0,63})\):")
 _GROUP_CHAT_PASS = re.compile(r"\(?\s*pass\s*\)?\.?", re.IGNORECASE)
 # Hermes' turn-end file-mutation verifier footer (run_agent.py): a "⚠️ File-mutation verifier:"
 # line plus indented "•" bullets, appended AFTER the model's final line. It is runtime machinery,
@@ -907,20 +910,72 @@ class ManagedNotifications:
         self._queue_event(profile, session_id, turn_id, _CLARIFICATION_EVENT,
                           event_key=request_id, content_text=self._rich_text(question))
 
+    @staticmethod
+    def _local_agent(handle: str) -> str | None:
+        """The agent on this computer that signs its messages @handle, or None."""
+        profile = "default" if handle == "hermes" else handle
+        if profile == "default":
+            return profile
+        if not _PROFILE.fullmatch(profile):
+            return None
+        from hermes_constants import get_hermes_home
+
+        home = get_hermes_home()
+        root = home.parent.parent if home.parent.name == "profiles" else home
+        return profile if (root / "profiles" / profile).is_dir() else None
+
+    def _observe_agent_messages(self, profile: str, session_id: str, payload: dict[str, Any]):
+        """Messages since this agent last spoke: a delivery can save one without a turn of its
+        own, and the turn starts on Hermes' notice that the handoff finished instead."""
+        history = payload.get("conversation_history")
+        recent: list[Any] = []
+        for row in reversed(history if isinstance(history, list) else []):
+            if not isinstance(row, dict) or row.get("role") == "assistant":
+                break
+            if row.get("role") == "user":
+                recent.append(row.get("content"))
+        for message in [*reversed(recent[:8]), payload.get("user_message")]:
+            self._observe_agent_message(profile, session_id, message)
+
+    def _observe_agent_message(self, profile: str, session_id: str, message: Any):
+        """Another agent here wrote to this one, often its answer to work this one handed over.
+        A phone with Peer chats on hears it from that agent, in this agent's chat, once."""
+        if not isinstance(message, str):
+            return
+        text = message.strip()
+        match = _AGENT_MESSAGE.match(text)
+        if not match:
+            return
+        sender = self._local_agent(match.group(1))
+        body = text[match.end():].strip()
+        if not sender or sender == profile or not body:
+            return
+        digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        self._queue_event(profile, session_id, f"agent-message.{digest[:32]}", "session.completed",
+                          event_key=digest, content_text=body, sender=sender)
+
     def _queue_event(self, profile: str, session_id: str, turn_id: str, event_type: str,
                      *, tool_call_id: str | None = None, event_key: str = "",
                      content_text: str, title: str | None = None, workflow_kind: str | None = None,
-                     alerted_devices: set[str] | None = None):
+                     alerted_devices: set[str] | None = None, sender: str | None = None):
         approval = event_type == _APPROVAL_EVENT
         tool_call_id = _identifier(tool_call_id) if approval else ""
         content_text = self._rich_text(content_text)
         agent_name, avatar = self._agent_presentation(profile)
         if title:
             agent_name = title
+        if sender:
+            # Another agent's message reads as from that agent: its name, and its picture if it has one.
+            try:
+                agent_name, avatar = self._agent_presentation(sender)
+            except ManagedNotificationError:
+                from .adapter import profile_display_name
+                agent_name = profile_display_name(sender)
         now = int(self.clock())
         queued: list[str] = []
-        peer_chat = (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
-                     and self._is_peer_chat(profile, session_id))
+        # Agents talking to each other alert only phones that asked for it (Peer chats).
+        peer_chat = sender is not None or (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
+                                           and self._is_peer_chat(profile, session_id))
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT g.* FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (now, profile)).fetchall()
@@ -1017,6 +1072,11 @@ class ManagedNotifications:
             if not db.execute("SELECT 1 FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (int(self.clock()), profile)).fetchone(): return
         if hook == "pre_tool_call" and payload.get("tool_name") == "clarify" and not child_hook:
             self._observe_question(profile, session_id, payload)
+        if hook == "pre_llm_call" and not child_hook:
+            try:
+                self._observe_agent_messages(profile, session_id, payload)
+            except (ValueError, OSError):
+                logger.warning("Agent message alert unavailable")
         turn = payload.get("turn_id")
         if hook == "post_llm_call" and isinstance(turn, str) and _ID.fullmatch(turn):
             coordinate = (profile, session_id, turn)
