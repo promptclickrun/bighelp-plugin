@@ -48,9 +48,10 @@ def _hermes() -> Any:
 
 
 def available() -> bool:
+    # Feeds /native/context, which every app reads: an odd Hermes turns Teamwork off, never the plugin.
     try:
         hermes = _hermes()
-    except ImportError:
+    except Exception:
         return False
     return all(callable(value) for value in vars(hermes).values())
 
@@ -317,5 +318,6 @@ def _pre_llm_call(**payload: Any) -> None:
 
 
 def register(ctx: Any) -> None:
-    if available():
-        ctx.register_hook("pre_llm_call", _pre_llm_call)
+    # Every Hermes process loads the plugin, so this imports nothing from the dashboard. Until Teamwork is on,
+    # the hook only reads one small file every ten minutes.
+    ctx.register_hook("pre_llm_call", _pre_llm_call)
