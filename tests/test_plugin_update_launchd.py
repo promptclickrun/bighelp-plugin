@@ -24,6 +24,8 @@ class PluginUpdateLaunchdTests(unittest.TestCase):
             fake_source = root / "controlled-worker"
             fake_source.mkdir()
             (fake_source / "plugin_update.py").write_text("# Controlled worker fixture, not runtime code.\n")
+            # The launcher copies the worker's siblings too.
+            (fake_source / "yaml_compat.py").write_text("# Controlled worker fixture, not runtime code.\n")
             # Only worker business logic is replaced. The production launchctl
             # submission, clean environment and copied-worker paths are exercised.
             (fake_source / "plugin_update_worker.py").write_text('''import argparse, json, os, pathlib, subprocess, time

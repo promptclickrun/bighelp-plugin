@@ -3565,19 +3565,9 @@ def profile_display_name(profile: str) -> str:
     elif home.parent.name != "profiles" and profile != "default":
         home = home / "profiles" / profile
     try:
-        import yaml
+        from .yaml_compat import profile_name, safe_load
 
-        value = (
-            yaml.safe_load((home / "profile.yaml").read_text(encoding="utf-8"))
-            or {}
-        )
-        ui_meta = value.get("ui_meta") if isinstance(value, dict) else {}
-        display_name = (
-            ui_meta.get("displayName")
-            if isinstance(ui_meta, dict)
-            else None
-        ) or (value.get("display_name") if isinstance(value, dict) else None)
-        resolved = _text(display_name, 80)
+        resolved = _text(profile_name(safe_load((home / "profile.yaml").read_text(encoding="utf-8"))), 80)
         if resolved:
             return resolved
     except Exception:

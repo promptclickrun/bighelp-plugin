@@ -416,9 +416,10 @@ def _validate_staged_plugin(plugin_root: Path, hermes_home: Path) -> None:
 
     # Added privileges require an attended host decision before replacing code.
     try:
-        import yaml
-        staged_manifest = yaml.safe_load(manifest_text)
-        previous_manifest = yaml.safe_load((hermes_home / "plugins" / PLUGIN_NAME / "plugin.yaml").read_text(encoding="utf-8"))
+        # Copied beside this worker, like plugin_update.py: Hermes 0.22 and later have no PyYAML.
+        from yaml_compat import safe_load
+        staged_manifest = safe_load(manifest_text)
+        previous_manifest = safe_load((hermes_home / "plugins" / PLUGIN_NAME / "plugin.yaml").read_text(encoding="utf-8"))
         def declared(value: Any) -> set[str]:
             if not isinstance(value, dict):
                 raise ValueError("Invalid manifest")

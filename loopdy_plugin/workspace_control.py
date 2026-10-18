@@ -3517,9 +3517,9 @@ def _skill_frontmatter_name(content: str) -> str:
     if not match:
         raise WorkspaceControlError("SKILL.md requires YAML frontmatter")
     try:
-        import yaml
+        from .yaml_compat import safe_load
 
-        frontmatter = yaml.safe_load(match.group(1))
+        frontmatter = safe_load(match.group(1))
     except Exception as exc:
         raise WorkspaceControlError("SKILL.md frontmatter is invalid") from exc
     if not isinstance(frontmatter, dict):
@@ -3718,9 +3718,9 @@ def _agent_id_from_name(value: str) -> str:
 def _profile_ui_display_name(path: Any) -> str:
     """Read the user-facing name from Hermes profile metadata locally."""
     try:
-        import yaml
+        from .yaml_compat import safe_load
 
-        document = yaml.safe_load((path / "profile.yaml").read_text(encoding="utf-8"))
+        document = safe_load((path / "profile.yaml").read_text(encoding="utf-8"))
         if not isinstance(document, dict):
             return ""
         ui_meta = document.get("ui_meta")
