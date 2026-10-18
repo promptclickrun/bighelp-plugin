@@ -380,4 +380,9 @@ def _native_features(
         features.append(agent_talk_capability)
     else:
         skip(agent_talk_capability, "public profile helpers are unimportable.")
+    from .team import CAPABILITY as team_capability, available as team_available
+    if team_available():
+        features.append(team_capability)
+    else:
+        skip(team_capability, "Hermes' profile and config helpers are unimportable.")
     return profile, tuple(features)

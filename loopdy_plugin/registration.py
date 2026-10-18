@@ -225,6 +225,9 @@ def register(
     # Who is writing in each bighelp chat, as the app reports it.
     from .people import register as register_people
     register_people(ctx)
+    # Teamwork (opt-in from the app): keeps every agent's team brief current as agents come and go.
+    from .team import register as register_team
+    register_team(ctx)
     # bighelp's Template Catalog for agents. Making an agent needs a plugin setting and the person's approval.
     from .template_tools import register as register_template_tools
     register_template_tools(ctx)
