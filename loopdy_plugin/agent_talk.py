@@ -59,9 +59,10 @@ def message_hash(text: str) -> str:
 
 
 def available() -> bool:
+    # Feeds /native/context, which every app reads: an odd Hermes turns this off, never the plugin.
     try:
         from hermes_cli.profiles import get_profile_dir, profile_exists  # noqa: F401
-    except ImportError:
+    except Exception:
         return False
     return True
 

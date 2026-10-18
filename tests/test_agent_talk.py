@@ -58,6 +58,19 @@ class FindRunsTests(unittest.TestCase):
     def runs(self, *calls):
         return find_runs(calls, now=lambda: NOW)
 
+    def test_a_broken_hermes_turns_the_feature_off_instead_of_failing(self):
+        """`available()` feeds /native/context, which every app reads: it may say no, never raise."""
+        import builtins
+        real_import = builtins.__import__
+
+        def broken(name, *args, **kwargs):
+            if name == "hermes_cli.profiles":
+                raise RuntimeError("half-updated Hermes")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=broken):
+            self.assertFalse(agent_talk.available())
+
     def test_hash_matches_the_app_without_the_signature(self):
         self.assertEqual(message_hash("Is Monday free?"), MONDAY_HASH)
         self.assertEqual(message_hash("Message from \U0001F916 Avery (@hermes):  Is Monday free?\n"), MONDAY_HASH)
