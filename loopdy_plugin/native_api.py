@@ -535,6 +535,25 @@ async def agents_talk(request: Request) -> Response:
     return _response(value, owner, request_id)
 
 
+class _Team(_Body):
+    enabled: StrictBool | None = None
+
+
+@router.post("/team")
+async def team_settings(request: Request) -> Response:
+    """Teamwork: whether every agent gets the team brief, and who's on the team."""
+    from .team import CAPABILITY, team
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "team_unavailable", "Teamwork isn't available on this host.")
+    body = await _body(request, _Team)
+    value = await run_in_threadpool(team().set_enabled, body.enabled)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=65_536)
+
+
 def _live_alerts_call(operation, *args, **kwargs):
     from .live_alerts import LiveAlertError
     from .managed_notifications import ManagedNotificationError

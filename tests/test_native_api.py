@@ -185,6 +185,11 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.agent_talk import available as agent_talk_available
         if agent_talk_available():
             expected.append("native-agent-talk-v1")
+
+
+        from loopdy_plugin.team import available as team_available
+        if team_available():
+            expected.append("native-team-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
