@@ -105,6 +105,15 @@ canonical "Bot Chat" session. Replies, failures and helper results there alert o
 Peer chats in bighelp (`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`);
 it starts off. A question or approval in a peer chat still alerts, since it needs the person.
 
+The same switch covers an agent's message to another agent in any chat, for example the answer to work
+one agent handed to another with `message_agent`. Hermes saves it in the receiving agent's chat, signed
+`Message from 🤖 Nova (@nova):`. When the receiving agent's next turn starts, the plugin reads that turn's
+message and the messages saved since the agent last spoke. A message signed by another agent on this
+computer (`@hermes` is the default agent) alerts as a `session.completed` in the receiving agent's chat,
+with the sending agent's name and picture. Each message alerts once (its event key is the SHA-256 of the
+text). A handle that isn't an agent on this computer, a relayed `@name@peer`, or the agent's own handle
+never alerts.
+
 ### Workflows
 
 A workflow stage is a `hermes chat --source workflow` turn. Its replies, failures and Live Activity updates
