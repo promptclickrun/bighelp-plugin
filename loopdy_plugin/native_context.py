@@ -375,4 +375,9 @@ def _native_features(
         features.append(composio_capability)
     else:
         skip(composio_capability, "Hermes' MCP config helpers are unimportable.")
+    from .agent_talk import CAPABILITY as agent_talk_capability, available as agent_talk_available
+    if agent_talk_available():
+        features.append(agent_talk_capability)
+    else:
+        skip(agent_talk_capability, "public profile helpers are unimportable.")
     return profile, tuple(features)

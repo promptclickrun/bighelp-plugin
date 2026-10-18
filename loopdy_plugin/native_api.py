@@ -501,6 +501,40 @@ async def people_speaking(request: Request) -> Response:
     return _response(value, owner, request_id)
 
 
+class _AgentTalkCall(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    message: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class _AgentTalk(_Body):
+    sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    calls: list[_AgentTalkCall] = Field(max_length=16)
+
+
+def _agent_talk(body: _AgentTalk) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from .agent_talk import find_runs
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    return {"runs": find_runs((call.agentId, call.message) for call in body.calls)}
+
+
+@router.post("/agents/talk")
+async def agents_talk(request: Request) -> Response:
+    """What the agents this chat's agent asked are doing: IDs, times and a tool name, read-only."""
+    from .agent_talk import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "agent_talk_unavailable", "Agent conversations aren't available on this host.")
+    body = await _body(request, _AgentTalk)
+    value = await run_in_threadpool(_agent_talk, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
 def _live_alerts_call(operation, *args, **kwargs):
     from .live_alerts import LiveAlertError
     from .managed_notifications import ManagedNotificationError
