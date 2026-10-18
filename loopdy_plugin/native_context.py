@@ -380,6 +380,11 @@ def _native_features(
         features.append(agent_talk_capability)
     else:
         skip(agent_talk_capability, "public profile helpers are unimportable.")
+    from .chat_activity import CAPABILITY as chat_activity_capability, available as chat_activity_available
+    if chat_activity_available():
+        features.append(chat_activity_capability)
+    else:
+        skip(chat_activity_capability, "Hermes' chat leases are unreadable here.")
     from .team import CAPABILITY as team_capability, available as team_available
     if team_available():
         features.append(team_capability)

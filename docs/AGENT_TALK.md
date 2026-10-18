@@ -71,3 +71,31 @@ With an older plugin the line in the chat says only who is being asked.
 - A message sent from a file (`--query-file`) has no words in the call to
   hash, so its run can't be found.
 - The same message sent twice matches both runs; the app takes them in order.
+
+## A chat busy in another process
+
+The asked agent answers in its own `hermes -p <agent> chat` process, so when
+the person opens that agent's chat (its Bot Chat) in bighelp, the app's live
+connection hears nothing. Feature `native-chat-activity-v1` tells the app the
+chat is busy, so it shows the agent typing, a Stop button, and reads the chat
+again as it goes.
+
+`POST /api/plugins/loopdy/native/chat/activity` with
+`{"agentId": "<profile>", "sessionId": "<stored session ID>"}` answers
+`{"working": true, "tool": "web_search", "since": 1760720475.2, "canStop": true}`.
+
+- Hermes keeps a lease for each chat a process holds
+  (`<agent home>/runtime/active_sessions.json`). A lease counts when Hermes'
+  own check says its process is alive and is still the process that took it
+  (pid and start time), and its surface isn't the dashboard's own chats (`tui`,
+  `desktop`).
+- It's busy when that process took the chat after its last message, or the
+  chat's latest turn hasn't answered yet (with the tool it runs, read-only from
+  the agent's `state.db`, as above). An open CLI chat that's idle isn't busy.
+
+`POST /api/plugins/loopdy/native/chat/stop`, same body, answers
+`{"stopped": true}`: it sends that process Ctrl-C (SIGINT), as stopping it in
+its terminal would; Hermes ends the turn and the process. Only a lease with a
+recorded start time is signalled, so a reused pid never is. `canStop` says so
+up front.
+
