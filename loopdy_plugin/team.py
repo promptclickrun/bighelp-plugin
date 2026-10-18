@@ -24,6 +24,8 @@ import threading
 import time
 from typing import Any, Callable, Iterator
 
+from .yaml_compat import profile_name, safe_load
+
 
 CAPABILITY = "native-team-v1"
 PLATFORM = "bighelp"
@@ -75,17 +77,11 @@ def _clean(value: Any, limit: int) -> str:
 
 
 def _yaml(path: Path) -> dict:
-    """profile.yaml as a dict. Hermes 0.22 ships ruamel.yaml and older ones PyYAML; either will do."""
+    """profile.yaml as a dict."""
     try:
         if not path.is_file() or path.stat().st_size > 65_536:
             return {}
-        text = path.read_text(encoding="utf-8")
-        try:
-            import yaml
-            value = yaml.safe_load(text)
-        except ImportError:
-            from ruamel.yaml import YAML
-            value = YAML(typ="safe", pure=True).load(text)
+        value = safe_load(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     return value if isinstance(value, dict) else {}
@@ -101,8 +97,7 @@ def roster(hermes: Any | None = None) -> list[dict[str, str]]:
         meta = _yaml(Path(hermes.profile_dir(profile)) / "profile.yaml")
         ui_meta = meta.get("ui_meta") if isinstance(meta.get("ui_meta"), dict) else {}
         bots = ui_meta.get("hermes-bots") if isinstance(ui_meta.get("hermes-bots"), dict) else {}
-        name = (_clean(bots.get("title"), MAX_NAME) or _clean(meta.get("display_name"), MAX_NAME)
-                or _clean(ui_meta.get("displayName"), MAX_NAME)
+        name = (_clean(profile_name(meta), MAX_NAME)
                 or " ".join(part.capitalize() for part in profile.replace("-", "_").split("_") if part))
         role = _clean(meta.get("description"), MAX_ROLE)
         about = _clean(bots.get("description"), MAX_ROLE)

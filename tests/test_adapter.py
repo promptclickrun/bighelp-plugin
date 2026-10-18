@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -958,6 +959,21 @@ class AdapterTests(unittest.TestCase):
         event, _ = service.deliveries[0]
         self.assertEqual(event.profile, "default")
         self.assertEqual(event.detail["agent_name"], "Atlas")
+
+    def test_profile_name_is_the_bot_title_without_pyyaml(self) -> None:
+        """Alerts say the agent's name, as the app shows it, on Hermes 0.22 and later (no PyYAML)."""
+        from loopdy_plugin.adapter import profile_display_name
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "profile.yaml").write_text(
+                "display_name: Hermes\nui_meta:\n  hermes-bots:\n    title: Alfie\n", encoding="utf-8")
+            with patch("loopdy_plugin.adapter.get_hermes_home", return_value=home), \
+                    patch.dict(sys.modules, {"yaml": None}):
+                self.assertEqual(profile_display_name("default"), "Alfie")
+            (home / "profile.yaml").write_text("description: no name here\n", encoding="utf-8")
+            with patch("loopdy_plugin.adapter.get_hermes_home", return_value=home):
+                self.assertEqual(profile_display_name("default"), "Default")
 
     def test_non_channel_event_resolves_the_configured_profile_display_name(
         self,

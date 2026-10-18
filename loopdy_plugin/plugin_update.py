@@ -517,7 +517,7 @@ class PluginUpdateManager:
         worker_root = self.data_root / "workers" / operation_id
         worker_root.mkdir(parents=True, exist_ok=False, mode=0o700)
         source_root = Path(__file__).resolve().parent
-        for name in ("plugin_update.py", "plugin_update_worker.py"):
+        for name in ("plugin_update.py", "plugin_update_worker.py", "yaml_compat.py"):
             destination = worker_root / name
             shutil.copy2(source_root / name, destination)
             destination.chmod(0o700 if name.endswith("worker.py") else 0o600)
