@@ -8,17 +8,19 @@ config.yaml, which Hermes adds to that agent's instructions in bighelp chats.
 
 The plugin writes it for every agent, keeps the roster current as agents come
 and go (each new chat reads it), and takes its own words back out when
-teamwork is turned off. Anything else in that setting stays as it was.
+teamwork is turned off. Anything else in that setting stays as it was. A chat
+on this agent that started earlier gets the brief once as a note on a message.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import logging
 import os
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 import threading
 import time
@@ -116,26 +118,30 @@ def brief(agent_id: str, agents: list[dict[str, str]]) -> str:
     for agent in teammates:
         what = ". ".join(part for part in (agent["role"], agent["about"]) if part).rstrip(".")
         lines.append(f"- {agent['name']} (@{agent['id']})" + (f": {what}." if what else ""))
-    signature = f"Message from {me['name']} (@{me['id']}):"
+    who = f"{me['name']} (@{me['id']})"
     return "\n".join([
         "## Your team",
-        f"You're {me['name']} (@{me['id']}), one of several agents on this computer. Each has its own role, "
-        "tools, accounts and memory. Your teammates:",
+        f"You're {who}. You don't work alone: these agents on this computer are your teammates. Each has its "
+        "own role, tools, accounts and memory.",
         *lines,
         "",
-        "Work together like coworkers:",
-        "- When part of a request fits a teammate's role, accounts or tools better than yours, ask them instead "
-        "of guessing or saying you can't. When the person asks you to check with a teammate, do it.",
-        f'- To ask, run in the terminal (allow a few minutes): hermes -p <id> chat -Q -q "{signature} <message>". '
-        "Escape double quotes in the message. Their answer is the command's output. If you have the "
-        "message_agent tool, you can use it instead.",
-        "- Say exactly what you need back, and share only what they need; keep the person's private details "
-        "private.",
-        "- Ask several teammates at once when the questions don't depend on each other. Then answer the person "
-        "once, with what you learned and who helped.",
-        "- Never send a task back to the teammate who asked you, or pass it around. If nobody fits better, do "
-        "it yourself.",
-        "- The person sees these conversations in bighelp.",
+        "The person turned on Teamwork in bighelp, so they expect you to bring teammates in on your own:",
+        "- Before you start on a request, check this list. When a teammate's role covers the request or part of "
+        "it (for example coding, code review, research, money, writing or planning), hand that part to them. "
+        "Don't wait to be told, don't ask permission and don't just suggest it.",
+        "- When work spans roles, split it, ask those teammates at the same time, then give the person one "
+        "answer with what each found and who helped.",
+        "- Do it yourself when it's quick, when it's conversation, when no teammate fits better, or when the "
+        "person asks for you.",
+        f'- To ask a teammate, run in the terminal (it can take a few minutes): hermes -p <id> chat -Q -q '
+        f'"Message from {who}: <message>". Escape double quotes. Their reply is the output. If you have the '
+        "message_agent tool you can use it instead; its reply arrives later as a message.",
+        "- Brief them like a coworker: the goal, the facts they need and what to send back. Share only what the "
+        "task needs, and keep the person's private details private.",
+        "- Tell the person in one short line who you're asking and why, then pass on the answer.",
+        "- When a teammate asks you something, do it and reply to them. Never send a task back to the agent that "
+        "asked you or pass it around; if nobody fits better, do it yourself.",
+        "- The person sees these conversations in bighelp. If they ask how you work with your team, explain this.",
     ])
 
 
@@ -303,13 +309,71 @@ def team() -> Team:
     return _shared_team()
 
 
-def _pre_llm_call(**payload: Any) -> None:
+SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+# Chats known to hold this agent's current brief, by the brief's hash. Bounded: one entry per open chat.
+_delivered: dict[str, str] = {}
+_MAX_DELIVERED = 512
+OPEN_CHAT_LEAD = ("[bighelp Teamwork: your current team guidance. It replaces any older \"Your team\" section "
+                  "in your instructions.]")
+
+
+def _active_profile() -> str:
+    from hermes_constants import get_hermes_home
+    home = Path(get_hermes_home())
+    return home.name if home.parent.name == "profiles" else "default"
+
+
+def _chat_holds(session_id: str, text: str) -> tuple[bool, bool]:
+    """Whether this chat's instructions, or a note Hermes replays in it, already have ``text``; and whether
+    Hermes keeps notes at all (older ones send a plugin's note once and forget it)."""
+    from hermes_constants import get_hermes_home
+    database = Path(get_hermes_home()) / "state.db"
+    with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=1)) as connection:
+        if connection.execute("SELECT 1 FROM sessions WHERE id = ? AND instr(coalesce(system_prompt, ''), ?) > 0",
+                              (session_id, text)).fetchone():
+            return True, True
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(messages)")}
+        if "api_content" not in columns:
+            return False, False
+        return bool(connection.execute(
+            "SELECT 1 FROM messages WHERE session_id = ? AND instr(coalesce(api_content, ''), ?) > 0 LIMIT 1",
+            (session_id, text)).fetchone()), True
+
+
+def open_chat_note(payload: dict) -> str | None:
+    """The team brief for a chat that started before it (or before the roster changed): a chat keeps the
+    instructions it started with, so the brief rides once in a message, which Hermes replays from then on."""
+    session_id = str(payload.get("session_id") or "")
+    if payload.get("is_first_turn") or payload.get("parent_session_id") or not SESSION_ID.fullmatch(session_id):
+        return None  # a new chat's instructions already have the current brief; helpers don't need it
+    state = team().store.read()
+    text = state["written"].get(_active_profile()) if state["enabled"] else None
+    if not text:
+        return None
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if _delivered.get(session_id) == digest:
+        return None
+    held, kept = _chat_holds(session_id, text)
+    if kept:
+        if len(_delivered) >= _MAX_DELIVERED:
+            _delivered.clear()
+        _delivered[session_id] = digest
+    return None if held else f"{OPEN_CHAT_LEAD}\n{text}"
+
+
+def _pre_llm_call(**payload: Any) -> dict[str, str] | None:
     if str(payload.get("platform") or "").strip().lower() != PLATFORM:
-        return
+        return None
     try:
         team().refresh_if_due()
     except Exception as error:  # a stale roster must never fail a turn
         logger.debug("bighelp teamwork refresh skipped: %s", type(error).__name__)
+    try:
+        note = open_chat_note(payload)
+    except Exception as error:  # nor may a chat that can't be read
+        logger.debug("bighelp teamwork note skipped: %s", type(error).__name__)
+        return None
+    return {"context": note} if note else None
 
 
 def register(ctx: Any) -> None:

@@ -11,14 +11,18 @@ Each agent gets a short brief in its instructions for bighelp chats:
 - who it is, and each teammate's name, `@id` and role (from the same profile
   data the app shows: the Bot Mode title and description, else the profile's
   display name and description)
-- when to ask a teammate: when part of a request fits the teammate's role,
-  accounts or tools better, or when the person asks
+- to bring teammates in on its own: before it starts on a request, check the
+  roster, and when a teammate's role covers the request or part of it, hand
+  that part over without being told, asking or only suggesting it; split work
+  that spans roles and ask those teammates at the same time; do it itself only
+  when it's quick, conversation, nobody fits better, or the person asks for it
 - how to ask: `hermes -p <id> chat -Q -q "Message from <Name> (@<id>): <message>"`
   in the terminal (or `message_agent` where Hermes offers it); the answer is
   the command's output
-- to say exactly what it needs, share only what the teammate needs, ask
-  independent questions at the same time, answer the person once with who
-  helped, and never pass a task back or around
+- to brief a teammate like a coworker, share only what the task needs, tell
+  the person in one line who it's asking, answer once with who helped, answer
+  teammates who ask it, and never pass a task back or around
+- to explain all this when the person asks how it works with its team
 
 The bighelp app shows these conversations in the chat
 ([Agents talking](AGENT_TALK.md)).
@@ -38,8 +42,15 @@ Hermes' own config helpers and lock, the same way the dashboard saves config.
   most every 10 minutes whether agents were added, renamed or removed, and
   saves new briefs only when something changed. The app's Settings also
   refreshes it.
-- A chat reads its instructions when it starts, so open chats keep the brief
-  they started with.
+- A chat keeps the instructions it started with. So a bighelp chat on the
+  default agent that started before Teamwork (or before the roster changed)
+  gets the current brief once, through the plugin's `pre_llm_call` context:
+  Hermes saves that note with the message (`api_content`) and replays it on
+  every later turn. The plugin sends it only when the chat's instructions and
+  saved notes don't already hold the current brief, never on a chat's first
+  turn (its instructions have it) or to helpers. A Hermes that doesn't save
+  notes gets it every turn. Other agents' open chats get it when they start
+  again, because they don't load this plugin.
 
 State is one file at the Hermes root, `plugin-data/loopdy/team.json`: the
 switch and the brief last saved for each agent (so it can be taken out
