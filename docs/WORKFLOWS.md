@@ -1,11 +1,12 @@
 # Workflows
 
-A workflow is a set of steps (stages) that your Hermes agents work through one at a time: for example
-one agent researches, one writes a draft, one reviews it, and you approve the final file. The bighelp app builds
-and starts workflows. The plugin runs them on the Hermes computer, so runs keep going when you close the app.
+A workflow is a set of steps (stages) that your Hermes agents work through: for example one agent researches,
+one writes a draft, one reviews it, and you approve the final file. Stages run one at a time, or 2 to 5 at once in
+a parallel block. The bighelp app and agents (with the `bighelp_workflows` tool) build and start workflows. The
+plugin runs them on the Hermes computer, so runs keep going when you close the app.
 
-Nothing runs by itself. A run starts only when you tap Run, and a failed or interrupted stage never retries by
-itself: the app shows what happened and offers Try again.
+A run starts when you tap Run, when an agent starts one, or on a schedule (`native-workflows-trigger-v1`, below).
+A failed or interrupted stage never retries by itself: the app shows what happened and offers Try again.
 
 ## How it runs
 

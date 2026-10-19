@@ -10,6 +10,8 @@ Agents can use five tools that run on your iPhone:
 | `iphone_location` | Where the phone is right now (read-only), for things like "what's good to eat near me?". |
 | `iphone_appearance` | See or change how bighelp looks: light or dark mode and the chat color, for things like "make it violet, dark mode". |
 
+Current bighelp builds do not offer Health. Only app builds before 2.3.0 (105) can turn on `iphone_health`.
+
 Updates and deletes name the exact item and the revision the agent last saw, so a stale request can't
 overwrite a newer change.
 

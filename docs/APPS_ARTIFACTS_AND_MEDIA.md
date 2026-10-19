@@ -1,6 +1,6 @@
-# Apps tab: Artifacts and Media
+# Files tab: Artifacts and Media
 
-The bighelp app's Apps tab shows what an agent made. Both routes follow the
+The bighelp app's Files tab (it was called Apps) shows what an agent made. Both routes follow the
 native context/ETag/request-ID contract and never return host paths the phone
 could not already see.
 

@@ -24,7 +24,7 @@ Only the [latest release](https://github.com/promptclickrun/bighelp-plugin/relea
   returned to the app or printed by `hermes bighelp status`.
 - **Notifications are sealed.** With current app builds, only the recipient phone can read an alert's text and
   picture. See [Notifications](docs/NOTIFICATIONS.md).
-- **Phone tools are opt-in.** iPhone Health, Calendar and Reminders tools work only after the user enables them,
+- **Phone tools are opt-in.** iPhone Calendar, Reminders and Location tools work only after the user enables them,
   and only while bighelp is open on that chat. See [iPhone tools](docs/IPHONE_DEVICE_TOOLS.md).
 
 More detail: [Security and privacy](docs/SECURITY_AND_PRIVACY.md).

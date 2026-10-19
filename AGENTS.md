@@ -141,8 +141,10 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
 
 ## Hermes compatibility
 
-- The plugin supports Hermes 0.21.1 and later. CI runs the compatibility suite against 0.21.1 and 0.21.2, and the app
-  supports hosts on 0.21.2 to 0.21.5.
+- The plugin supports Hermes 0.21.1 and later, and hosts run 0.22 today. CI runs a set of compatibility tests
+  against 0.21.1 and 0.21.2 only, so test changes against a current Hermes too.
+- The app never gates on the Hermes version: a version is metadata, not an allowlist. It reads `/native/context`
+  and route answers. Don't write a supported version range for the app anywhere.
 - `provides_hooks` in `plugin.yaml` lists only baseline hooks, because older Hermes validates those names. Register
   newer hooks, such as `on_room_member_activity`, only when the running Hermes advertises them.
 - Hermes may hide tools behind progressive disclosure (`tool_search`, `tool_describe`, `tool_call`). Skills tell
