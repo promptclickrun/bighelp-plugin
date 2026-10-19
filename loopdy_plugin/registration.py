@@ -10,7 +10,6 @@ import os
 import sqlite3
 import sys
 import time
-import weakref
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -133,40 +132,14 @@ def register(
         values = getter("direct", {}) if callable(getter) else {}
         return DirectSettings.from_mapping(values)
 
-    def live_voice_settings_getter():
-        getter = getattr(ctx, "get_config", None)
-        return getter("live_voice", {}) if callable(getter) else {}
-
-    # Registration owns the supported approval callback; runtime instances remain
-    # adapter-owned and lazy. Non-voice approvals retain the existing presenter.
-    voice_adapters = weakref.WeakSet()
     def adapter_factory(config):
-        adapter = BighelpAdapter(
+        return BighelpAdapter(
             config, service=active_service, link_state=identity_state,
             activity_broker=broker, plugin_update_manager=update_manager,
             device_tool_bridge=device_tool_bridge,
             direct_settings_getter=direct_settings_getter,
             direct_session_opener=direct_session_opener,
-            presentation_observer=presentation_observer, voice_dispatch=voice_dispatch,
-            live_voice_settings_getter=live_voice_settings_getter)
-        voice_adapters.add(adapter)
-        return adapter
-
-    def voice_agent_started(**kwargs):
-        from .inbound_dispatch import current_turn_lease
-        lease = current_turn_lease.get()
-        if lease is None:
-            return
-        for adapter in tuple(voice_adapters):
-            runtime = adapter._live_voice_runtime
-            if runtime is not None:
-                runtime.agent_started(lease=lease, stored_session_id=kwargs.get("session_id"))
-
-    def approval_requested(**kwargs):
-        for adapter in tuple(voice_adapters):
-            runtime = adapter._live_voice_runtime
-            if runtime is not None:
-                runtime.approval_requested(**kwargs)
+            presentation_observer=presentation_observer, voice_dispatch=voice_dispatch)
 
     selected_attachment_store = attachment_store or AttachmentStore(
         get_hermes_home()
@@ -277,17 +250,7 @@ def register(
         profile=profile,
         agent_name=profile_display_name(profile),
     )
-    def present_approval(request):
-        for adapter in tuple(voice_adapters):
-            runtime = adapter._live_voice_runtime
-            if runtime is not None:
-                response = runtime.present_approval(request)
-                if response is not None:
-                    return response
-        return approval.present(request)
-
-    ctx.register_approval_transport("loopdy", present_approval)
-    ctx.register_hook("pre_approval_request", approval_requested)
+    ctx.register_approval_transport("loopdy", approval.present)
 
     ctx.register_hook(
         "pre_llm_call",
@@ -297,7 +260,6 @@ def register(
             profile=profile,
             identity_state=identity_state,
             activity_broker=broker,
-            voice_observer=voice_agent_started,
         ),
     )
     ctx.register_hook(
@@ -368,9 +330,9 @@ def register(
         for hook in ("pre_llm_call", "post_llm_call", "pre_tool_call", "post_tool_call",
                      "on_session_end", "subagent_start", "subagent_stop"):
             _register_notification_observer(ctx, hook, partial(observe_managed, hook))
-        # Registration is additive: retain the existing voice observer and the
-        # explicitly selected legacy transport. Older SDKs can warn-and-register
-        # unknown names, so registration alone is not proof of an emitter.
+        # Registration is additive: retain the explicitly selected legacy
+        # transport. Older SDKs can warn-and-register unknown names, so
+        # registration alone is not proof of an emitter.
         try:
             from hermes_cli.plugins import VALID_HOOKS
             approval_hooks_supported = {"pre_approval_request", "post_approval_response"} <= VALID_HOOKS
@@ -429,14 +391,8 @@ def _pre_llm_call(
     profile: str,
     identity_state: Any | None = None,
     activity_broker: LinkActivityBroker | Any,
-    voice_observer: Any | None = None,
     **payload: Any,
 ):
-    if voice_observer is not None:
-        try:
-            voice_observer(**payload)
-        except Exception:
-            logger.warning("bighelp live session binding unavailable")
     publish_hook_activity(
         "pre_llm_call",
         broker=activity_broker,
