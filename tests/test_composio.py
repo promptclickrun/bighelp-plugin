@@ -6,6 +6,7 @@ throwaway HERMES_HOME.
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import ExitStack, contextmanager
 import copy
 import json
@@ -13,7 +14,8 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-from types import ModuleType
+import time
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 import uuid
@@ -21,6 +23,15 @@ import uuid
 from loopdy_plugin import composio
 
 CONNECT = {"url": "https://connect.composio.dev/mcp", "auth": "oauth", "enabled": True, "connect_timeout": 120}
+# Composio Connect's tools as its MCP server lists them; the search tool's description names the account's
+# connected apps (the app reads its own account's list from the same words).
+SEARCH_DESCRIPTION = ("Tool Server Info: discover the tools of 500+ apps for a task, with a plan to run them.\n"
+                      "- User has manually connected the apps: gmail, github, google_calendar. Prefer these apps when "
+                      "intent is unclear.")
+CONNECT_TOOLS = (("COMPOSIO_SEARCH_TOOLS", SEARCH_DESCRIPTION),
+                 ("COMPOSIO_MULTI_EXECUTE_TOOL", "Run up to 50 tools of the user's connected apps in parallel."),
+                 ("COMPOSIO_MANAGE_CONNECTIONS", "List, add, rename or remove the user's connections to apps."),
+                 ("COMPOSIO_GET_TOOL_SCHEMAS", "Input schemas of tools that the search returned."))
 SECRETS = ("fixture-header-secret", "fixture-env-secret", "fixture-query-secret", "fixture-user",
            "fixture-password", "fixture-fragment", "fixture-token-secret")
 
@@ -49,6 +60,15 @@ class FakeHermes:
         self.writes: list[tuple[str | None, bool, str]] = []
         self.refuse = False
         self.token_error = False
+        # Hermes' MCP connection, as Composio Connect answers it.
+        self.tools = CONNECT_TOOLS
+        self.connect_error: BaseException | None = None
+        self.hang = False
+        self.connects: list[tuple[str | None, str, dict, bool]] = []
+        self.shutdowns = 0
+        self.stamps: dict[tuple[str, str], tuple] = {}
+        self.scopes: list[tuple[str, str]] = []
+        self.prompts_off = False
 
     @contextmanager
     def profile_scope(self, profile):
@@ -57,6 +77,39 @@ class FakeHermes:
             yield
         finally:
             self.active = previous
+
+    @contextmanager
+    def config_profile_scope(self, profile):
+        # Hermes' probe-class scope: home and secrets, without the skills lock.
+        self.scopes.append(("config", profile))
+        with self.profile_scope(profile):
+            yield
+
+    @contextmanager
+    def no_prompt(self):
+        previous, self.prompts_off = self.prompts_off, True
+        try:
+            yield
+        finally:
+            self.prompts_off = previous
+
+    async def connect_server(self, name, config):
+        self.connects.append((self.active, name, dict(config), self.prompts_off))
+        if self.hang:
+            await asyncio.sleep(3600)
+        if self.connect_error is not None:
+            raise self.connect_error
+        hermes = self
+
+        class Server:
+            _tools = [SimpleNamespace(name=tool, description=text) for tool, text in hermes.tools]
+
+            async def shutdown(self):
+                hermes.shutdowns += 1
+        return Server()
+
+    def run_on_loop(self, factory, timeout=30):
+        return asyncio.run(factory())
 
     @contextmanager
     def config_write_scope(self, profile):
@@ -93,6 +146,9 @@ class FakeHermes:
                 if hermes.token_error:
                     raise PermissionError("/private/fixture-home/mcp-tokens")
                 return (hermes.active, name) in hermes.tokens
+
+            def credential_stamp(self):
+                return hermes.stamps.get((hermes.active, name), (1, None))
         return Storage()
 
     def server_configs_with_sources(self, servers):
@@ -107,12 +163,22 @@ class FakeHermes:
             "hermes_cli.config": _module("hermes_cli.config", load_config=self.load_config,
                                          save_config=self.save_config),
             "hermes_cli.mcp_config": _module("hermes_cli.mcp_config", _get_mcp_servers=self.get_mcp_servers,
-                                             _save_mcp_server=self.save_mcp_server),
+                                             _save_mcp_server=self.save_mcp_server,
+                                             _resolve_mcp_server_config=lambda config: dict(config)),
+            "hermes_cli.mcp_security": _module("hermes_cli.mcp_security",
+                                               validate_mcp_server_entry=lambda name, entry: []),
             "hermes_cli.profiles": _module("hermes_cli.profiles", profile_exists=lambda name: name in self.configs),
             "hermes_cli.web_routers._common": _module("hermes_cli.web_routers._common",
                                                       _profile_scope=self.profile_scope,
                                                       config_write_scope=self.config_write_scope),
-            "tools.mcp_oauth": _module("tools.mcp_oauth", HermesTokenStorage=self.token_storage),
+            "hermes_cli.web_server_profiles": _module("hermes_cli.web_server_profiles",
+                                                      _config_profile_scope=self.config_profile_scope),
+            "tools.mcp_oauth": _module("tools.mcp_oauth", HermesTokenStorage=self.token_storage,
+                                       suppress_interactive_oauth=self.no_prompt),
+            "tools.mcp_tool_discovery": _module("tools.mcp_tool_discovery", _connect_server=self.connect_server),
+            "tools.mcp_tool_lifecycle": _module("tools.mcp_tool_lifecycle", _stop_mcp_loop_if_idle=lambda: True),
+            "tools.mcp_tool_loop": _module("tools.mcp_tool_loop", _ensure_mcp_loop=lambda: None,
+                                           _run_on_mcp_loop=self.run_on_loop),
             "tools.mcp_tool_common": _module("tools.mcp_tool_common", mcp_server_enabled=_enabled)
             if enabled_reader else None,
             "tui_gateway.mcp_rpc_helpers": _module("tui_gateway.mcp_rpc_helpers",
@@ -311,6 +377,114 @@ class InstallTests(_FakeCase):
         self.assertEqual(hermes.writes, [])
 
 
+class AppsTests(_FakeCase):
+    """The apps the agent's own Composio sign-in has connected, read from Composio Connect's tool list."""
+
+    def setUp(self):
+        composio._apps_cache.clear()
+        self.addCleanup(composio._apps_cache.clear)
+
+    def signed_in(self, profile="default", **options) -> FakeHermes:
+        return self.use(FakeHermes({"composio": CONNECT}, tokens={(profile, "composio")}, **options))
+
+    def test_lists_the_apps_the_agents_own_sign_in_connected(self):
+        hermes = self.signed_in()
+        self.assertEqual(composio.apps("default"), {"schemaVersion": 1, "connect": "composio", "state": "listed",
+                                                    "reason": None, "apps": ["gmail", "github", "google_calendar"]})
+        self.assertEqual(len(hermes.connects), 1)
+        profile, name, config, prompts_off = hermes.connects[0]
+        self.assertEqual((profile, name, config["url"]), ("default", "composio", "https://connect.composio.dev/mcp"))
+        self.assertLessEqual(config["connect_timeout"], composio.APPS_TIMEOUT, "Bounded, not Hermes' 120 seconds")
+        self.assertTrue(prompts_off, "A sign-in that no longer works never opens a browser on the host")
+        self.assertEqual(hermes.shutdowns, 1, "Connected only to read the list")
+        self.assertEqual(hermes.scopes, [("config", "default")], "Hermes' probe-class scope, not the skills lock")
+        self.assertEqual(hermes.writes, [], "Changes nothing")
+
+    def test_an_account_without_connected_apps_lists_none(self):
+        hermes = self.signed_in()
+        hermes.tools = (("COMPOSIO_SEARCH_TOOLS", "Tool Server Info: discover the tools of 500+ apps for a task."),)
+        self.assertEqual(composio.apps("default")["apps"], [])
+        self.assertEqual(composio.apps("default")["state"], "listed")
+
+    def test_each_agent_uses_its_own_sign_in(self):
+        hermes = self.signed_in("research")
+        self.assertEqual(composio.apps("default")["reason"], "not_signed_in")
+        self.assertEqual(composio.apps("research")["state"], "listed")
+        self.assertEqual([connect[0] for connect in hermes.connects], ["research"])
+
+    def test_without_a_working_setup_nothing_connects(self):
+        hermes = self.use(FakeHermes())
+        self.assertEqual(composio.apps("default"), {"schemaVersion": 1, "connect": None, "state": "unknown",
+                                                    "reason": "not_installed", "apps": []})
+        hermes = self.use(FakeHermes({"composio": {**CONNECT, "enabled": False}}, tokens={("default", "composio")}))
+        self.assertEqual(composio.apps("default")["reason"], "turned_off")
+        hermes = self.use(FakeHermes({"composio": CONNECT}))
+        self.assertEqual((composio.apps("default")["connect"], composio.apps("default")["reason"]),
+                         ("composio", "not_signed_in"))
+        self.assertEqual(hermes.connects, [])
+
+    def test_a_refused_sign_in_is_unknown_and_keeps_its_words_out(self):
+        hermes = self.signed_in()
+        hermes.connect_error = RuntimeError("401 Unauthorized: https://connect.composio.dev/mcp?token=fixture-token-secret "
+                                            "/private/fixture-home/mcp-tokens/composio.json")
+        with self.assertLogs("hermes.plugins.bighelp", level="WARNING") as logs:
+            value = composio.apps("default")
+        self.assertEqual((value["state"], value["reason"], value["apps"]), ("unknown", "unreachable", []))
+        for text in (json.dumps(value), " ".join(logs.output)):
+            self.assertNotIn("fixture-token-secret", text)
+            self.assertNotIn("fixture-home", text)
+
+    def test_a_server_that_does_not_answer_is_unknown_in_time(self):
+        hermes = self.signed_in()
+        hermes.hang = True
+        with patch.object(composio, "APPS_TIMEOUT", 0.2), self.assertLogs("hermes.plugins.bighelp", level="WARNING"):
+            value = composio.apps("default")
+        self.assertEqual((value["state"], value["reason"]), ("unknown", "unreachable"))
+
+    def test_no_search_tool_is_unknown_not_none(self):
+        hermes = self.signed_in()
+        hermes.tools = CONNECT_TOOLS[1:]
+        self.assertEqual(composio.apps("default")["reason"], "no_app_list")
+
+    def test_the_list_is_bounded_and_checked(self):
+        hermes = self.signed_in()
+        slugs = ", ".join([f"app_{index}" for index in range(composio.MAX_APPS + 50)])
+        hermes.tools = (("COMPOSIO_SEARCH_TOOLS", "User has manually connected the apps: Gmail, bad/slug, -x, "
+                         + "x" * 65 + ", slack, slack, " + slugs + ". Prefer these apps."),)
+        found = composio.apps("default")["apps"]
+        self.assertEqual(found[0], "slack")
+        self.assertEqual(len(found), composio.MAX_APPS)
+        self.assertTrue(all(composio._SLUG.fullmatch(slug) for slug in found))
+        self.assertEqual(composio.connected_apps("x" * composio.MAX_DESCRIPTION + " connected the apps: gmail."), [],
+                         "Read no further than the cap")
+        self.assertEqual(composio.connected_apps("connected the apps: gmail,\n github"), ["gmail", "github"])
+
+    def test_a_repeat_reuses_the_answer_until_the_sign_in_changes(self):
+        hermes = self.signed_in()
+        composio.apps("default")
+        composio.apps("default")
+        self.assertEqual(len(hermes.connects), 1)
+        hermes.stamps[("default", "composio")] = (2, None)  # Hermes signed in again or refreshed its token
+        composio.apps("default")
+        self.assertEqual(len(hermes.connects), 2)
+        with patch.object(composio.time, "monotonic", return_value=time.monotonic() + composio.APPS_CACHE_SECONDS + 1):
+            composio.apps("default")
+        self.assertEqual(len(hermes.connects), 3)
+
+    def test_unknown_profiles_and_missing_helpers(self):
+        self.signed_in()
+        with self.assertRaises(composio.ComposioError) as error:
+            composio.apps("ghost")
+        self.assertEqual((error.exception.status, error.exception.code), (404, "profile_not_found"))
+        self.assertTrue(composio.apps_available())
+        with patch.dict(sys.modules, {"tools.mcp_tool_discovery": None}):
+            self.assertTrue(composio.available(), "Status and install don't need the connection code")
+            self.assertFalse(composio.apps_available())
+            with self.assertRaises(composio.ComposioError) as error:
+                composio.apps("default")
+            self.assertEqual((error.exception.status, error.exception.code), (503, "composio_unavailable"))
+
+
 class RouteTests(unittest.TestCase):
     """POST /native/composio/status and /install on Hermes' own MCP helpers and auth middleware."""
 
@@ -439,8 +613,43 @@ class RouteTests(unittest.TestCase):
         self.assertNotIn("composio", self.config().get("mcp_servers") or {})
         self.assertIsNone(self.post("status", {"agentId": "default"}).json()["connect"])
 
+    def test_apps_reads_the_agents_own_list(self):
+        if not composio.apps_available():
+            self.skipTest("Hermes MCP connection helpers unavailable")
+        composio._apps_cache.clear()
+        self.addCleanup(composio._apps_cache.clear)
+        connected = []
+
+        def list_tools(probe, name, config):
+            # Hermes' own connection code, without the network: Composio Connect's answer.
+            connected.append((name, config["url"], callable(probe.connect), callable(probe.no_prompt)))
+            return list(CONNECT_TOOLS)
+
+        with patch.object(composio, "_list_tools", side_effect=list_tools):
+            self.assertEqual(self.post("apps", {"agentId": "default"}).json()["reason"], "not_installed")
+            self.post("install", {"agentId": "default"})
+            unsigned = self.post("apps", {"agentId": "default"})
+            self.assertEqual(unsigned.json(), {"agentId": "default", "schemaVersion": 1, "connect": "composio",
+                                               "state": "unknown", "reason": "not_signed_in", "apps": []})
+            self.assertEqual(connected, [], "No sign-in, no connection")
+            tokens = self.home / "mcp-tokens"
+            tokens.mkdir(exist_ok=True)
+            (tokens / "composio.json").write_text(json.dumps({"access_token": "fixture-token-secret",
+                                                              "token_type": "Bearer"}))
+            headers = self.headers()
+            listed = self.post("apps", {"agentId": "default"}, headers)
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json(), {"agentId": "default", "schemaVersion": 1, "connect": "composio",
+                                         "state": "listed", "reason": None,
+                                         "apps": ["gmail", "github", "google_calendar"]})
+        self.assertEqual(listed.headers["cache-control"], "no-store")
+        self.assertEqual(listed.headers["x-loopdy-request-id"], headers["X-Loopdy-Request-ID"])
+        self.assertEqual(connected, [("composio", "https://connect.composio.dev/mcp", True, True)])
+        self.assertNotIn("fixture-token-secret", listed.text)
+        self.assertNotIn(str(self.home), listed.text)
+
     def test_requests_are_checked(self):
-        for operation in ("status", "install"):
+        for operation in ("status", "install", "apps"):
             with self.subTest(operation=operation):
                 self.assertEqual(self.post(operation, {"agentId": "ghost"}).status_code, 404)
                 for body in ({}, {"profile": "default"}, {"agentId": "Default"}, {"agentId": "default", "extra": 1},
@@ -472,6 +681,17 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "composio_unavailable")
         self.assertFalse((self.home / "config.yaml").exists())
+
+    def test_hosts_without_the_connection_helpers_keep_status_and_install(self):
+        with patch.object(composio, "apps_available", return_value=False):
+            headers = self.headers()
+            context = self.client.get("/api/plugins/loopdy/native/context",
+                                      headers={"Authorization": "Bearer fixture-alice"})
+            self.assertNotIn(composio.APPS_CAPABILITY, context.json()["features"])
+            response = self.post("apps", {"agentId": "default"}, headers)
+            self.assertEqual((response.status_code, response.json()["error"]["code"]), (503, "composio_unavailable"))
+            self.assertEqual(self.post("status", {"agentId": "default"}).status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

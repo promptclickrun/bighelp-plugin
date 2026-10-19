@@ -28,6 +28,7 @@ PROCESS_FEATURES = (
     "native-workflows-parallel-v1", "native-workflows-delivery-v1", "native-workflows-outcomes-v1",
     "native-workflows-trigger-v1", "native-workflows-code-v1",
     "native-live-alerts-v1", "native-notification-quiet-hours-v1", "native-composio-v1",
+    "native-composio-apps-v1",
     "native-agent-talk-v1",
     "native-chat-activity-v1",
     "native-team-v1",
@@ -89,14 +90,15 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[27],
                             available=Mock(return_value=True))
         self.composio = module("loopdy_plugin.composio", CAPABILITY=PROCESS_FEATURES[28],
-                               available=Mock(return_value=True))
-        self.agent_talk = module("loopdy_plugin.agent_talk", CAPABILITY=PROCESS_FEATURES[29],
+                               available=Mock(return_value=True), APPS_CAPABILITY=PROCESS_FEATURES[29],
+                               apps_available=Mock(return_value=True))
+        self.agent_talk = module("loopdy_plugin.agent_talk", CAPABILITY=PROCESS_FEATURES[30],
                                  available=Mock(return_value=True))
-        self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[30],
+        self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[31],
                                     available=Mock(return_value=True))
-        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[31],
+        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[32],
                            available=Mock(return_value=True), register=Mock())
-        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[32],
+        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[33],
                                    available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
@@ -149,6 +151,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.live_alerts.available.return_value = False
         self.quiet.available.return_value = False
         self.composio.available.return_value = False
+        self.composio.apps_available.return_value = False
         self.agent_talk.available.return_value = False
         self.chat_activity.available.return_value = False
         self.team.available.return_value = False

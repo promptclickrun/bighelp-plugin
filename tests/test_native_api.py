@@ -180,9 +180,11 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.quiet_hours import available as quiet_available
         if quiet_available():
             expected.append("native-notification-quiet-hours-v1")
-        from loopdy_plugin.composio import available as composio_available
+        from loopdy_plugin.composio import apps_available as composio_apps_available, available as composio_available
         if composio_available():
             expected.append("native-composio-v1")
+        if composio_apps_available():
+            expected.append("native-composio-apps-v1")
         from loopdy_plugin.agent_talk import available as agent_talk_available
         if agent_talk_available():
             expected.append("native-agent-talk-v1")

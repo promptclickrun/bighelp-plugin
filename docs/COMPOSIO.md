@@ -15,6 +15,9 @@ Signing it in is Hermes' own MCP OAuth, which the app already runs.
    (`POST /api/mcp/servers/<name>/auth?profile=<agent>`), opens the Composio sign-in page Hermes returns, and
    follows `GET /api/mcp/oauth/flows/<id>` until Hermes says it's done.
 3. The app calls `composio/status` again to show the result.
+4. When the server is ready, the app calls `composio/apps` and compares the agent's connected apps with the
+   apps the person connected in the app. When the agent doesn't see them, Hermes is signed in to another
+   Composio account (or one without those apps), and the app offers Hermes' MCP sign-in again.
 
 Hermes does the work:
 
@@ -33,6 +36,9 @@ Hermes does the work:
   query and fragment.
 - Install writes one fixed server entry (below) or sets `enabled: true` on an existing Composio Connect entry.
   It changes nothing else in the config, never removes anything and never runs a sign-in.
+- `composio/apps` connects with Hermes' own MCP code and Hermes' own sign-in for that agent, reads the tool list
+  and disconnects. It calls no tool and never writes or refreshes a token itself (Hermes' code refreshes an
+  expired one, as for every MCP connection). It never opens a browser sign-in on the host.
 
 ## For the app
 
@@ -103,3 +109,33 @@ Both answer with the status:
 - `422 invalid_request`: bad body or headers. `428`/`412`: load the context again.
 - `503 composio_unavailable`: the feature isn't listed (older Hermes or plugin).
 - `503 composio_install_refused`: Hermes' MCP config check refused the entry.
+
+### The agent's apps
+
+`native-composio-apps-v1` in `/native/context` features, listed when this Hermes also has its MCP connection code
+(`_connect_server`, the MCP loop helpers and the probe-class profile scope `_config_profile_scope`). Without it, the
+app shows only what `composio/status` says.
+
+`POST /api/plugins/loopdy/native/composio/apps`, read only, with the same headers and body (`{"agentId": "default"}`):
+
+```json
+{
+  "agentId": "default",
+  "schemaVersion": 1,
+  "connect": "composio",
+  "state": "listed",
+  "reason": null,
+  "apps": ["gmail", "github"]
+}
+```
+
+- `state`: `listed` when the agent's Composio Connect answered with its search tool. `apps` are the toolkit slugs
+  its description names after "connected the apps:" (the same words the app reads for the person's own
+  account). An empty list means that account has no connected apps.
+- `state: "unknown"` with `apps: []` and a fixed `reason`, never a guess: `not_installed`, `turned_off`,
+  `not_signed_in` (nothing connects then), `unreachable` (the connection or Hermes' sign-in failed, or it took
+  longer than 30 seconds), `no_app_list` (no search tool) or `busy`.
+- Bounds: one connection at a time, at most 30 seconds, at most 512 tools read and 64 KB of each description, at
+  most 200 apps of at most 64 characters (`[a-z0-9_]`). A repeat within 30 seconds reuses the answer while
+  Hermes' saved sign-in for that server is unchanged (a stat of its token files, no bytes read).
+- Logs keep only the error type, never its text.

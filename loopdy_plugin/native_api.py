@@ -805,18 +805,19 @@ async def provider_sign_in(operation: str, request: Request) -> Response:
 
 def _composio(operation: str, agent_id: str) -> dict:
     from . import composio
+    run = {"install": composio.install, "apps": composio.apps}.get(operation, composio.status)
     try:
-        value = composio.install(agent_id) if operation == "install" else composio.status(agent_id)
+        value = run(agent_id)
     except composio.ComposioError as error:
         raise NativeAPIError(error.status, error.code, error.message) from None
     return {"agentId": agent_id, **value}
 
 
 async def _composio_request(request: Request, operation: str) -> Response:
-    from .composio import CAPABILITY
+    from .composio import APPS_CAPABILITY, CAPABILITY
     owner = native_context(request)
     request_id = _precondition(request, owner)
-    if CAPABILITY not in owner.features:
+    if (APPS_CAPABILITY if operation == "apps" else CAPABILITY) not in owner.features:
         raise NativeAPIError(503, "composio_unavailable", "This Hermes can't set up Composio from the app.")
     body = await _body(request, _Body)
     if PROFILE_ID.fullmatch(body.agentId) is None:
@@ -837,6 +838,12 @@ async def composio_status(request: Request) -> Response:
 async def composio_install(request: Request) -> Response:
     """Turn on or add Composio Connect's MCP server for the agent; the app then signs it in with Hermes' MCP OAuth."""
     return await _composio_request(request, "install")
+
+
+@router.post("/composio/apps")
+async def composio_apps(request: Request) -> Response:
+    """The apps the agent's own Composio sign-in has connected (read only; Hermes connects with its own sign-in)."""
+    return await _composio_request(request, "apps")
 
 
 class _MyTemplatesList(BaseModel):

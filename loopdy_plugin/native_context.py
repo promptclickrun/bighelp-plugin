@@ -379,6 +379,11 @@ def _native_features(
         features.append(composio_capability)
     else:
         skip(composio_capability, "Hermes' MCP config helpers are unimportable.")
+    from .composio import APPS_CAPABILITY as composio_apps_capability, apps_available as composio_apps_available
+    if composio_apps_available():
+        features.append(composio_apps_capability)
+    else:
+        skip(composio_apps_capability, "Hermes' MCP connection helpers are unimportable.")
     from .agent_talk import CAPABILITY as agent_talk_capability, available as agent_talk_available
     if agent_talk_available():
         features.append(agent_talk_capability)
