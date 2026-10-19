@@ -69,6 +69,19 @@ existing content-token engine. See [Native Project Git](NATIVE_PROJECT_GIT.md);
 this never creates or adopts a Workspace Files grant.
 Read failures remain visible. Context responses are at most 16 KiB.
 
+## Chats outlive a dropped connection
+
+A phone loses its connection each time someone leaves bighelp. Hermes then reclaims the session's
+runtime after `ws_orphan_reap_grace_s` (20 seconds). For a `desktop` session it keeps the saved chat open
+and resumable; for any other app's it ends the row (`end_reason` `ws_orphan_reap`, `ws_disconnect`,
+`idle_timeout` or `lru_evict`). With `sessions.auto_prune`, Hermes deletes ended chats once they are idle
+past `retention_days`, so bighelp's chats were deleted where Desktop's are kept.
+
+The plugin gives `bighelp` sessions Desktop's treatment for those automatic reasons only
+(`durable_sessions.py`). The first native context request in the process that serves the app installs
+it. It also reopens bighelp chats that Hermes ended for those reasons before. Closing, archiving and
+deleting a chat do not change. On a Hermes without this lifecycle, nothing changes.
+
 ## Card templates
 
 Successful context GET returns `Cache-Control: no-store` and an `ETag` of the
