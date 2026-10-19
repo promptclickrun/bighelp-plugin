@@ -1631,6 +1631,17 @@ class LoopdyLinkClient:
                 self.state.set(scoped_key, legacy)
 
 
+# Every key pairing wrote to Hermes' .env. `hermes bighelp link unpair` removes them.
+LINK_ENV_KEYS = (
+    "LOOPDY_LINK_BASE_URL",
+    "LOOPDY_LINK_DEVICE_ID",
+    "LOOPDY_LINK_AUTHORIZATION_EPOCH",
+    "LOOPDY_LINK_SIGNING_PRIVATE_KEY",
+    "LOOPDY_LINK_AGREEMENT_PRIVATE_KEY",
+    "LOOPDY_LINK_ACCOUNT_KEY",
+)
+
+
 def load_runtime_config(values: Mapping[str, str] | None = None) -> LinkRuntimeConfig | None:
     source = os.environ if values is None else values
     keys = (
@@ -1818,6 +1829,7 @@ __all__ = [
     "InboundLinkRelayReady",
     "InboundLinkSessionFork",
     "InboundLinkTurn",
+    "LINK_ENV_KEYS",
     "LinkRuntimeConfig",
     "LoopdyLinkClient",
     "canonical_device_request",

@@ -43,10 +43,9 @@ from .events import BighelpEvent
 from .hooks import normalize_hook
 from .workflow_runner import in_workflow_stage
 from .generative_ui import extract_rendered_envelope
-from .link_client import load_runtime_config
+from .link_client import LINK_ENV_KEYS, load_runtime_config
 from .link_contracts import generative_ui_event, notification_event
 from .link_identity import pre_llm_context_from_state
-from .link_pairing import LINK_ENV_KEYS, pair_host
 from .marketplace import MarketplaceGatewayClient, MarketplacePublisher
 from .naming import CLI_COMMAND, LEGACY_CLI_COMMAND, register_legacy_toolset_alias
 from .plugin_update import (

@@ -733,22 +733,13 @@ class RegistrationTests(unittest.TestCase):
         from loopdy_plugin import registration
         from loopdy_plugin.registration import _handle_link_cli
 
-        # The dead gateway-activation hook was removed entirely: pairing is
+        # The dead gateway-activation hook and the pairing flow were removed entirely: pairing is
         # retired and nothing in the plugin may restart the gateway on its own.
         self.assertFalse(hasattr(registration, "_request_gateway_activation"))
-
-        paired = {
-            "state": "paired",
-            "device_id": "host-device-current",
-            "base_url": "https://link.loopdy.example",
-            "authorization_epoch": 1,
-        }
+        self.assertFalse(hasattr(registration, "pair_host"))
         output = io.StringIO()
 
-        with (
-            patch("loopdy_plugin.registration.pair_host", return_value=paired) as pair,
-            contextlib.redirect_stdout(output),
-        ):
+        with contextlib.redirect_stdout(output):
             _handle_link_cli(
                 SimpleNamespace(
                     bighelp_link_action="pair",
@@ -758,10 +749,24 @@ class RegistrationTests(unittest.TestCase):
                 identity_state=_Context().state,
             )
 
-        pair.assert_not_called()
         result = json.loads(output.getvalue())
         self.assertEqual(result["state"], "retired")
         self.assertEqual(result["chat_transport"], "native")
+
+    def test_link_unpair_removes_every_key_pairing_saved(self) -> None:
+        from loopdy_plugin.registration import _handle_link_cli
+
+        removed: list[str] = []
+        with (
+            patch("hermes_cli.config.remove_env_value", side_effect=lambda key: removed.append(key) or True),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            _handle_link_cli(SimpleNamespace(bighelp_link_action="unpair", yes=True), identity_state=None)
+
+        self.assertEqual(sorted(removed), sorted((
+            "LOOPDY_LINK_BASE_URL", "LOOPDY_LINK_DEVICE_ID", "LOOPDY_LINK_AUTHORIZATION_EPOCH",
+            "LOOPDY_LINK_SIGNING_PRIVATE_KEY", "LOOPDY_LINK_AGREEMENT_PRIVATE_KEY", "LOOPDY_LINK_ACCOUNT_KEY")))
+        self.assertEqual(json.loads(output.getvalue())["removed"], 6)
 
     def test_loopdy_link_status_reads_the_matching_persisted_gateway_state(self) -> None:
         from loopdy_plugin.registration import _handle_link_cli

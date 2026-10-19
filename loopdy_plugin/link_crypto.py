@@ -9,18 +9,16 @@ from __future__ import annotations
 import base64
 import json
 import os
-from dataclasses import dataclass
 from typing import Any
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, x25519
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import (
     decode_dss_signature,
     encode_dss_signature,
 )
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from .groups_contracts import GROUPS_RESULT_ENVELOPE_BYTES, validate_result_version
 
 
@@ -127,55 +125,9 @@ class AccountCipher:
         return value
 
 
-@dataclass(frozen=True)
-class HostGrant:
-    account_key: bytes
-
-
-def decrypt_host_grant(
-    envelope: str,
-    *,
-    flow_id: str,
-    device_id: str,
-    agreement_private_key: x25519.X25519PrivateKey,
-) -> HostGrant:
-    """Open the one-time grant encrypted by the approving mobile device."""
-
-    raw = decode_base64url(envelope, minimum=61, maximum=65_536)
-    ephemeral_public = x25519.X25519PublicKey.from_public_bytes(raw[:32])
-    nonce, ciphertext = raw[32:44], raw[44:]
-    shared = agreement_private_key.exchange(ephemeral_public)
-    key = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=flow_id.encode("ascii"),
-        info=b"loopdy-link-host-grant-v1",
-    ).derive(shared)
-    try:
-        plaintext = AESGCM(key).decrypt(
-            nonce,
-            ciphertext,
-            flow_id.encode("ascii"),
-        )
-        value = json.loads(plaintext)
-    except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("bighelp Link host grant is invalid") from exc
-    if (
-        not isinstance(value, dict)
-        or value.get("version") != 1
-        or value.get("deviceId") != device_id
-        or not isinstance(value.get("accountKey"), str)
-    ):
-        raise ValueError("bighelp Link host grant is invalid")
-    account_key = decode_base64url(value["accountKey"], minimum=32, maximum=32)
-    return HostGrant(account_key=account_key)
-
-
 __all__ = [
     "AccountCipher",
-    "HostGrant",
     "decode_base64url",
-    "decrypt_host_grant",
     "encode_base64url",
     "raw_p256_to_der",
     "sign_p256_raw",
