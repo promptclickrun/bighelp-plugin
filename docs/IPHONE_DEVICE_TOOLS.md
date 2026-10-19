@@ -114,6 +114,11 @@ The plugin advertises `native-device-tools-v1` only when the Hermes host support
 `native-device-location-v1` comes with it and tells the app that `location` may be in the channel's `enabled`
 list; older plugins reject it, so the app leaves Location out for them and asks you to update the plugin.
 `native-device-appearance-v1` does the same for `appearance`. Because Appearance is on by default, the phone opens a
-channel for any chat it has open on a host that lists it, and polls more slowly (every 2 seconds instead of 0.75)
-while Appearance is the only tool on that channel.
+channel for every chat with the serving agent on a host that lists it, and polls more slowly (every 8 seconds instead
+of 0.75) while Appearance is the only tool on that channel.
+
+Hermes loads the plugin, and so the `iphone_*` tools, only into the agent it serves (`servingProfileId` in
+`/native/context`, usually `default`). The plugin refuses a channel for any other agent (`profile_not_served`), and
+the phone doesn't ask: in another agent's chat it opens no channel, and Settings › Device access names the agent
+that can use the shared data.
 The routes use the usual native session checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)).
