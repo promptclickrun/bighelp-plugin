@@ -45,5 +45,26 @@ class DurableSessionsTests(unittest.TestCase):
                          "A Hermes without that lifecycle is left as it is")
 
 
+class ReopenTests(unittest.TestCase):
+    def test_chats_ended_only_by_a_dropped_connection_reopen_and_nothing_else(self):
+        class Store:
+            def __init__(self):
+                self.rows = {"reaped": ("bighelp", "ws_orphan_reap"), "closed": ("bighelp", "tui_close"),
+                             "terminal": ("tui", "ws_orphan_reap"), "open": ("bighelp", None)}
+                self.reopened = []
+
+            def _read_all(self, sql, params):
+                source, *reasons = params
+                return [{"id": id} for id, (row_source, reason) in self.rows.items()
+                        if row_source == source and reason in reasons]
+
+            def reopen_session(self, session_id):
+                self.reopened.append(session_id)
+
+        store = Store()
+        self.assertEqual(durable_sessions.reopen_automatically_ended([store]), 1)
+        self.assertEqual(store.reopened, ["reaped"])
+
+
 if __name__ == "__main__":
     unittest.main()
