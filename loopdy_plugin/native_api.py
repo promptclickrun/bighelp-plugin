@@ -237,6 +237,12 @@ def _precondition(request: Request, context: NativeContext) -> str:
 @router.get("/context")
 async def context(request: Request) -> Response:
     owner = native_context(request)
+    # Each app connection starts here, in the process that serves its chats.
+    from . import durable_sessions
+    try:
+        durable_sessions.install()
+    except Exception:  # never let it fail the context
+        logger.warning("Durable bighelp sessions unavailable")
     if request.query_params:
         raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
     async for chunk in request.stream():
