@@ -191,6 +191,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.team import available as team_available
         if team_available():
             expected.append("native-team-v1")
+        from loopdy_plugin.my_templates import available as my_templates_available
+        if my_templates_available():
+            expected.append("native-my-templates-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

@@ -837,3 +837,47 @@ async def composio_status(request: Request) -> Response:
 async def composio_install(request: Request) -> Response:
     """Turn on or add Composio Connect's MCP server for the agent; the app then signs it in with Hermes' MCP OAuth."""
     return await _composio_request(request, "install")
+
+
+class _MyTemplatesList(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _MyTemplatesSave(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    template: dict[str, Any]
+
+
+class _MyTemplatesDelete(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+
+
+def _my_templates(operation: str, body: BaseModel) -> dict:
+    from . import my_templates
+    try:
+        if operation == "save":
+            return {"template": my_templates.store().save(body.template)}
+        if operation == "delete":
+            return {"id": body.id, "deleted": my_templates.store().delete(body.id)}
+        return my_templates.store().list()
+    except my_templates.MyTemplateError as error:
+        raise NativeAPIError(error.status, error.code, error.message) from None
+
+
+@router.post("/my-templates/{operation}")
+async def my_templates_request(operation: str, request: Request) -> Response:
+    """My Templates: bots saved as templates on this computer, listed in the app's template picker."""
+    from .my_templates import CAPABILITY, MAX_RESPONSE_BYTES
+    models = {"list": _MyTemplatesList, "save": _MyTemplatesSave, "delete": _MyTemplatesDelete}
+    if operation not in models:
+        raise NativeAPIError(404, "operation_not_found", "The operation is not supported.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "my_templates_unavailable", "Saved templates aren't available on this host.")
+    body = await _body(request, models[operation])
+    value = await run_in_threadpool(_my_templates, operation, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=MAX_RESPONSE_BYTES)
