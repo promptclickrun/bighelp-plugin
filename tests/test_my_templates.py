@@ -97,7 +97,7 @@ class StoreTests(unittest.TestCase):
         self.write(name(), json.dumps({"schemaVersion": 1, "template": missing}))
         self.write(name(), json.dumps({"schemaVersion": 1, "template": sample(name=7)}))
         self.write(name(), json.dumps({"schemaVersion": 1, "template": sample(instructions="   ")}))
-        self.write(name(), b"\xff\xfe\x00 not utf-8")
+        self.write(name(), bytes((255, 254, 0)) + b" not utf-8")
         self.write(name(), b"")
         self.write(name(), json.dumps({"schemaVersion": 1, "template": sample()}) + " " * my_templates.MAX_FILE_BYTES)
         other = str(uuid.uuid4())
@@ -119,7 +119,7 @@ class StoreTests(unittest.TestCase):
 
     def test_text_is_cleaned_and_variables_follow_the_catalog_rules(self):
         saved = self.store.save(sample(
-            name="Trip\u0000 Planner‮", vibe=" Calm\n and kind ",
+            name="Trip\u0000 Planner" + chr(0x202E), vibe=" Calm\n and kind ",
             instructions="Line one\r\nLine two\u0007",
             variables=[
                 {"key": "home_city", "label": "Home city", "type": "text", "example": "Lisbon"},
