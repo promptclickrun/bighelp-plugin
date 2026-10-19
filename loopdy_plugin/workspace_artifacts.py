@@ -1,7 +1,9 @@
 """Workspace file projection for bighelp native clients.
 
-Every operation starts from the serving profile's working folder, found the way
-Hermes finds it (``workspace_root``), and traverses below that canonical root.
+Every operation starts from an agent's working folder, found the way Hermes
+finds it (``workspace_root``), and traverses below that canonical root. The
+agent is the serving profile unless the request names another profile on this
+Hermes: each agent shows its own folder in the app.
 It never uses Hermes' permissive managed-files fallback, and never enters
 Hermes' own folders, which hold its settings and keys.
 """
@@ -26,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import workspace_root
-from .native_context import NativeAPIError, NativeContext, native_context
+from .native_context import PROFILE_ID, NativeAPIError, NativeContext, native_context
 
 
 CAPABILITY = "native-workspace-files-v1"
@@ -39,6 +41,9 @@ RECENT_CAPABILITY = "native-workspace-recent-v1"
 # agent in its own folder (hosted Hermes). Without it the app says to update or
 # restart, not to set terminal.cwd.
 HERMES_HOME_CAPABILITY = "native-workspace-hermes-home-v1"
+# A request may name another agent (profile) on this Hermes, whose own folder
+# it then reads, with the same refusals as the serving agent's.
+AGENTS_CAPABILITY = "native-workspace-files-agents-v1"
 RECENT_LIMIT = 300
 RECENT_HISTORY_ROWS = 3_000
 RECENT_SHALLOW_DEPTH = 2
@@ -69,6 +74,7 @@ MAX_ROWS = 2_000
 class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     path: str | None = Field(default=None, max_length=4_096)
+    profile: str | None = Field(default=None, max_length=64)
 
 
 def _pairs(values: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -548,9 +554,9 @@ async def request(operation: str, request: Request) -> Response:
     body = await _body(request)
     if native_context(request) != context:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
-    workspace = await run_in_threadpool(workspace_root.resolve, context.serving_profile_id)
+    profile_id = await run_in_threadpool(_requested_profile, body.profile, context.serving_profile_id)
+    workspace = await run_in_threadpool(workspace_root.resolve, profile_id)
     root = workspace.root
-    profile_id = context.serving_profile_id
     if profile_id is None:
         raise NativeAPIError(501, "workspace_identity_unavailable", "This host cannot identify its serving profile workspace.")
     hidden = await run_in_threadpool(workspace_root.hermes_folders, profile_id)
@@ -584,6 +590,21 @@ async def request(operation: str, request: Request) -> Response:
     return Response(encoded, media_type="application/json", headers={
         "Cache-Control": "no-store", "ETag": context.etag, "X-Loopdy-Request-ID": request_id,
     })
+
+
+def _requested_profile(requested: str | None, serving: str | None) -> str | None:
+    """The agent whose folder is asked for: the serving one, or another profile on this Hermes."""
+    if requested is None or requested == serving:
+        return serving
+    if PROFILE_ID.fullmatch(requested) is None:
+        raise NativeAPIError(422, "invalid_request", "The agent ID is invalid.")
+    try:
+        from hermes_cli.profiles import profile_exists
+    except ImportError:
+        raise NativeAPIError(501, "workspace_identity_unavailable", "This host cannot look up its agents.") from None
+    if not profile_exists(requested):
+        raise NativeAPIError(404, "agent_not_found", "No agent with that ID is on this Hermes.")
+    return requested
 
 
 async def _body(request: Request) -> _Body:

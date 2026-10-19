@@ -22,6 +22,7 @@ PROCESS_FEATURES = (
     "native-room-activity-v1", "native-room-typing-v1", "native-room-peer-typing-v1",
     "native-project-git-read-v1", "native-agent-templates-v1",
     "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
+    "native-workspace-files-agents-v1",
     "native-host-restart-v1",
     "native-provider-usage-v1", "native-provider-sign-in-v1", "native-workflows-v1", "native-workflows-edit-v1",
     "native-workflows-parallel-v1", "native-workflows-delivery-v1", "native-workflows-outcomes-v1",
@@ -69,33 +70,33 @@ class NativeStartupLoggingTests(unittest.TestCase):
                                 available=Mock(return_value=True))
         self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[12],
                             RECENT_CAPABILITY=PROCESS_FEATURES[13], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[14],
-                            available=Mock(return_value=True))
+                            AGENTS_CAPABILITY=PROCESS_FEATURES[15], available=Mock(return_value=True))
         self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
-        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[15],
+        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[16],
                               available=Mock(return_value=True), release_locks_left_by_restart=Mock())
-        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[16],
+        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[17],
                             available=Mock(return_value=True))
-        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[17],
+        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[18],
                               available=Mock(return_value=True))
-        self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[18],
-                                EDIT_CAPABILITY=PROCESS_FEATURES[19], PARALLEL_CAPABILITY=PROCESS_FEATURES[20],
-                                DELIVERY_CAPABILITY=PROCESS_FEATURES[21], OUTCOMES_CAPABILITY=PROCESS_FEATURES[22],
-                                TRIGGER_CAPABILITY=PROCESS_FEATURES[23], CODE_CAPABILITY=PROCESS_FEATURES[24],
+        self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[19],
+                                EDIT_CAPABILITY=PROCESS_FEATURES[20], PARALLEL_CAPABILITY=PROCESS_FEATURES[21],
+                                DELIVERY_CAPABILITY=PROCESS_FEATURES[22], OUTCOMES_CAPABILITY=PROCESS_FEATURES[23],
+                                TRIGGER_CAPABILITY=PROCESS_FEATURES[24], CODE_CAPABILITY=PROCESS_FEATURES[25],
                                 probe=Mock(return_value=None), triggers_available=Mock(return_value=True),
                                 code_available=Mock(return_value=True))
-        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[25],
+        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[26],
                                   available=Mock(return_value=True))
-        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[26],
+        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[27],
                             available=Mock(return_value=True))
-        self.composio = module("loopdy_plugin.composio", CAPABILITY=PROCESS_FEATURES[27],
+        self.composio = module("loopdy_plugin.composio", CAPABILITY=PROCESS_FEATURES[28],
                                available=Mock(return_value=True))
-        self.agent_talk = module("loopdy_plugin.agent_talk", CAPABILITY=PROCESS_FEATURES[28],
+        self.agent_talk = module("loopdy_plugin.agent_talk", CAPABILITY=PROCESS_FEATURES[29],
                                  available=Mock(return_value=True))
-        self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[29],
+        self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[30],
                                     available=Mock(return_value=True))
-        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[30],
+        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[31],
                            available=Mock(return_value=True), register=Mock())
-        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[31],
+        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[32],
                                    available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
@@ -167,7 +168,8 @@ class NativeStartupLoggingTests(unittest.TestCase):
                                                   "native-device-appearance-v1"),
             "loopdy_plugin.agent_templates": ("native-agent-templates-v1",),
             "loopdy_plugin.workspace_artifacts": ("native-workspace-files-v1", "native-workspace-recent-v1",
-                                                  "native-workspace-hermes-home-v1"),
+                                                  "native-workspace-hermes-home-v1",
+                                                  "native-workspace-files-agents-v1"),
         }
         for name, omitted in missing.items():
             with self.subTest(module=name), patch.dict(sys.modules, {name: None}), \
