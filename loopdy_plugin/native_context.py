@@ -390,4 +390,9 @@ def _native_features(
         features.append(team_capability)
     else:
         skip(team_capability, "Hermes' profile and config helpers are unimportable.")
+    from .my_templates import CAPABILITY as my_templates_capability, available as my_templates_available
+    if my_templates_available():
+        features.append(my_templates_capability)
+    else:
+        skip(my_templates_capability, "saved templates need a POSIX host and Hermes' home helpers.")
     return profile, tuple(features)
