@@ -142,8 +142,6 @@ The `skills/` folder has read-only guidance for agents. Agents open it with `ski
 - `generative-ui`: when and how to use each card tool.
 - `bighelp-feed-and-ideas`: post to the agent board only when the user asks.
 - `custom-theme-authoring`: make themes that the app can import.
-- `bighelp-marketplace-publish`: prepare a theme, card template or skill for review. The bighelp Marketplace is
-  closed, so this skill and `bighelp_marketplace_prepare_upload` cannot publish anything now.
 
 Since 3.0.0, the agent tools have `bighelp_*` names (before, they had `loopdy_*` names). The `iphone_*` tools keep
 their names. Most tools are in the `bighelp` toolset, which had the name `loopdy`. Saved tool settings and

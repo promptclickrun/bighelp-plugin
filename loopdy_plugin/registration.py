@@ -37,7 +37,6 @@ from .activity_bridge import (
     finish_failed_turn_activity,
     publish_hook_activity,
 )
-from .attachments import AttachmentStore
 from .events import BighelpEvent
 from .hooks import normalize_hook
 from .workflow_runner import in_workflow_stage
@@ -45,7 +44,6 @@ from .generative_ui import extract_rendered_envelope
 from .link_client import LINK_ENV_KEYS, load_runtime_config
 from .link_contracts import generative_ui_event, notification_event
 from .link_identity import pre_llm_context_from_state
-from .marketplace import MarketplaceGatewayClient, MarketplacePublisher
 from .naming import CLI_COMMAND, LEGACY_CLI_COMMAND, register_legacy_toolset_alias
 from .plugin_update import (
     PluginUpdateManager,
@@ -85,34 +83,11 @@ def _device_tools_supported() -> bool:
     return tool_execution_context_type() is not None
 
 
-def register_marketplace_publish_skill(ctx: Any) -> None:
-    """Register bighelp's read-only publishing guidance with Hermes."""
-
-    description = (
-        "Use when publishing bighelp themes, cards, or skills. "
-        "Prepare a private draft for review in bighelp."
-    )
-    ctx.register_skill(
-        "bighelp-marketplace-publish",
-        Path(__file__).resolve().parents[1]
-        / "skills"
-        / "bighelp-marketplace-publish"
-        / "SKILL.md",
-        description=description,
-        frontmatter={
-            "name": "bighelp-marketplace-publish",
-            "description": description,
-        },
-    )
-
-
 def register(
     ctx: Any,
     *,
     service: Any | None = None,
     activity_broker: LinkActivityBroker | Any | None = None,
-    marketplace_gateway_client: Any | None = None,
-    attachment_store: AttachmentStore | Any | None = None,
     direct_session_opener: Any | None = None,
     presentation_observer: Any | None = None,
     voice_dispatch: Any | None = None,
@@ -141,36 +116,7 @@ def register(
             direct_session_opener=direct_session_opener,
             presentation_observer=presentation_observer, voice_dispatch=voice_dispatch)
 
-    selected_attachment_store = attachment_store or AttachmentStore(
-        get_hermes_home()
-        / "plugin-data"
-        / "loopdy"
-        / "agent-attachments.sqlite3"
-    )
-    selected_gateway_client = marketplace_gateway_client
-    if selected_gateway_client is None:
-        try:
-            runtime_config = load_runtime_config()
-        except (TypeError, ValueError):
-            runtime_config = None
-        if runtime_config is not None:
-            # Draft creation needs the paired host's signed-device identity;
-            # release trust anchors are independently required for installs.
-            selected_gateway_client = MarketplaceGatewayClient(
-                config=runtime_config,
-                trust_keys={},
-            )
-    register_tools(
-        ctx,
-        store=active_service.store,
-        profile=profile,
-        marketplace_publisher=MarketplacePublisher(
-            agent_id=profile,
-            store=active_service.store,
-            attachment_store=selected_attachment_store,
-            gateway_client=selected_gateway_client,
-        ),
-    )
+    register_tools(ctx, store=active_service.store, profile=profile)
     # Hermes 0.21.2 removed the optional ToolExecutionContext carried by
     # MessageEvent. When the public execution-middleware surface is present,
     # bighelp's native phone channel owns the tool call and receives Hermes'
@@ -184,7 +130,6 @@ def register(
             ctx,
             bridge=device_tool_bridge if legacy_device_tools else None,
         )
-    register_marketplace_publish_skill(ctx)
     from .agent_guide import register as register_agent_guide
     register_agent_guide(ctx)
     # Feed, Ideas, Goals, Activity and Approvals history for the bighelp app.

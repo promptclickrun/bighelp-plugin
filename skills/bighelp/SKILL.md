@@ -172,8 +172,6 @@ If it's off, tell them how to turn it on, or give them the filled text.
 ## More
 
 - Color themes the app can import: `skill_view("loopdy:custom-theme-authoring")`.
-- Publishing a theme, card template or skill for review:
-  `skill_view("loopdy:bighelp-marketplace-publish")`.
 
 ## Ground rules
 

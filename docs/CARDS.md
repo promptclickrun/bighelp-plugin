@@ -287,8 +287,8 @@ Rules:
   from the app.
 - Templates belong to the agent's profile. Other profiles can't see, render or
   change them.
-- Saving only writes the store. It doesn't render, notify, schedule, post to a
-  board or publish to the Marketplace.
+- Saving only writes the store. It doesn't render, notify, schedule or post to a
+  board.
 
 The result is `{"status": "created" | "updated" | "unchanged", "template_id",
 "version", "sha256", "template", "usage_guidance", "parameters_schema",

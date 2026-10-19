@@ -910,6 +910,21 @@ class RegistrationTests(unittest.TestCase):
         self.assertIn("Do not stop at prose", result["context"])
         self.assertIsNone(cron)
 
+    def test_retired_marketplace_tool_and_skill_are_not_registered(self) -> None:
+        # The bighelp Marketplace is gone: its service has no draft routes and the app has no Marketplace,
+        # so an agent that called the tool always failed.
+        import yaml
+        from loopdy_plugin.registration import register
+
+        context = _Context()
+        register(context, service=_Service())
+
+        self.assertNotIn("bighelp_marketplace_prepare_upload", context.tools)
+        self.assertNotIn("bighelp-marketplace-publish", context.skills)
+        manifest = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8"))
+        self.assertNotIn("bighelp_marketplace_prepare_upload", manifest["provides_tools"])
+        self.assertFalse((PLUGIN_ROOT / "skills" / "bighelp-marketplace-publish").exists())
+
     def test_native_surfaces_and_nonblocking_hooks_are_registered(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "loopdy_entry_for_test",
@@ -965,10 +980,9 @@ class RegistrationTests(unittest.TestCase):
             } | ({"on_room_member_activity"} if "on_room_member_activity" in VALID_HOOKS else set())
               | ({"on_stream_delta"} if {"on_room_member_activity", "on_stream_delta"} <= VALID_HOOKS else set()),
         )
-        self.assertEqual(set(context.skills), {"bighelp-marketplace-publish", "bighelp-feed-and-ideas", "bighelp",
-                                               "generative-ui", "custom-theme-authoring"})
+        self.assertEqual(set(context.skills), {"bighelp-feed-and-ideas", "bighelp", "generative-ui",
+                                               "custom-theme-authoring"})
         self.assertTrue(context.skills["bighelp-feed-and-ideas"]["path"].is_file())
-        self.assertTrue(context.skills["bighelp-marketplace-publish"]["path"].is_file())
 
         self.assertIsNone(
             context.hooks["pre_llm_call"](

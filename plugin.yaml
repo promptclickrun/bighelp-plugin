@@ -82,7 +82,6 @@ provides_tools:
   - bighelp_get_card_template
   - bighelp_render_card_template
   - bighelp_save_ui_template
-  - bighelp_marketplace_prepare_upload
   - bighelp_react_to_message
   - bighelp_request_secure_input
   - bighelp_board
