@@ -775,6 +775,11 @@ def handle_cli(
         return
     if action == "status":
         apns = service.store.load_apns_config()
+        health = service.health()
+        if health.get("mode") == "managed" and not health.get("configured"):
+            # Nothing builds this legacy "managed" provider any more: the app's notifications are
+            # managed_notifications.py, counted under "notifications".
+            health = {**health, "detail": "Not used: the bighelp app sets up notifications (see notifications)"}
         _print_json(
             {
                 "devices": [
@@ -782,8 +787,9 @@ def handle_cli(
                 ],
                 "home_target": _home_target(),
                 "provider": service.store.provider_mode(),
-                "provider_health": service.health(),
+                "provider_health": health,
                 "apns": _redacted_apns_config(apns),
+                "notifications": _app_notifications_status(),
             }
         )
         return
@@ -835,6 +841,15 @@ def handle_cli(
         _print_json(service.test_notification(target=target, profile=profile))
         return
     raise ValueError("Unknown bighelp command")
+
+
+def _app_notifications_status() -> dict[str, Any]:
+    """The app's notifications: a count only, never grant IDs, keys or phones."""
+    try:
+        from .managed_notifications import get_managed_notifications
+        return {"available": True, "active_grants": get_managed_notifications().active_grant_count()}
+    except Exception:
+        return {"available": False}
 
 
 def _handle_files_cli(args: Any) -> None:

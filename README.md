@@ -205,8 +205,8 @@ not configure it on new hosts:
 
 - `hermes bighelp link status` and `hermes bighelp link unpair`. `unpair` removes the `LOOPDY_LINK_*` keys that
   pairing saved. `link pair` only tells you that Link no longer pairs hosts.
-- `hermes bighelp status`, `provider`, `configure-apns`, `remove-apns` and `test`: the old push settings. `status`
-  does not show the notifications that you turn on in the app.
+- `hermes bighelp status`, `provider`, `configure-apns`, `remove-apns` and `test`: the old push settings. For the
+  notifications that you turn on in the app, `status` shows only how many grants are active (`notifications`).
 - `hermes bighelp direct …`: the old paired transport. The plugin does not start it.
 - `hermes bighelp wiki …`: wiki grants for Link devices. These commands work only on a host that still has a Link
   pairing. The app connects wikis with your Hermes login.

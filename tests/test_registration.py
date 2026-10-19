@@ -715,6 +715,37 @@ class RegistrationTests(unittest.TestCase):
                 )
             self.assertIsNone(service.store.config)
 
+    def test_status_does_not_ask_for_buzzkit_setup_when_the_app_set_up_notifications(self) -> None:
+        # The legacy push store's "managed" provider is never built any more; the app's
+        # notifications run through managed_notifications.py instead.
+        from loopdy_plugin.registration import handle_cli, setup_cli
+        from loopdy_plugin.service import BighelpService
+        from loopdy_plugin.store import BighelpStore
+
+        parser = argparse.ArgumentParser()
+        setup_cli(parser)
+        with tempfile.TemporaryDirectory() as directory:
+            service = BighelpService(BighelpStore(Path(directory) / "loopdy.sqlite3"))
+            self.addCleanup(service.close)
+            for grants in (2, None):
+                managed = SimpleNamespace(active_grant_count=lambda grants=grants: grants)
+                if grants is None:
+                    managed = SimpleNamespace()
+                output = io.StringIO()
+                with (
+                    patch("loopdy_plugin.managed_notifications.get_managed_notifications", return_value=managed),
+                    contextlib.redirect_stdout(output),
+                ):
+                    handle_cli(parser.parse_args(["status"]), service=service, profile="default")
+                status = json.loads(output.getvalue())
+                self.assertNotIn("Complete BuzzKit", output.getvalue())
+                self.assertEqual(status["provider"], "managed")
+                self.assertFalse(status["provider_health"]["configured"])
+                if grants is None:
+                    self.assertEqual(status["notifications"], {"available": False})
+                else:
+                    self.assertEqual(status["notifications"], {"available": True, "active_grants": 2})
+
     def test_loopdy_link_pairing_commands_are_registered(self) -> None:
         from loopdy_plugin.registration import setup_cli
 
