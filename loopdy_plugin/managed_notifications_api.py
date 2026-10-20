@@ -43,6 +43,8 @@ class WorkflowAlertsBody(BaseModel):
 class PreferencesBody(VersionedBody):
     peerChats: StrictBool
     workflows: WorkflowAlertsBody | None = None
+    # The phone opens a scheduled task's alert in the job's chat or on the job (scheduled_links.py).
+    scheduledLinks: StrictBool | None = None
 
 
 class WorkBody(VersionedBody):
@@ -115,10 +117,11 @@ def preferences(grant_id: str):
 @router.put("/enrollments/{grant_id}/preferences")
 def set_preferences(grant_id: str, body: PreferencesBody):
     """This phone's alert choices for the host: peer chats (agents talking to each other) start off,
-    workflow alerts (needs you, succeeded, failed, cancelled) start on."""
+    workflow alerts (needs you, succeeded, failed, cancelled) start on, scheduled links start off."""
     workflows = body.workflows.model_dump() if body.workflows is not None else None
     return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats,
-                                                                      workflows=workflows))
+                                                                      workflows=workflows,
+                                                                      scheduled_links=body.scheduledLinks))
 
 
 @router.post("/enrollments/{grant_id}/work")
