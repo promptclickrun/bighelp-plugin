@@ -36,6 +36,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from . import live_alerts
 from . import quiet_hours
+from . import scheduled_links
 from .card_previews import reply_preview
 from .reactions import REACTION_SCHEMA
 from .notification_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
@@ -347,10 +348,12 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS preferences(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, peer_chats INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS workflow_alerts(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, needs_you INTEGER NOT NULL, succeeded INTEGER NOT NULL, failed INTEGER NOT NULL, cancelled INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS workflow_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_seq INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS scheduled_links(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS quiet_hours(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, time_zone TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
             db.executescript(live_alerts.SCHEMA)
+            db.executescript(scheduled_links.SCHEMA)
 
     @contextmanager
     def _db(self):
@@ -398,7 +401,7 @@ class ManagedNotifications:
             clarification_loaded = bool(self._clarification_profiles)
         return {"version": 1, "hostKeyId": self.key_id, "hostPublicKey": self.public_key,
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
-                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True},
+                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True, "scheduledLinks": True},
                 "richLiveActivitySupported": True, "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
@@ -557,24 +560,28 @@ class ManagedNotifications:
             db.execute("DELETE FROM recipients WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM avatar_keys WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM quiet_hours WHERE grant_id=?", (grant_id,))
+            db.execute("DELETE FROM scheduled_links WHERE grant_id=?", (grant_id,))
         return {"version": 1, "state": "removed", "grantId": grant_id}
 
     def preferences(self, grant_id: str):
-        """This phone's alert preferences for the host. Peer chats start off; workflow alerts start on."""
+        """This phone's alert preferences for the host. Peer chats start off; workflow alerts start on.
+        Scheduled links start off: a phone turns them on when it can open them (scheduled_links.py)."""
         self._grant(grant_id)
         with self._db() as db:
             row = db.execute("SELECT peer_chats FROM preferences WHERE grant_id=?", (grant_id,)).fetchone()
             workflows = self._workflow_alerts(db, grant_id)
-        return {"version": 1, "peerChats": bool(row and row["peer_chats"]), "workflows": workflows}
+            links = db.execute("SELECT enabled FROM scheduled_links WHERE grant_id=?", (grant_id,)).fetchone()
+        return {"version": 1, "peerChats": bool(row and row["peer_chats"]), "workflows": workflows,
+                "scheduledLinks": bool(links and links["enabled"])}
 
     @staticmethod
     def _workflow_alerts(db, grant_id: str) -> dict[str, bool]:
         row = db.execute("SELECT * FROM workflow_alerts WHERE grant_id=?", (grant_id,)).fetchone()
         return {kind: bool(row[column]) if row else True for kind, column in _WORKFLOW_COLUMNS.items()}
 
-    def set_preferences(self, grant_id: str, *, peer_chats: Any, workflows: Any = None):
+    def set_preferences(self, grant_id: str, *, peer_chats: Any, workflows: Any = None, scheduled_links: Any = None):
         self._grant(grant_id)
-        if type(peer_chats) is not bool:
+        if type(peer_chats) is not bool or (scheduled_links is not None and type(scheduled_links) is not bool):
             raise ManagedNotificationError("notification_preferences_invalid", 422)
         if workflows is not None and (not isinstance(workflows, dict) or set(workflows) != set(WORKFLOW_ALERT_KINDS)
                                       or any(type(value) is not bool for value in workflows.values())):
@@ -585,6 +592,9 @@ class ManagedNotifications:
             if workflows is not None:
                 db.execute("INSERT OR REPLACE INTO workflow_alerts VALUES(?,?,?,?,?)",
                            (grant_id, *(int(workflows[kind]) for kind in WORKFLOW_ALERT_KINDS)))
+            if scheduled_links is not None:
+                db.execute("INSERT INTO scheduled_links VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET enabled=excluded.enabled",
+                           (grant_id, int(scheduled_links)))
         return self.preferences(grant_id)
 
     def _quiet_window(self, grant_id: str, db=None) -> dict[str, Any] | None:
@@ -1005,6 +1015,56 @@ class ManagedNotifications:
         self._queue_event(profile, session_id, f"agent-message.{digest[:32]}", "session.completed",
                           event_key=digest, content_text=body, sender=sender)
 
+    def _openable_chat(self, profile: str, session_id: str) -> bool | None:
+        """Whether a session is a chat of this agent that a person reads: True or False, or None
+        when its store can't say right now."""
+        def read(db):
+            row = db.get_session(session_id)
+            return (isinstance(row, dict) and row.get("id") == session_id and row.get("profile_name") == profile
+                    and not row.get("deleted_at") and not scheduled_links.is_unattended(row))
+        try:
+            return bool(self.session_opener(profile, read, read_only=True))
+        except (LookupError, OSError, ValueError, sqlite3.Error):
+            return None
+
+    def _observe_cron_tool(self, profile: str, session_id: str, payload: dict[str, Any]):
+        """The agent made, changed or removed a scheduled job with Hermes' cron tool. Made or
+        changed in a person's chat, the job's alerts take a phone back to that chat."""
+        change = scheduled_links.cron_tool_change(payload.get("tool_name"), payload.get("args"), payload.get("result"))
+        if change is None:
+            return
+        action, job = change
+        if action == "unlink":
+            with self._db() as db:
+                scheduled_links.unlink(db, profile, job)
+            return
+        # A scheduled run's own turn is no one's chat, and neither is a session of another agent.
+        if scheduled_links.job_of_run(profile, session_id) or self._openable_chat(profile, session_id) is not True:
+            return
+        with self._db() as db:
+            scheduled_links.link(db, profile, job, session_id, int(self.clock()))
+
+    def _scheduled_link(self, profile: str, session_id: str) -> str | None:
+        """Where a scheduled run's alert takes a phone that opens links: the job's chat while it is
+        still this agent's, else the job. None when the run names no job: the alert keeps the run."""
+        try:
+            job = scheduled_links.job_of_run(profile, session_id)
+            if job is None:
+                return None
+            with self._db() as db:
+                chat = scheduled_links.linked_chat(db, profile, job)
+            if chat is not None:
+                openable = self._openable_chat(profile, chat)
+                if openable:
+                    return scheduled_links.CHAT_PREFIX + chat
+                if openable is False:
+                    with self._db() as db:
+                        scheduled_links.unlink(db, profile, job, chat)
+            return scheduled_links.JOB_PREFIX + job
+        except (ValueError, OSError, sqlite3.Error):
+            logger.warning("Scheduled alert link unavailable; the alert names its run")
+            return None
+
     def _queue_event(self, profile: str, session_id: str, turn_id: str, event_type: str,
                      *, tool_call_id: str | None = None, event_key: str = "",
                      content_text: str, title: str | None = None, workflow_kind: str | None = None,
@@ -1024,6 +1084,7 @@ class ManagedNotifications:
                 agent_name = profile_display_name(sender)
         now = int(self.clock())
         queued: list[str] = []
+        link = self._scheduled_link(profile, session_id) if event_type.startswith("scheduled.") else None
         # Agents talking to each other alert only phones that asked for it (Peer chats).
         peer_chat = sender is not None or (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
                                            and self._is_peer_chat(profile, session_id))
@@ -1076,6 +1137,10 @@ class ManagedNotifications:
                                (event_id, grant["grantId"], profile, session_id, turn_id, tool_call_id,
                                 self._approval_owner, "pending", expires, "observed"))
                 reference = session_reference(profile, session_id)
+                # The run stays the alert's identity; a phone that opens links is taken to the job's chat or the job.
+                if link and db.execute("SELECT 1 FROM scheduled_links WHERE grant_id=? AND enabled=1",
+                                       (grant["grantId"],)).fetchone():
+                    reference = session_reference(profile, link)
                 # End to end: only the enrolled phone can read the name, text and avatar.
                 raw = self._sealed_event(db, grant["grantId"], recipient["public_key"], event_id=event_id,
                     event_type=event_type, session_reference=reference, turn_id=turn_id, occurred_at=now,
@@ -1119,6 +1184,9 @@ class ManagedNotifications:
         session_id = payload.get("parent_session_id") if child_hook else payload.get("session_id")
         if not isinstance(session_id, str) or not _ID.fullmatch(session_id): return
         if not child_hook and (payload.get("parent_session_id") or payload.get("platform") == "subagent"): return
+        # Recorded with or without a phone enrolled, so a phone that enrolls later still gets the job's chat.
+        if hook == "post_tool_call" and scheduled_links.is_cron_tool(payload.get("tool_name")):
+            self._observe_cron_tool(profile, session_id, payload)
         with self._db() as db:
             if not db.execute("SELECT 1 FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (int(self.clock()), profile)).fetchone(): return
         if hook == "pre_tool_call" and payload.get("tool_name") == "clarify" and not child_hook:
