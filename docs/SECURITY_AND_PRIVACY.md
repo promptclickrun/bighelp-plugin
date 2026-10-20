@@ -10,11 +10,10 @@ current code. It isn't legal advice or an independent audit.
 | Chats, prompts and replies | In Hermes' normal history | To the app you're signed in with, and to your AI provider as Hermes normally sends it |
 | Agent board (Feed, Ideas, Goals, Activity, approvals) | `plugin-data/loopdy/board.sqlite3` per profile | To the app on request |
 | Agent attachments | Approved copies in `plugin-data/loopdy/agent-attachments.sqlite3` | To the app, by opaque ID |
-| Workspace files and wikis | Only folders you grant | To the app, read on request (wikis can also be edited) |
+| Workspace files | Only folders you grant | To the app, read on request |
 | iPhone tool results | In the chat's normal history, like any tool result | Come from your phone; go to your AI provider with the chat |
 | Live voice audio | Not stored | Flows directly between your phone and the voice provider |
 | Notification content | Pending events under `plugin-data/loopdy/managed-notifications/` | Sealed for your phone with current app builds; see below |
-| Context usage | Token counts only, no text | To the app |
 | Agents talking to each other | Not stored: read from the other agent's own history | To the app on request: chat IDs, times and the tool running, matched by a hash of each message; never words. See [Agents talking](AGENT_TALK.md) |
 | A chat busy in another process | Not stored: read from Hermes' chat leases and the agent's history | To the app on request: whether another Hermes process runs the chat, the tool and its start time. Stop sends that process Ctrl-C, only when its pid and start time match Hermes' lease. See [Agents talking](AGENT_TALK.md) |
 | Teamwork | When on: a team brief (agents' names, IDs and roles) in each agent's `config.yaml` under `platform_hints.bighelp`, and `plugin-data/loopdy/team.json` at the Hermes root | Agents' names and roles to the app, and to your AI provider in each agent's instructions. See [Teamwork](TEAMWORK.md) |

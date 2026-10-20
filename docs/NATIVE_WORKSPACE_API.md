@@ -7,8 +7,7 @@ Stock Hermes REST and `/api/ws` still own native chat and workspace execution.
 
 This is not full native parity. Optional
 [room tool observations](NATIVE_ROOM_ACTIVITY.md) extend this foundation on
-supported main builds. [Native Wiki](NATIVE_WIKI.md) uses the same verified
-principal without extra pairing. [iPhone tools](IPHONE_DEVICE_TOOLS.md) use a
+supported main builds. [iPhone tools](IPHONE_DEVICE_TOOLS.md) use a
 short-lived phone channel on the same routes.
 
 ## Authentication and context
@@ -43,7 +42,6 @@ No change to host authentication, URL or listening port is required.
 
 Only provider (128 UTF-8 bytes), user ID (512) and optional display name (200)
 are copied. Credentials and Session objects are never returned or logged.
-Person-scoped Wiki routes are not advertised for the dashboard-wide grant.
 Other native features use their existing context and operation preconditions.
 The app's local auth/connection generations reject stale callbacks. Native
 workspace access does not create a per-profile ACL or phone permission.
@@ -61,8 +59,6 @@ Features are finite: `native-context-v1`, `serving-profile-v1` when proven, and
 are available. `native-room-activity-v1`, `native-room-typing-v1` and
 `native-room-peer-typing-v1` are added only with an actual supported live
 public-hook registration. These are not universal Hermes capability or runtime health claims.
-`native-wiki-v1` advertises the fixed principal-owned Wiki adapter on secure
-traversal platforms; folder policy and local journal availability still apply.
 `native-project-git-read-v1` exposes the distinct fixed read-only Project Git
 contract using verified public Project/stored-session association and the
 existing content-token engine. See [Native Project Git](NATIVE_PROJECT_GIT.md);
@@ -156,7 +152,6 @@ re-probe roots after reconnect.
 
 | Capability | Current native boundary |
 | --- | --- |
-| Wiki | Session principal/profile ownership with one shared registry/lock and no additional pairing. See [Wiki](NATIVE_WIKI.md). |
 | Phone tools | A phone channel is bound to one agent and session; Hermes' tool execution middleware routes `iphone_*` calls to it using Hermes' own turn and tool-call IDs. See [iPhone tools](IPHONE_DEVICE_TOOLS.md). |
 | Hosted person context | Public pre-LLM hooks lack authoritative hosted room/member/discussion/task-generation/person binding. Generic native durable actor remains honest; no private/task-title/text inference. |
 | Group activity | Optional main-only public observer feeds are asynchronous, lossy and local-member-only; see the exact HTTP polling contract. No durable replay or completion-success inference. |

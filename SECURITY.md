@@ -17,7 +17,7 @@ Only the [latest release](https://github.com/promptclickrun/bighelp-plugin/relea
   context tag on each request. The plugin opens no extra ports and has no account system of its own.
 - **Hermes stays in charge.** Tools, approvals, chats and scheduled tasks run through Hermes. The plugin never
   widens an approval, invents a choice Hermes didn't offer, or runs a model loop of its own.
-- **Nothing on disk is exposed by default.** Workspace folders and wikis are shared only when explicitly granted.
+- **Nothing on disk is exposed by default.** The plugin shares a workspace folder only when you grant it.
   Paths are re-checked on every read, and symlinks, credential folders and Hermes' own control folders are
   refused. Agent attachments are served by opaque ID and only if the chat really sent them.
 - **Secrets stay on the host.** Provider credentials, the notification signing key and private keys are never

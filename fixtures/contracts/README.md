@@ -1,6 +1,6 @@
 # Contract fixtures
 
-These test vectors are shared with the bighelp app. They hold made-up
+The bighelp app uses the same test vectors. They hold made-up
 coordinates and keys only, never production credentials.
 
 - `sealed-alert-v2-vector.json`: one sealed notification. It must match the

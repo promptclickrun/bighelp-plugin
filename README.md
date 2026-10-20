@@ -21,7 +21,7 @@ dashboard and uses its sign-in. It opens no extra ports and needs no bighelp acc
 - macOS or Linux. The plugin loads on native Windows, but these features need macOS or Linux:
   - notifications, Live Activities, instant alerts and Quiet Hours
   - workflows and Dev Factory
-  - the Files tab, wikis and project Git
+  - the Files tab and project Git
   - My Templates
   - provider sign-in
   - self-update and the in-place restart
@@ -94,7 +94,6 @@ launchd, systemd and Hermes Desktop continue to supervise it. Chats that run on 
 | iPhone tools | `iphone_calendar`, `iphone_reminders` and `iphone_location` (where you are now). Each tool is off until you allow it for a host on your phone. When you ask, `iphone_appearance` changes the light or dark mode and the chat color of bighelp. It is on until you turn it off. The tools work only while the phone is unlocked and bighelp shows a chat with that host. Only the agent that serves the app can use them. Current app builds do not offer Health, so only older builds can use `iphone_health`. | [iPhone tools](docs/IPHONE_DEVICE_TOOLS.md) |
 | Live voice | Talk with your agent in real time. Live voice uses the Codex subscription that is signed in on the host, or an API key. The work itself runs as a normal Hermes chat. | [Live voice](docs/LIVE_VOICE.md) |
 | Project Git | See the Git status and diffs of a project. Read-only. | [Project Git](docs/NATIVE_PROJECT_GIT.md) |
-| Wiki | Routes that connect a folder of Markdown notes, so that you can read and edit it with your Hermes login. The current bighelp app does not show wikis. | [Wiki](docs/NATIVE_WIKI.md) |
 | Agents talking | When one agent asks another (`hermes -p <agent> chat -q`, or `message_agent`), the chat shows what the other agent does while it works, and which of its chats the exchange used. The plugin reads the history of the other agent and does not change it. The app sends a hash of each message, never the words. When a chat is busy in another Hermes process, the app shows it and can stop that run. | [Agents talking](docs/AGENT_TALK.md) |
 | Teamwork | Off until you turn it on in the app. Every agent learns who the other agents are and what they do, and its instructions tell it to give them the work that fits their role. The plugin saves this in the Hermes settings of each agent, and removes it when you turn Teamwork off. | [Teamwork](docs/TEAMWORK.md) |
 | Group chat activity | See which agents in a group chat type and which tools they use, live. Needs a Hermes host with the `on_room_member_activity` hook. | [Room activity](docs/NATIVE_ROOM_ACTIVITY.md) |
@@ -208,19 +207,22 @@ current app does not use them. Its Files tab shows the working folder of an agen
 
 ## Legacy code
 
-Earlier versions paired hosts through a bighelp Link account. They sent notifications through a relay or direct
-APNs. The current app uses none of this. The code that remains is only for existing data and older app builds. Do
-not configure it on new hosts:
+Earlier versions paired hosts through a bighelp Link account and sent notifications through a relay. The plugin no
+longer has that code. Link, its Direct transport, the relay and the wiki routes are gone. If an older host still has
+their settings, the plugin ignores them:
 
-- `hermes bighelp link status` and `hermes bighelp link unpair`. `unpair` removes the `LOOPDY_LINK_*` keys that
-  pairing saved. `link pair` only tells you that Link no longer pairs hosts.
-- `hermes bighelp status`, `provider`, `configure-apns`, `remove-apns` and `test`: the old push settings. For the
-  notifications that you turn on in the app, `status` shows only how many grants are active (`notifications`).
-- `hermes bighelp direct …`: the old paired transport. Its local listener starts only on a host that still has a
-  Link pairing and has `direct` turned on.
-- `hermes bighelp wiki …`: wiki grants for Link devices. These commands work only on a host that still has a Link
-  pairing. The native wiki routes use your Hermes login.
-- [Context usage](docs/CONTEXT_USAGE.md) reports go only to Link. The app reads context use from Hermes.
+- At startup, the plugin removes the `LOOPDY_LINK_*` keys that pairing saved in `.env`. It does not change other
+  lines.
+- The plugin ignores the old `direct` setting.
+- At the next start, the plugin deletes the relay rows in the notification store.
+- The files that Link, Direct and the wiki routes saved stay on the host. Nothing reads them.
+
+Some code stays for older setups and app builds. Do not configure it on new hosts:
+
+- `hermes bighelp status`, `provider`, `configure-apns`, `remove-apns` and `test`: the legacy push settings. A host
+  that has this push setup turns on the `loopdy` gateway platform. Scheduled tasks and approvals can then send
+  alerts to phones that use it. For the notifications that you turn on in the app, `status` shows only how many
+  grants are active (`notifications`).
 - The agent template routes (`native-agent-templates-v1`) stay for older app builds. The current app uses My
   Templates.
 
