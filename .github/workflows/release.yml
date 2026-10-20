@@ -1,11 +1,19 @@
 name: Release
 # The maintainer starts this when a batch of merged changes is ready:
-#   gh workflow run release.yml
-# It publishes the version in plugin.yaml as a GitHub Release, from the commit that
-# set that version. The bighelp app and `hermes bighelp update` install the latest
-# release, so a release reaches every host.
+#   gh workflow run release.yml                      # the release
+#   gh workflow run release.yml -f prerelease=true   # a test release first, if you want one
+# It publishes the version in plugin.yaml from the commit that set that version. Only the
+# files in release-files.txt go into the release: the script commits them to the
+# `releases` branch and tags that commit. The bighelp app and `hermes bighelp update`
+# install the latest release, so a release reaches every host. A test release
+# (v<version>-rc.<n>) is a GitHub pre-release, which they never install.
 on:
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Test release (v<version>-rc.<n>) that the app and hosts don't offer
+        type: boolean
+        default: false
 permissions:
   contents: write
   pull-requests: read
@@ -28,4 +36,4 @@ jobs:
       - name: Publish the plugin version
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/publish_release.py
+        run: python scripts/publish_release.py ${{ inputs.prerelease && '--prerelease' || '' }}
