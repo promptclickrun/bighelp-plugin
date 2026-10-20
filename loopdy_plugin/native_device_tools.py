@@ -134,6 +134,16 @@ def _owner_key(owner: Any) -> tuple[Any, ...]:
     )
 
 
+def _same_phone(channel: _Channel, owner: Any, fields: dict[str, Any]) -> bool:
+    """Whether a connect comes from the phone that holds this channel, for the same person."""
+    return (
+        _owner_key(channel.owner) == _owner_key(owner)
+        and channel.device_id == fields["deviceId"]
+        and channel.host_id == fields["hostId"]
+        and channel.authorization_epoch == fields["authorizationEpoch"]
+    )
+
+
 def _set_future(pending: _Pending, result: dict[str, Any]) -> None:
     try:
         pending.future.set_result(result)
@@ -313,13 +323,25 @@ class NativeDeviceToolHub:
             if channel_id in self.channels or channel_id in self._retired_ids:
                 raise NativeDeviceToolError("channel_id_consumed")
             self._purge_expired()
-            if len(self.channels) >= MAX_CHANNELS:
-                raise NativeDeviceToolError("channel_capacity", status=503)
             # A second phone for one live Hermes session is ambiguous.  It is
             # never selected by recency or by whichever request polls first.
-            for channel in tuple(self.channels.values()):
-                if channel.profile == profile and _same_live_session(channel.session_id, session_id):
-                    raise NativeDeviceToolError("channel_ambiguous")
+            # The same phone opening the chat again (the same signed-in person,
+            # device and host scope) replaces its own earlier channel: a phone
+            # whose app was closed, or whose close never arrived, would
+            # otherwise be shut out of its own chat until that lease ran out.
+            held = [
+                channel for channel in self.channels.values()
+                if channel.profile == profile and _same_live_session(channel.session_id, session_id)
+            ]
+            if any(not _same_phone(channel, owner, fields) for channel in held):
+                raise NativeDeviceToolError("channel_ambiguous")
+            for channel in held:
+                self._retire(channel)
+                self.channels.pop(channel.channel_id, None)
+            if held:
+                logger.info("bighelp native device channel replaced: the same phone reconnected")
+            if len(self.channels) >= MAX_CHANNELS:
+                raise NativeDeviceToolError("channel_capacity", status=503)
             channel = _Channel(
                 owner=owner,
                 channel_id=channel_id,
