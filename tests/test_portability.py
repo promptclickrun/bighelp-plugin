@@ -19,7 +19,7 @@ class PortabilityTests(unittest.TestCase):
         manifest = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["kind"], "platform")
-        from loopdy_plugin.link_contracts import PLUGIN_VERSION
+        from loopdy_plugin.version import PLUGIN_VERSION
         self.assertEqual(manifest["version"], PLUGIN_VERSION)
         self.assertEqual(set(manifest["platforms"]), {"linux", "macos", "windows"})
 

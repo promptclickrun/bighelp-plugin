@@ -12,7 +12,7 @@ import uuid
 
 from fastapi import Request
 
-from .link_contracts import PLUGIN_VERSION
+from .version import PLUGIN_VERSION
 
 
 logger = logging.getLogger("hermes.plugins.bighelp")

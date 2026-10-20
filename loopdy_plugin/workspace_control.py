@@ -30,10 +30,10 @@ from .generative_ui import GenerativeUIError, validate_rendered_envelope
 from .generated_media import resolve_generated_media
 from .host_runtime import InstalledHermesVersion
 from . import plugin_update
+from .version import PLUGIN_VERSION
 from .link_contracts import (
     MAX_AGENT_ATTACHMENT_BYTES,
     MAX_ATTACHMENT_CHUNK_BYTES,
-    PLUGIN_VERSION,
     AVAILABLE_WIKI_OPERATIONS,
     GROUPS_OPERATIONS,
     WORKSPACE_OPERATIONS,

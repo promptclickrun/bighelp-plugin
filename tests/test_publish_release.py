@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import publish_release  # noqa: E402
 
-from loopdy_plugin.link_contracts import PLUGIN_VERSION  # noqa: E402
+from loopdy_plugin.version import PLUGIN_VERSION  # noqa: E402
 
 
 class PublishReleaseTests(unittest.TestCase):
@@ -31,6 +31,19 @@ class PublishReleaseTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 publish_release.check_dashboard_version("3.1.0", root)
             publish_release.check_dashboard_version("2.8.0", root)
+
+    def test_it_refuses_a_stale_module_version(self):
+        publish_release.check_module_version(PLUGIN_VERSION)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "loopdy_plugin").mkdir()
+            (root / "loopdy_plugin" / "version.py").write_text('PLUGIN_VERSION = "2.8.0"\n', encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                publish_release.check_module_version("3.1.0", root)
+            publish_release.check_module_version("2.8.0", root)
+            (root / "loopdy_plugin" / "version.py").write_text("VERSION = 1\n", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                publish_release.check_module_version("2.8.0", root)
 
     def test_notes_come_from_the_release_pull_request(self):
         notes = publish_release.release_notes({"title": "3.0.0: bighelp names", "body": "What changed."}, "commit")

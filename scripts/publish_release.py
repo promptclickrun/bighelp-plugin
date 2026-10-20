@@ -16,6 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = re.compile(r'(?m)^version:\s*"?([0-9]{1,6}(?:\.[0-9]{1,6}){1,3})"?\s*$')
+MODULE_VERSION = re.compile(r'(?m)^PLUGIN_VERSION = "([0-9]{1,6}(?:\.[0-9]{1,6}){1,3})"\s*$')
 MAX_NOTES = 100_000
 
 
@@ -35,6 +36,14 @@ def check_dashboard_version(version: str, root: Path = ROOT) -> None:
     dashboard = json.loads((root / "dashboard" / "manifest.json").read_text(encoding="utf-8")).get("version")
     if dashboard != version:
         raise SystemExit(f"dashboard/manifest.json says {dashboard}, but plugin.yaml says {version}")
+
+
+def check_module_version(version: str, root: Path = ROOT) -> None:
+    """The app reads PLUGIN_VERSION from /native/context, so it must match plugin.yaml."""
+    match = MODULE_VERSION.search((root / "loopdy_plugin" / "version.py").read_text(encoding="utf-8"))
+    module = match.group(1) if match else None
+    if module != version:
+        raise SystemExit(f"loopdy_plugin/version.py says {module}, but plugin.yaml says {version}")
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -74,6 +83,7 @@ def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     version = plugin_version()
     check_dashboard_version(version)
+    check_module_version(version)
     tag = f"v{version}"
     if _gh("release", "view", tag, "--repo", repository, check=False).returncode == 0:
         print(f"{tag} is already released; nothing to publish.")

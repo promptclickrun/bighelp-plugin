@@ -43,6 +43,7 @@ def parse_direct_enrollment(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 from .events import EVENT_TYPES
+from .version import PLUGIN_VERSION
 from .wiki_contract import (
     WIKI_OPERATIONS,
     available_wiki_operations,
@@ -124,7 +125,6 @@ HEALTH_TYPES = (
     "body_fat_percentage",
     "workout",
 )
-PLUGIN_VERSION = "3.21.0"
 AVAILABLE_WIKI_OPERATIONS = available_wiki_operations()
 GROUPS_OPERATIONS = frozenset(
     {

@@ -299,7 +299,7 @@ class DashboardApiTests(unittest.TestCase):
             capabilities = client.get("/capabilities")
             self.assertEqual(capabilities.status_code, 200)
             value = capabilities.json()
-            from loopdy_plugin.link_contracts import PLUGIN_VERSION
+            from loopdy_plugin.version import PLUGIN_VERSION
             self.assertEqual(value["plugin_version"], PLUGIN_VERSION)
             self.assertEqual(value["default_provider"], "managed")
             self.assertEqual(value["detail_modes"], ["automatic", "minimal", "detailed"])

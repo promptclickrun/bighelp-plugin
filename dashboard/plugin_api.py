@@ -39,7 +39,7 @@ from loopdy_plugin.generative_ui import (  # noqa: E402
     GenerativeUIError,
     validate_submission_values,
 )
-from loopdy_plugin.link_contracts import PLUGIN_VERSION  # noqa: E402
+from loopdy_plugin.version import PLUGIN_VERSION  # noqa: E402
 from loopdy_plugin.provider import DeliveryError  # noqa: E402
 from loopdy_plugin.targets import validate_target  # noqa: E402
 from loopdy_plugin.workspace_control import HermesWorkspaceBackend  # noqa: E402
