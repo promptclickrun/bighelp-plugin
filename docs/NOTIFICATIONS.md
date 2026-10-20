@@ -43,6 +43,15 @@ copy, including the phone's content key.
 Each alert shows the agent's name, picture and the start of its message (up to 1,600 characters). Event IDs
 are stable (`<grantId>:<sha256>`), so a retry never produces a second alert.
 
+The picture is the agent's picture in Hermes (`profiles.get_asset`). The notification service does not accept
+an alert without a picture, and Hermes has no default picture. So, when an agent has no picture, or a picture
+that the host cannot use (larger than 512 KB, empty, or not readable), the alert shows bighelp's own picture.
+The alert still goes out. This applies to all alerts: replies, failures, scheduled tasks, helpers, questions,
+approvals, workflows and messages from other agents. Each Hermes process logs one warning for each agent and
+reason. The warning has no names or paths. The default picture is
+[`loopdy_plugin/assets/default-agent-avatar.png`](../loopdy_plugin/assets/default-agent-avatar.png): the bighelp
+app icon art, 256 × 256 pixels, from the [bighelp app repository](https://github.com/promptclickrun/bighelp).
+
 ### Cards in a reply
 
 A card reaches the chat as a `loopdy-card` fence of JSON inside the agent's reply. The alert never shows that
@@ -110,9 +119,9 @@ one agent handed to another with `message_agent`. Hermes saves it in the receivi
 `Message from 🤖 Nova (@nova):`. When the receiving agent's next turn starts, the plugin reads that turn's
 message and the messages saved since the agent last spoke. A message signed by another agent on this
 computer (`@hermes` is the default agent) alerts as a `session.completed` in the receiving agent's chat,
-with the sending agent's name and picture. Each message alerts once (its event key is the SHA-256 of the
-text). A handle that isn't an agent on this computer, a relayed `@name@peer`, or the agent's own handle
-never alerts.
+with the sending agent's name and picture (bighelp's picture if it has none). Each message alerts once (its
+event key is the SHA-256 of the text). A handle that isn't an agent on this computer, a relayed `@name@peer`,
+or the agent's own handle never alerts.
 
 ### Workflows
 
