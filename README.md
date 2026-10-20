@@ -168,8 +168,9 @@ Chat never needs them.
   receives (Settings › Notifications).
 - **What you get.** Replies, failed chats, scheduled tasks that finish or fail, approvals, questions from your
   agent, helper results and workflow runs. Messages between your agents alert you only if you turn them on. Each
-  alert shows the name and picture of the agent. A workflow alert shows the name of the workflow. When you tap an
-  alert, the app goes to that host and opens the chat.
+  alert shows the name and picture of the agent. An agent without a picture gets the bighelp picture, so it still
+  sends alerts. A workflow alert shows the name of the workflow. When you tap an alert, the app goes to that host
+  and opens the chat.
 - **End-to-end encrypted.** The app gives its own key directly to your host. The host encrypts the title, text and
   avatar of each notification for that phone, and signs it. The notification service and BuzzKit only send on
   bytes that they cannot read. They see the event type, the time, the IDs of the agent and the chat, and routing
@@ -243,4 +244,6 @@ and 0.21.2.
 ## License
 
 Apache-2.0. The constrained JSON-tree approach of the card format credits Sameer Gupta's
-[Generative UI DSL](https://github.com/sameergdogg/generative-ui).
+[Generative UI DSL](https://github.com/sameergdogg/generative-ui). The default agent picture in alerts
+(`loopdy_plugin/assets/default-agent-avatar.png`) is the bighelp app icon art from the
+[bighelp app repository](https://github.com/promptclickrun/bighelp), by the same owners under the same license.

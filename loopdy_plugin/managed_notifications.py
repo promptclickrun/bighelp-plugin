@@ -72,6 +72,10 @@ WORKFLOW_SESSION_PREFIX = "workflow.run."
 _ASKED_WINDOW_SECONDS = 600
 _MAX_RICH_TEXT = 1_600
 _MAX_AVATAR_BYTES = 524_288
+# The notification service refuses an alert without a picture, and Hermes has no default one.
+# An agent with no picture it can use (the default agent on a new host, one made with the
+# Hermes CLI) shows bighelp's own picture instead of sending no alerts at all.
+_DEFAULT_AVATAR = Path(__file__).resolve().parent / "assets" / "default-agent-avatar.png"
 _APPROVAL_GRACE_SECONDS = 3
 _APPROVAL_TTL_SECONDS = 60
 _APPROVAL_LIMIT = 4096
@@ -100,6 +104,19 @@ def _identifier(value: Any, pattern: re.Pattern = _ID) -> str:
     if not isinstance(value, str) or pattern.fullmatch(value) is None:
         raise ManagedNotificationError("notification_coordinate_invalid", 400)
     return value
+
+
+def _default_avatar() -> dict[str, Any]:
+    """bighelp's own picture (the app icon's art), shipped in this package."""
+    try:
+        with _DEFAULT_AVATAR.open("rb") as handle:
+            blob = handle.read(_MAX_AVATAR_BYTES + 1)
+    except OSError:
+        raise ManagedNotificationError("notification_default_avatar_unavailable", 503) from None
+    if not 1 <= len(blob) <= _MAX_AVATAR_BYTES or not blob.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ManagedNotificationError("notification_default_avatar_unavailable", 503)
+    return {"mimeType": "image/png", "sha256": hashlib.sha256(blob).hexdigest(),
+            "data": "data:image/png;base64," + base64.b64encode(blob).decode("ascii")}
 
 
 # A reply alert carries only what Hermes itself would deliver (gateway/response_filters.py).
@@ -305,6 +322,8 @@ class ManagedNotifications:
         # Turns whose question alert already went out from the clarify tool hook, so the
         # messaging adapter's own presentation of the same question isn't a second alert.
         self._asked: OrderedDict[tuple[str, str, str], float] = state.setdefault("asked", OrderedDict())
+        # Agents (and why) whose alerts use bighelp's picture, so the log says so once, not per alert.
+        self._default_avatar_logged: set[tuple[str, str]] = state.setdefault("default_avatar_logged", set())
         self._child_owners: dict[tuple[str, str, str], str] = state["child_owners"]
         self._child_goals: dict[tuple[str, str, str], str] = state["child_goals"]
         self._key = self._identity()
@@ -819,7 +838,7 @@ class ManagedNotifications:
             self._queue_event(profile, session_id, turn, _CLARIFICATION_EVENT,
                               event_key="tool:" + call, content_text=question)
         except ManagedNotificationError:
-            # No avatar or no text: the question still waits in the chat.
+            # No text (or not even bighelp's picture): the question still waits in the chat.
             logger.warning("Question notification unavailable")
             return
         with self._lock:
@@ -842,17 +861,43 @@ class ManagedNotifications:
             raise ManagedNotificationError("notification_rich_content_required", 422)
         return text if len(text) <= _MAX_RICH_TEXT else text[:_MAX_RICH_TEXT - 1].rstrip() + "…"
 
-    @staticmethod
-    def _agent_presentation(profile: str) -> tuple[str, dict[str, Any]]:
+    def _agent_presentation(self, profile: str) -> tuple[str, dict[str, Any]]:
+        """The agent's name and picture for an alert: its own picture, or bighelp's."""
         from .adapter import profile_display_name
-        from tui_gateway.server import handle_request
 
         name = profile_display_name(profile)
-        response = handle_request({"jsonrpc": "2.0", "id": "loopdy-notification-avatar",
-                                   "method": "profiles.get_asset",
-                                   "params": {"name": profile, "asset": "avatar"}})
-        result = response.get("result") if isinstance(response, dict) else None
-        if not isinstance(result, dict) or result.get("found") is not True:
+        try:
+            return name, self._agent_avatar(profile)
+        except ManagedNotificationError as error:
+            reason = error.code
+        avatar = _default_avatar()
+        key = (profile, reason)
+        with self._lock:
+            first = key not in self._default_avatar_logged
+            if first:
+                if len(self._default_avatar_logged) >= 256:
+                    self._default_avatar_logged.clear()
+                self._default_avatar_logged.add(key)
+        if first:
+            logger.warning("Notification uses the default agent picture (%s)", reason)
+        return name, avatar
+
+    @staticmethod
+    def _agent_avatar(profile: str) -> dict[str, Any]:
+        """The agent's own picture from Hermes, when the notification service can take it."""
+        try:
+            from tui_gateway.server import handle_request
+
+            response = handle_request({"jsonrpc": "2.0", "id": "loopdy-notification-avatar",
+                                       "method": "profiles.get_asset",
+                                       "params": {"name": profile, "asset": "avatar"}})
+        except Exception:
+            # Only the picture is missing; never log the exception text (it can carry paths).
+            raise ManagedNotificationError("notification_agent_avatar_unavailable", 503) from None
+        if not isinstance(response, dict) or not isinstance(response.get("result"), dict):
+            raise ManagedNotificationError("notification_agent_avatar_unavailable", 503)
+        result = response["result"]
+        if result.get("found") is not True:
             raise ManagedNotificationError("notification_agent_avatar_required", 422)
         mime = result.get("mime")
         size = result.get("size")
@@ -867,7 +912,7 @@ class ManagedNotifications:
             raise ManagedNotificationError("notification_agent_avatar_invalid", 422) from error
         if len(blob) != size:
             raise ManagedNotificationError("notification_agent_avatar_invalid", 422)
-        return name, {"mimeType": mime, "sha256": hashlib.sha256(blob).hexdigest(), "data": data_url}
+        return {"mimeType": mime, "sha256": hashlib.sha256(blob).hexdigest(), "data": data_url}
 
     def publish_observed_clarification(self, *, profile: str, session_id: str,
                                        request_id: str, question: str) -> None:
@@ -971,7 +1016,7 @@ class ManagedNotifications:
         if title:
             agent_name = title
         if sender:
-            # Another agent's message reads as from that agent: its name, and its picture if it has one.
+            # Another agent's message reads as from that agent: its name, and its picture (or bighelp's).
             try:
                 agent_name, avatar = self._agent_presentation(sender)
             except ManagedNotificationError:
@@ -1531,7 +1576,8 @@ def _new_observations() -> dict[str, Any]:
     return {"lock": threading.RLock(), "wake": threading.Event(),
             "work": OrderedDict(), "responses": OrderedDict(), "alerted": OrderedDict(), "asked": OrderedDict(),
             "child_owners": {}, "child_goals": {},
-            "loaded_profiles": set(), "approval_profiles": set(), "clarification_profiles": set()}
+            "loaded_profiles": set(), "approval_profiles": set(), "clarification_profiles": set(),
+            "default_avatar_logged": set()}
 
 
 def _shared_observations(directory: Path) -> dict[str, Any]:
