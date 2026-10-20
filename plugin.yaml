@@ -27,7 +27,6 @@ optional_env:
   - LOOPDY_APNS_TOPIC
   - LOOPDY_APNS_ENVIRONMENT
   - LOOPDY_APNS_KEY_PATH
-  - BIGHELP_MARKETPLACE_TRUSTED_ED25519_KEYS
 provides_hooks:
   # Only baseline hooks belong here: older Hermes validates these names before use.
   # on_room_member_activity is registered when the runtime advertises it.

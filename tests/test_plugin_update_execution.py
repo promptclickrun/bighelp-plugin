@@ -206,22 +206,5 @@ class PluginUpdateExecutionTests(unittest.TestCase):
             self.assertEqual(worker._restart_gateway(self.manager), "reconnecting")
             self.assertEqual(runner.call_count, 1)
 
-    def test_workspace_rejects_forged_owner_and_requires_consent(self):
-        import asyncio
-        from loopdy_plugin.workspace_control import HermesWorkspaceBackend, WorkspaceController
-        from loopdy_plugin.link_contracts import WorkspaceRequest
-        backend = HermesWorkspaceBackend(service=object(), plugin_update_manager=self.manager, connection_id_getter=lambda: self.device)
-        async def check():
-            with self.assertRaises(Exception):
-                await backend.plugin_update_start({"operation_id": self.operation_id, "confirm_restart": False})
-            with self.assertRaises(Exception):
-                await backend.plugin_update_start({"operation_id": self.operation_id, "confirm_restart": True, "device_id": "forged"})
-            result = await backend.plugin_update_start({"operation_id": self.operation_id, "confirm_restart": True})
-            self.assertEqual(result["operation_id"], self.operation_id)
-            with self.assertRaises(ValueError):
-                self.manager.status(self.operation_id, "forged")
-        asyncio.run(check())
-
-
 if __name__ == "__main__":
     unittest.main()

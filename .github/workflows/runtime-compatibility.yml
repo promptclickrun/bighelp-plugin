@@ -46,7 +46,6 @@ jobs:
           python -m unittest discover -s tests -p test_runtime_compatibility.py -v
           python -m unittest discover -s tests -p test_plugin_update_installation.py -v
           python -m unittest discover -s tests -p test_room_activity.py -v
-          python -m unittest discover -s tests -p test_workspace_control.py -v
           python -m unittest discover -s tests -p test_native_voice.py -v
           python -m unittest discover -s tests -p test_native_api.py -v
           python -m unittest discover -s tests -p test_host_restart.py -v

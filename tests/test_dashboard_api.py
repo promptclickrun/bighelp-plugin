@@ -11,6 +11,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from loopdy_plugin import completion_events
 from loopdy_plugin.events import build_event
 from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.targets import validate_target
@@ -140,7 +141,7 @@ class DashboardApiTests(unittest.TestCase):
             app.include_router(module.router)
             client = TestClient(app)
 
-            async def cron_list(_backend, agent_id):
+            async def cron_list(agent_id):
                 if agent_id == "offline":
                     raise RuntimeError("catalog temporarily unavailable")
                 self.assertEqual(agent_id, "default")
@@ -150,12 +151,8 @@ class DashboardApiTests(unittest.TestCase):
                 raise AssertionError("history must not load without a catalog match")
 
             with (
-                patch.object(module.HermesWorkspaceBackend, "_cron_list", cron_list),
-                patch.object(
-                    module.HermesWorkspaceBackend,
-                    "_session_messages",
-                    session_messages,
-                ),
+                patch.object(completion_events, "_cron_list", cron_list),
+                patch.object(completion_events, "_session_messages", session_messages),
             ):
                 listed_response = client.get("/events")
                 exact_responses = {
@@ -222,7 +219,7 @@ class DashboardApiTests(unittest.TestCase):
             app.include_router(module.router)
             client = TestClient(app)
 
-            async def cron_list(_backend, agent_id):
+            async def cron_list(agent_id):
                 self.assertEqual(agent_id, "default")
                 return [{
                     "id": "job-123",
@@ -231,9 +228,7 @@ class DashboardApiTests(unittest.TestCase):
                     "prompt": "private task prompt",
                 }]
 
-            async def session_messages(
-                _backend, stored_id, agent_id, *, include_compacted=False
-            ):
+            async def session_messages(stored_id, agent_id, *, include_compacted=False):
                 self.assertEqual(
                     (stored_id, agent_id, include_compacted),
                     ("cron_job-123_20260815_120000", "default", True),
@@ -245,12 +240,8 @@ class DashboardApiTests(unittest.TestCase):
                 }]}
 
             with (
-                patch.object(module.HermesWorkspaceBackend, "_cron_list", cron_list),
-                patch.object(
-                    module.HermesWorkspaceBackend,
-                    "_session_messages",
-                    session_messages,
-                ),
+                patch.object(completion_events, "_cron_list", cron_list),
+                patch.object(completion_events, "_session_messages", session_messages),
             ):
                 response = client.get("/events")
                 exact_response = client.get(f"/events/{completion.event_id}")

@@ -56,18 +56,33 @@ async def read_room_scope(room_id: str) -> RoomScope:
     from hermes_constants import (
         get_process_hermes_home, set_hermes_home_override, reset_hermes_home_override,
     )
-    from .adapter import get_service
-    from .workspace_control import HermesWorkspaceBackend, WorkspaceControlError
     token = set_hermes_home_override(get_process_hermes_home())
     try:
-        backend = HermesWorkspaceBackend(service=get_service())
         try:
-            state = await backend.groups_state({"room_id": room_id})
-        except WorkspaceControlError:
+            state = await asyncio.to_thread(_hosted_room_state, room_id)
+        except _RoomStateUnavailable:
             raise NativeAPIError(503, "room_unavailable", "The native room could not be verified.") from None
         return RoomScope.from_state(state, room_id)
     finally:
         reset_hermes_home_override(token)
+
+
+class _RoomStateUnavailable(RuntimeError):
+    pass
+
+
+def _hosted_room_state(room_id: str) -> dict:
+    """Hermes' own hosted-room state, read through its JSON-RPC handler."""
+    from tui_gateway.server import handle_request
+
+    request_id = "loopdy-groups.state"
+    response = handle_request({
+        "jsonrpc": "2.0", "id": request_id, "method": "groups.state", "params": {"room_id": room_id},
+    })
+    if (not isinstance(response, dict) or response.get("id") != request_id or "error" in response
+            or not isinstance(response.get("result"), dict)):
+        raise _RoomStateUnavailable("groups.state")
+    return dict(response["result"])
 
 
 async def read_peer_scope(room_id: str, peer: _Peer) -> PeerScope:

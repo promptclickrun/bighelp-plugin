@@ -4,8 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import inspect
 import json
+import math
 import os
 from pathlib import Path
+import re
 import sqlite3
 import stat
 from typing import Any, Literal
@@ -18,7 +20,6 @@ from starlette.concurrency import run_in_threadpool
 
 from .native_api import _NativeRoute, _body, _precondition, _response
 from .native_context import NativeAPIError, NativeContext, PROFILE_ID, native_context
-from .workspace_control import _project_git_wire
 from .workspace_files import (
     WorkspaceFilesError, _sanitize_git_status, _valid_relative_path, validate_workspace_root,
 )
@@ -315,3 +316,53 @@ async def status(request: Request) -> Response:
 @router.post("/diff")
 async def diff(request: Request) -> Response:
     return await _perform(request, "diff")
+
+
+def _project_git_wire(value: Any) -> Any:
+    key_map = {
+        "schema_version": "schemaVersion",
+        "arbitrary_command": "arbitraryCommand",
+        "workspace_id": "workspaceId",
+        "mutations_enabled": "mutationsEnabled",
+        "status_token": "statusToken",
+        "original_path": "originalPath",
+        "is_binary": "isBinary",
+        "files_page": "filesPage",
+        "conflicts_page": "conflictsPage",
+        "next_offset": "nextOffset",
+        "preview_content": "previewContent",
+        "old_line": "oldLine",
+        "new_line": "newLine",
+        "confirmation_token": "confirmationToken",
+        "operation_digest": "operationDigest",
+        "expires_at": "expiresAt",
+        "operation_id": "operationId",
+        "commit_oid": "commitOid",
+        "parent_oid": "parentOid",
+        "tree_oid": "treeOid",
+        "updated_refs": "updatedRefs",
+        "rule_id": "ruleId",
+    }
+    if isinstance(value, list):
+        return [_project_git_wire(item) for item in value]
+    if isinstance(value, dict):
+        projected: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key):
+                raise ValueError("Project Git response is invalid")
+            projected[key_map.get(key, key)] = _project_git_wire(item)
+        return projected
+    return _project_git_scalar(value)
+
+
+def _project_git_scalar(value: Any) -> Any:
+    """Only finite numbers and bounded text without control characters reach the app."""
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    if isinstance(value, str) and len(value.encode("utf-8")) <= 256_000 and not any(
+        ord(character) < 32 and character not in "\n\r\t" for character in value
+    ):
+        return value
+    raise ValueError("Project Git response is invalid")
