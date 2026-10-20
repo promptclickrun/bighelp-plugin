@@ -229,6 +229,17 @@ class WorkflowRouteTests(unittest.TestCase):
         with patch.object(workflow_api, "workflows_root", side_effect=OSError("unreadable")):
             self.assertEqual(workflow_api.probe(), "store_unavailable")
 
+    def test_windows_says_not_posix_without_loading_the_coordinator(self):
+        # Native Windows has no fcntl, so the coordinator can't load there. The probe must say why first (#156).
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        with patch.object(workflow_api.os, "name", "nt"), patch.dict(sys.modules, {"fcntl": None}):
+            sys.modules.pop(workflow_coordinator.__name__)
+            self.assertEqual(workflow_api.probe(), "not_posix")
+            self.assertEqual(WorkflowTools().call({"action": "list", "filter": "all", "limit": 1}),
+                             {"error": "workflows_unavailable",
+                              "message": "Workflows can't run on this computer (not_posix)."})
+            self.assertNotIn(workflow_coordinator.__name__, sys.modules)
+
     def test_store_root_works_with_stable_hermes(self):
         # Stable Hermes' get_default_hermes_root() takes no arguments; newer builds take `home`.
         import hermes_constants

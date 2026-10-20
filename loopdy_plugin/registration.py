@@ -10,7 +10,6 @@ import os
 import sqlite3
 import sys
 import time
-import weakref
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -38,16 +37,13 @@ from .activity_bridge import (
     finish_failed_turn_activity,
     publish_hook_activity,
 )
-from .attachments import AttachmentStore
 from .events import BighelpEvent
 from .hooks import normalize_hook
 from .workflow_runner import in_workflow_stage
 from .generative_ui import extract_rendered_envelope
-from .link_client import load_runtime_config
+from .link_client import LINK_ENV_KEYS, load_runtime_config
 from .link_contracts import generative_ui_event, notification_event
 from .link_identity import pre_llm_context_from_state
-from .link_pairing import LINK_ENV_KEYS, pair_host
-from .marketplace import MarketplaceGatewayClient, MarketplacePublisher
 from .naming import CLI_COMMAND, LEGACY_CLI_COMMAND, register_legacy_toolset_alias
 from .plugin_update import (
     PluginUpdateManager,
@@ -87,34 +83,11 @@ def _device_tools_supported() -> bool:
     return tool_execution_context_type() is not None
 
 
-def register_marketplace_publish_skill(ctx: Any) -> None:
-    """Register bighelp's read-only publishing guidance with Hermes."""
-
-    description = (
-        "Use when publishing bighelp themes, cards, or skills. "
-        "Prepare a private draft for review in bighelp."
-    )
-    ctx.register_skill(
-        "bighelp-marketplace-publish",
-        Path(__file__).resolve().parents[1]
-        / "skills"
-        / "bighelp-marketplace-publish"
-        / "SKILL.md",
-        description=description,
-        frontmatter={
-            "name": "bighelp-marketplace-publish",
-            "description": description,
-        },
-    )
-
-
 def register(
     ctx: Any,
     *,
     service: Any | None = None,
     activity_broker: LinkActivityBroker | Any | None = None,
-    marketplace_gateway_client: Any | None = None,
-    attachment_store: AttachmentStore | Any | None = None,
     direct_session_opener: Any | None = None,
     presentation_observer: Any | None = None,
     voice_dispatch: Any | None = None,
@@ -134,71 +107,16 @@ def register(
         values = getter("direct", {}) if callable(getter) else {}
         return DirectSettings.from_mapping(values)
 
-    def live_voice_settings_getter():
-        getter = getattr(ctx, "get_config", None)
-        return getter("live_voice", {}) if callable(getter) else {}
-
-    # Registration owns the supported approval callback; runtime instances remain
-    # adapter-owned and lazy. Non-voice approvals retain the existing presenter.
-    voice_adapters = weakref.WeakSet()
     def adapter_factory(config):
-        adapter = BighelpAdapter(
+        return BighelpAdapter(
             config, service=active_service, link_state=identity_state,
             activity_broker=broker, plugin_update_manager=update_manager,
             device_tool_bridge=device_tool_bridge,
             direct_settings_getter=direct_settings_getter,
             direct_session_opener=direct_session_opener,
-            presentation_observer=presentation_observer, voice_dispatch=voice_dispatch,
-            live_voice_settings_getter=live_voice_settings_getter)
-        voice_adapters.add(adapter)
-        return adapter
+            presentation_observer=presentation_observer, voice_dispatch=voice_dispatch)
 
-    def voice_agent_started(**kwargs):
-        from .inbound_dispatch import current_turn_lease
-        lease = current_turn_lease.get()
-        if lease is None:
-            return
-        for adapter in tuple(voice_adapters):
-            runtime = adapter._live_voice_runtime
-            if runtime is not None:
-                runtime.agent_started(lease=lease, stored_session_id=kwargs.get("session_id"))
-
-    def approval_requested(**kwargs):
-        for adapter in tuple(voice_adapters):
-            runtime = adapter._live_voice_runtime
-            if runtime is not None:
-                runtime.approval_requested(**kwargs)
-
-    selected_attachment_store = attachment_store or AttachmentStore(
-        get_hermes_home()
-        / "plugin-data"
-        / "loopdy"
-        / "agent-attachments.sqlite3"
-    )
-    selected_gateway_client = marketplace_gateway_client
-    if selected_gateway_client is None:
-        try:
-            runtime_config = load_runtime_config()
-        except (TypeError, ValueError):
-            runtime_config = None
-        if runtime_config is not None:
-            # Draft creation needs the paired host's signed-device identity;
-            # release trust anchors are independently required for installs.
-            selected_gateway_client = MarketplaceGatewayClient(
-                config=runtime_config,
-                trust_keys={},
-            )
-    register_tools(
-        ctx,
-        store=active_service.store,
-        profile=profile,
-        marketplace_publisher=MarketplacePublisher(
-            agent_id=profile,
-            store=active_service.store,
-            attachment_store=selected_attachment_store,
-            gateway_client=selected_gateway_client,
-        ),
-    )
+    register_tools(ctx, store=active_service.store, profile=profile)
     # Hermes 0.21.2 removed the optional ToolExecutionContext carried by
     # MessageEvent. When the public execution-middleware surface is present,
     # bighelp's native phone channel owns the tool call and receives Hermes'
@@ -212,7 +130,6 @@ def register(
             ctx,
             bridge=device_tool_bridge if legacy_device_tools else None,
         )
-    register_marketplace_publish_skill(ctx)
     from .agent_guide import register as register_agent_guide
     register_agent_guide(ctx)
     # Feed, Ideas, Goals, Activity and Approvals history for the bighelp app.
@@ -278,17 +195,7 @@ def register(
         profile=profile,
         agent_name=profile_display_name(profile),
     )
-    def present_approval(request):
-        for adapter in tuple(voice_adapters):
-            runtime = adapter._live_voice_runtime
-            if runtime is not None:
-                response = runtime.present_approval(request)
-                if response is not None:
-                    return response
-        return approval.present(request)
-
-    ctx.register_approval_transport("loopdy", present_approval)
-    ctx.register_hook("pre_approval_request", approval_requested)
+    ctx.register_approval_transport("loopdy", approval.present)
 
     ctx.register_hook(
         "pre_llm_call",
@@ -298,7 +205,6 @@ def register(
             profile=profile,
             identity_state=identity_state,
             activity_broker=broker,
-            voice_observer=voice_agent_started,
         ),
     )
     ctx.register_hook(
@@ -369,9 +275,9 @@ def register(
         for hook in ("pre_llm_call", "post_llm_call", "pre_tool_call", "post_tool_call",
                      "on_session_end", "subagent_start", "subagent_stop"):
             _register_notification_observer(ctx, hook, partial(observe_managed, hook))
-        # Registration is additive: retain the existing voice observer and the
-        # explicitly selected legacy transport. Older SDKs can warn-and-register
-        # unknown names, so registration alone is not proof of an emitter.
+        # Registration is additive: retain the explicitly selected legacy
+        # transport. Older SDKs can warn-and-register unknown names, so
+        # registration alone is not proof of an emitter.
         try:
             from hermes_cli.plugins import VALID_HOOKS
             approval_hooks_supported = {"pre_approval_request", "post_approval_response"} <= VALID_HOOKS
@@ -430,14 +336,8 @@ def _pre_llm_call(
     profile: str,
     identity_state: Any | None = None,
     activity_broker: LinkActivityBroker | Any,
-    voice_observer: Any | None = None,
     **payload: Any,
 ):
-    if voice_observer is not None:
-        try:
-            voice_observer(**payload)
-        except Exception:
-            logger.warning("bighelp live session binding unavailable")
     publish_hook_activity(
         "pre_llm_call",
         broker=activity_broker,
@@ -875,6 +775,11 @@ def handle_cli(
         return
     if action == "status":
         apns = service.store.load_apns_config()
+        health = service.health()
+        if health.get("mode") == "managed" and not health.get("configured"):
+            # Nothing builds this legacy "managed" provider any more: the app's notifications are
+            # managed_notifications.py, counted under "notifications".
+            health = {**health, "detail": "Not used: the bighelp app sets up notifications (see notifications)"}
         _print_json(
             {
                 "devices": [
@@ -882,8 +787,9 @@ def handle_cli(
                 ],
                 "home_target": _home_target(),
                 "provider": service.store.provider_mode(),
-                "provider_health": service.health(),
+                "provider_health": health,
                 "apns": _redacted_apns_config(apns),
+                "notifications": _app_notifications_status(),
             }
         )
         return
@@ -935,6 +841,15 @@ def handle_cli(
         _print_json(service.test_notification(target=target, profile=profile))
         return
     raise ValueError("Unknown bighelp command")
+
+
+def _app_notifications_status() -> dict[str, Any]:
+    """The app's notifications: a count only, never grant IDs, keys or phones."""
+    try:
+        from .managed_notifications import get_managed_notifications
+        return {"available": True, "active_grants": get_managed_notifications().active_grant_count()}
+    except Exception:
+        return {"available": False}
 
 
 def _handle_files_cli(args: Any) -> None:

@@ -275,6 +275,15 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.register_recipient(grant_id,self.phone_public)
         self.calls.clear()
 
+    def test_active_grant_count_counts_only_live_grants(self):
+        # `hermes bighelp status` shows this count, never grant IDs or keys.
+        self.assertEqual(self.service.active_grant_count(), 1)
+        self.now += 3600
+        self.assertEqual(self.service.active_grant_count(), 0)
+        self.now -= 3600
+        self.service.remove(self.grant_id)
+        self.assertEqual(self.service.active_grant_count(), 0)
+
     def test_a_reply_alert_goes_out_as_soon_as_it_is_queued(self):
         # The process that ran the turn sends at once; waiting for the sender-owning
         # Hermes process to poll made alerts late (5 s in older plugins).

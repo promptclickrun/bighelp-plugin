@@ -15,7 +15,7 @@ All routes are `POST /api/plugins/loopdy/native/attachments/<operation>` with th
   really sent that path. Approved files get an opaque ID, a file name, a type and a size, and the `MEDIA:` line is
   removed from the displayed text.
 - **`fetch`**: the app downloads an attachment by ID in chunks of about 3 MB, up to 25 MB per file.
-- **`recent`**: the pictures and videos an agent sent or generated lately, for the Apps tab (see
+- **`recent`**: the pictures and videos an agent sent or generated lately, for the Files tab (see
   [Artifacts and media](APPS_ARTIFACTS_AND_MEDIA.md)). Advertised as `native-agent-media-v1`.
 
 - **`board`**: one file a Feed post carries (`agentId`, `itemId`, `index` from 0 to 9). The plugin looks up

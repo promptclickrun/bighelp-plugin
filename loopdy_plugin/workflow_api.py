@@ -78,8 +78,11 @@ _store_errors_logged: set[str] = set()
 
 def probe() -> str | None:
     """None when workflows can run on this computer, else one of REASONS."""
+    # Before the coordinator: it imports fcntl, which native Windows doesn't have.
+    if os.name != "posix":
+        return "not_posix"
     from .workflow_coordinator import service_manager
-    if os.name != "posix" or service_manager() is None:
+    if service_manager() is None:
         return "not_posix"
     try:
         from hermes_cli.profiles import profile_exists  # noqa: F401

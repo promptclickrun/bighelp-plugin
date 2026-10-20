@@ -51,7 +51,7 @@ class OptionalDeviceContextTests(unittest.TestCase):
                 completed.set()
 
         link = _LinkClient()
-        from test_live_voice_runtime import signing_fixture
+        from test_adapter import signing_fixture
         link.config = signing_fixture("host-fixture")
         adapter = ObservedAdapter(PlatformConfig(enabled=True), service=_Service(), link_client=link)
         handler = AsyncMock(return_value=None)

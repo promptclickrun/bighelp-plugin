@@ -90,6 +90,14 @@ class _Service:
         return {"ready": True}
 
 
+def signing_fixture(device_id="host-fixture"):
+    import secrets
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from loopdy_plugin.link_client import LinkRuntimeConfig
+    return LinkRuntimeConfig("https://link.example", device_id, 1, ec.generate_private_key(ec.SECP256R1()),
+                             secrets.token_bytes(32))
+
+
 class _LinkClient:
     def __init__(self):
         self.connected = True
@@ -1055,7 +1063,6 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import UserMessage
 
         link = _LinkClient()
-        from test_live_voice_runtime import signing_fixture
         link.config = signing_fixture("hermes-host-private-coordinate")
         adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link

@@ -509,6 +509,12 @@ class ManagedNotifications:
             raise ManagedNotificationError("notification_enrollment_inactive", 404)
         return json.loads(row["public_json"])
 
+    def active_grant_count(self) -> int:
+        """How many phones or accounts get this host's alerts now, for `hermes bighelp status`."""
+        with self._db() as db:
+            return int(db.execute("SELECT COUNT(*) FROM grants WHERE state='active' AND expires>?",
+                                  (int(self.clock()),)).fetchone()[0])
+
     def enrollment(self, grant_id: str):
         local = self._grant(grant_id)
         try:

@@ -155,11 +155,6 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema, TEMPLATE_SCHEMAS[tool_name])
                 self.assertIn("tool_search", description)
                 continue
-            if tool_name == "bighelp_marketplace_prepare_upload":
-                self.assertIn("private marketplace", description)
-                self.assertIn("cannot submit or publish", description)
-                self.assertTrue(renderer_schema["parameters"]["properties"]["validateOnly"])
-                continue
             self.assertIn("direct callable native bighelp renderer", description)
             self.assertIn("visible in the current tool list", description)
             self.assertIn("tool_search", description)

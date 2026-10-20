@@ -3,8 +3,7 @@ from types import SimpleNamespace
 from gateway.config import PlatformConfig
 from gateway.platform_registry import PlatformEntry, platform_registry
 from loopdy_plugin.adapter import BighelpAdapter
-from test_adapter import _Service, _LinkClient
-from test_live_voice_runtime import signing_fixture
+from test_adapter import _Service, _LinkClient, signing_fixture
 
 class RelayPresentationTests(unittest.TestCase):
     def test_completed_turn_retires_transient_finals_before_saved_state_recovery(self):
