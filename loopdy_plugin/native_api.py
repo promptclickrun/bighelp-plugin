@@ -233,9 +233,29 @@ def _precondition(request: Request, context: NativeContext) -> str:
     return request_id
 
 
+# Set once this process has reported the plugin bytes it runs (`_record_serving_runtime`).
+_runtime_recorded = False
+
+
+def _record_serving_runtime(profile: str | None) -> None:
+    """The first app request in a process proves it runs these plugin bytes. A plugin update started
+    with `hermes bighelp update` completes when the restarted server loads them; hosts without the
+    old push gateway never report it any other way."""
+    global _runtime_recorded
+    if _runtime_recorded or not profile:
+        return
+    _runtime_recorded = True
+    try:
+        from .plugin_update import production_manager
+        production_manager(profile).record_runtime_loaded()
+    except Exception:  # update status can fail closed; the app's connection never does
+        logger.warning("bighelp plugin update status unavailable")
+
+
 @router.get("/context")
 async def context(request: Request) -> Response:
     owner = native_context(request)
+    _record_serving_runtime(owner.serving_profile_id)
     # Each app connection starts here, in the process that serves its chats.
     from . import durable_sessions
     try:
