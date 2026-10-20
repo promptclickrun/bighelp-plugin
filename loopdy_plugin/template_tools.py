@@ -92,13 +92,13 @@ def unattended_reason() -> str | None:
     return None
 
 
-def request_approval(description: str, rule_key: str) -> dict[str, Any]:
+def request_approval(description: str, rule_key: str, tool: str = CREATE_TOOL) -> dict[str, Any]:
     """Ask the person through Hermes' approval prompt (CLI, gateway or app). Fails closed."""
     try:
         from tools.approval import request_tool_approval
     except ImportError:
         return {"approved": False, "message": "This Hermes can't ask for approval for plugin tools."}
-    return request_tool_approval(CREATE_TOOL, description, rule_key=rule_key)
+    return request_tool_approval(tool, description, rule_key=rule_key)
 
 
 # MARK: - Tools
