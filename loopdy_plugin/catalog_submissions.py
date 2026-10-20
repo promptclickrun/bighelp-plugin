@@ -437,8 +437,8 @@ MAX_BODY_BYTES = 32 * 1024
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _NEWLINES = re.compile(r"\r\n?")
 # JavaScript's white space (String.prototype.trim and \s).
-_JS_SPACE = ("\t\n\x0b\x0c\r \xa0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
-             + "\u2028\u2029\u202f\u205f\u3000\ufeff")
+_JS_SPACE = "".join(map(chr, (0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680, *range(0x2000, 0x200B),
+                               0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)))
 _JS_SPACES = re.compile("[" + re.escape(_JS_SPACE) + "]+")
 # What JavaScript's Number() reads from trimmed text, apart from Infinity (never a finite number anyway).
 _JS_DECIMAL = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
