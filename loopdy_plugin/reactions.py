@@ -10,6 +10,7 @@ import json
 import unicodedata
 from typing import Any
 
+from . import tool_session
 from .naming import TOOLSET
 
 REACTION_SCHEMA = "loopdy.message-reaction"
@@ -45,7 +46,8 @@ def _emoji(value: Any) -> str:
     return candidate
 
 
-def react(emoji: Any, message_row_id: Any = None, messages_back: Any = None) -> str:
+def react(emoji: Any, message_row_id: Any = None, messages_back: Any = None,
+          context: dict[str, Any] | None = None) -> str:
     try:
         normalized = _emoji(emoji)
         back = 0 if messages_back is None else int(messages_back)
@@ -57,11 +59,9 @@ def react(emoji: Any, message_row_id: Any = None, messages_back: Any = None) -> 
     except (TypeError, ValueError) as error:
         return _error(str(error) if str(error).startswith("reaction_") else "reaction_invalid")
 
-    from gateway.session_context import get_session_env
     from hermes_state_registry import acquire, release_or_close
 
-    session_key = (get_session_env("HERMES_SESSION_KEY", "")
-                   or get_session_env("HERMES_SESSION_ID", ""))
+    session_key = tool_session.session_id(context, "HERMES_SESSION_KEY", "HERMES_SESSION_ID")
     if not session_key:
         return _error("reaction_session_unavailable")
     try:
@@ -86,7 +86,8 @@ def react(emoji: Any, message_row_id: Any = None, messages_back: Any = None) -> 
         # a UI bridge the stored reaction still shows on the next history read.
         try:
             from tools import desktop_ui
-            desktop_ui.emit("message.reaction", {"row_id": int(row_id), "reactions": reactions, "role": "user"})
+            with tool_session.bound(session_key):
+                desktop_ui.emit("message.reaction", {"row_id": int(row_id), "reactions": reactions, "role": "user"})
         except Exception:
             pass
         return json.dumps({
@@ -151,10 +152,11 @@ def register(ctx: Any) -> bool:
             ),
             "parameters": PARAMETERS,
         },
-        handler=lambda args, **_: react(
+        handler=lambda args, **context: react(
             args.get("emoji", ""),
             args.get("message_row_id"),
             args.get("messages_back"),
+            context,
         ),
         emoji="💛",
     )
