@@ -143,6 +143,34 @@ The alert's title is the workflow's name, and its chat is `workflow.run.<runId>`
 Each kind has a switch per device (`PUT /enrollments/<grantId>/preferences` with `"workflows": {"needsYou",
 "succeeded", "failed", "cancelled"}`); all start on. Capabilities list `preferences.workflows`.
 
+### Scheduled tasks: where a tap goes
+
+A scheduled task runs in a session of its own (`cron_<job>_<time>`, or `local-<sha256>` in Hermes' unified
+runtime). Nobody opened that session, so an alert that names it cannot take the phone to a chat. The host now
+remembers the chat where each job was made, and the alert can name that chat or the job:
+
+1. **The job's chat.** When an agent makes or changes a job with Hermes' cron tool (`cronjob_manage`, or `cronjob`
+   on older Hermes) during a turn of a person's chat, the host records the job and that chat
+   (`scheduled_chats` in the notification journal: agent, job ID, chat session ID, time). It reads only Hermes'
+   own answer to the tool call, so a refused call records nothing. A later change from another chat moves the
+   job to that chat. A removal with the tool deletes the record. A job made by a scheduled run, a workflow stage,
+   a helper, a group chat turn or another agent's session gets no chat. The host keeps at most 512 records per
+   agent; the oldest go first.
+2. **The alert.** When a run of that job alerts, the host checks that the chat still exists and still belongs to
+   the same agent. If it does, the alert names `scheduled.chat.<session ID>`. If the chat is gone, the record is
+   deleted and the alert names the job, `scheduled.job.<job ID>`; the app opens the job in Scheduled tasks. A job
+   made in a terminal or in the app's Scheduled tasks screen also names the job. Like any chat, the name is hashed
+   with the agent into the alert's `sessionReference`.
+3. **The run stays the alert's identity.** The event ID and the event's `sessionId` still name the run, so a
+   retry is still one alert. A run that names no job (Hermes before `ctx.current_cron_execution()` with a
+   `local-` session ID) names the run, as before.
+
+Only phones that ask get these names. The host lists `preferences.scheduledLinks` in its capabilities, and the
+app sends `"scheduledLinks": true` in `PUT /enrollments/<grantId>/preferences`. It starts off. An older app never
+sends it, so its scheduled alerts still name the run, as they did. The separate names also keep a scheduled alert
+apart from the replies of the chat it names: a phone looking at that chat still shows it, and opening the chat
+does not clear it, because the run's text is not in the chat.
+
 ## Instant alerts while bighelp is open
 
 A push can take 10 seconds or more to arrive. While bighelp is open on a device, the device gets its alerts

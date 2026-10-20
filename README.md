@@ -195,7 +195,8 @@ Chat never needs them.
   agent, helper results and workflow runs. Messages between your agents alert you only if you turn them on. Each
   alert shows the name and picture of the agent. An agent without a picture gets the bighelp picture, so it still
   sends alerts. A workflow alert shows the name of the workflow. When you tap an alert, the app goes to that host
-  and opens the chat.
+  and opens the chat. A scheduled task's alert opens the chat where your agent made the task, or the task itself
+  when that chat is gone (with current app builds).
 - **End-to-end encrypted.** The app gives its own key directly to your host. The host encrypts the title, text and
   avatar of each notification for that phone, and signs it. The notification service and BuzzKit only send on
   bytes that they cannot read. They see the event type, the time, the IDs of the agent and the chat, and routing
