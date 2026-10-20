@@ -11,7 +11,10 @@ your phone alerts about that agent's chats, and update a Live Activity while it 
   BuzzKit or Apple push keys.
 - **Your host** decides what's worth an alert and, with current app builds, encrypts it so only your phone can
   read it.
-- **The app** shows the alert. Tapping one re-checks the event with your host before opening the chat.
+- **The app** shows the alert. When you tap it, the app goes to the alert's host and opens the chat at once.
+  The alert names its agent and chat, and the phone finds the host from the saved grant. If the phone cannot
+  match the alert to a host and chat this way, the app first asks the host about the event
+  (`GET /notifications/enrollments/<grantId>/events/<eventId>`).
 
 ## Setting it up
 
@@ -24,7 +27,11 @@ your phone alerts about that agent's chats, and update a Live Activity while it 
 4. If the host can seal alerts, the app sends its own content key straight to the host
    (`PUT /notifications/enrollments/<grantId>/recipient-key`). It never goes through the service.
 5. When you open a chat, the app subscribes that chat (`PUT /notifications/enrollments/<grantId>/sessions`).
-   Only subscribed chats produce alerts.
+
+A grant is for one agent, not for one chat. All chats of that agent can send alerts of the grant's event types,
+also chats that you did not open on this phone. Approvals are different: the host sends an approval push only for
+a chat that the phone subscribed. When the phone unsubscribes a chat, the host deletes the alerts for that chat
+that it did not send yet.
 
 Turning notifications off revokes the grant with the service, so the host can no longer send alerts for it.
 Removing the grant on the host (`DELETE /notifications/enrollments/<grantId>`) also deletes the host's local
