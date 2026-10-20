@@ -2,7 +2,7 @@ manifest_version: 1
 name: loopdy
 label: bighelp
 kind: platform
-version: "3.4.9"
+version: "3.20.0"
 license: Apache-2.0
 description: >
   The bighelp app's plugin for Hermes: native cards, Feed, Ideas and Goals,
@@ -18,6 +18,14 @@ config_schema:
       Retained legacy paired-transport preferences. The production plugin does
       not start this listener. Connect the app to the authenticated Hermes
       Tailscale address instead; no cloud pairing or public URL is required.
+  templates_allow_create_agent:
+    type: bool
+    default: false
+    label: Agents can make agents from templates
+    description: >
+      Lets agents make a new agent from a bighelp Template Catalog template
+      (bighelp_templates_create_agent). Hermes still asks you to approve each
+      one. Off by default.
 optional_env:
   - LOOPDY_HOME_TARGET
   - BIGHELP_WORKSPACE_GIT_CONFIG
@@ -54,6 +62,7 @@ provides_tools:
   - iphone_calendar
   - iphone_reminders
   - iphone_location
+  - iphone_appearance
   - bighelp_render_summary
   - bighelp_render_metrics
   - bighelp_render_list
@@ -73,11 +82,15 @@ provides_tools:
   - bighelp_get_card_template
   - bighelp_render_card_template
   - bighelp_save_ui_template
-  - bighelp_marketplace_prepare_upload
   - bighelp_react_to_message
   - bighelp_request_secure_input
   - bighelp_board
   - bighelp_people
+  - bighelp_templates_search
+  - bighelp_templates_get
+  - bighelp_templates_fill
+  - bighelp_templates_create_agent
+  - bighelp_workflows
   - bighelp_catalog_login
   - bighelp_submit_catalog_template
 platforms:

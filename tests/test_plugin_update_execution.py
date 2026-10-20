@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from loopdy_plugin import plugin_update as api
+from loopdy_plugin import yaml_compat
 with patch.dict(sys.modules, {"plugin_update": api}):
     worker = importlib.import_module("loopdy_plugin.plugin_update_worker")
 
@@ -141,6 +142,8 @@ class PluginUpdateExecutionTests(unittest.TestCase):
         original_which = api.shutil.which
         with patch.object(api.sys, "executable", str(interpreter)), patch.object(api.platform, "system", return_value="Darwin"), patch.object(api.shutil, "which", side_effect=lambda name: "/bin/launchctl" if name == "launchctl" else original_which(name)), patch.object(api.subprocess, "run", side_effect=capture):
             self.manager._launch_detached_worker(self.operation_id)
+        self.assertTrue((self.manager.data_root / "workers" / self.operation_id / "yaml_compat.py").is_file(),
+                        "The worker reads manifests with it")
         self.assertEqual(commands[0][1], "submit")
         self.assertIn(str(interpreter), commands[0])
         self.assertNotIn("KeepAlive", commands[0])
@@ -153,6 +156,22 @@ class PluginUpdateExecutionTests(unittest.TestCase):
             manager = api.production_manager("other")
             with self.assertRaises(api.PluginUpdateError):
                 manager._launch_detached_worker(self.operation_id)
+
+    def test_same_capabilities_pass_without_pyyaml(self):
+        """Hermes 0.22 and later ship only ruamel.yaml: an update that adds nothing must not stop here."""
+        installed = self.root / "plugins" / "loopdy"
+        installed.mkdir(parents=True, exist_ok=True)
+        (installed / "plugin.yaml").write_text('name: loopdy\ncapabilities: [tools.read]\n')
+        staged = self.root / "staged"
+        staged.mkdir()
+        (staged / "plugin.yaml").write_text('name: loopdy\ncapabilities: [tools.read]\n')
+        guard = type(sys)("tools.plugin_guard")
+        guard.scan_plugin = lambda root, source: object()
+        guard.should_allow_plugin_install = lambda scan, force: (True, "")
+        # The worker runs from a folder holding its copied siblings, so it imports them by plain name.
+        with patch.dict(sys.modules, {"yaml": None, "yaml_compat": yaml_compat, "tools.plugin_guard": guard}), \
+                patch.object(worker, "_run_quiet", return_value=0):
+            worker._validate_staged_plugin(staged, self.root)
 
     def test_new_privileged_capability_blocks_before_installer(self):
         staged = self.root / "staged"

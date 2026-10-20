@@ -206,7 +206,14 @@ class CodexTests(Base):
         self.assertEqual([(w.label, w.used_percent) for w in report.windows],
                          [("Session (5 hours)", 12.0), ("Week", 40.0), ("Spark · Week", 5.0)])
         self.assertEqual(report.plan, "Pro")
-        self.assertEqual(report.facts, [("Credits", "$4.50"), ("Banked resets", "2")])
+        self.assertEqual(report.facts, [("Credits", "4.5 credits"), ("Banked resets", "2")])
+
+    def test_codex_credits_are_credits_not_dollars(self):
+        limits = json.loads(json.dumps(self.limits))
+        limits["rateLimits"]["credits"]["balance"] = "14000"
+        result = self.run_codex({"type": "chatgpt", "planType": "pro"}, limits)
+        report = pu._codex_report(result, pu._Source("codex", "Codex", ("cli",), list), "codex", "Codex", ("cli",))
+        self.assertEqual(report.facts[0], ("Credits", "14,000 credits"))
 
     def test_app_server_without_a_login_asks_to_sign_in(self):
         with self.assertRaises(pu.Unavailable) as raised:

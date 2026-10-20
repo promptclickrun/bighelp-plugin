@@ -362,9 +362,6 @@ class BighelpAdapter(BasePlatformAdapter):
         direct_session_opener: Callable | None = None,
         presentation_observer: Callable | None = None,
         voice_dispatch: Callable | None = None,
-        live_voice_settings_getter: Callable | None = None,
-        live_voice_provider_factory: Callable | None = None,
-        live_voice_storage_root: Path | None = None,
         voice_synthesizer: Callable[[VoiceSpeakRequest], SynthesizedVoiceAudio] = synthesize_voice_audio,
     ):
         # Restart and shutdown pings are operator lifecycle signals, not user
@@ -390,10 +387,6 @@ class BighelpAdapter(BasePlatformAdapter):
         self._presentation_runs = {}
         self._presentation_observer = presentation_observer
         self._voice_dispatch = voice_dispatch
-        self._live_voice_runtime = None
-        self._live_voice_settings_getter = live_voice_settings_getter
-        self._live_voice_provider_factory = live_voice_provider_factory
-        self._live_voice_storage_root = live_voice_storage_root
         self._turn_replies = TurnReplyRegistry()
         self._processing_turns = set()
         self._transport_generation = encode_base64url(os.urandom(18))
@@ -739,19 +732,11 @@ class BighelpAdapter(BasePlatformAdapter):
             raise TypeError("voice dispatcher must be callable")
         self._voice_dispatch = dispatcher
 
-    def _ensure_live_voice_runtime(self):
-        if self._live_voice_runtime is None:
-            from .live_voice_runtime import LiveVoiceRuntime
-            self._live_voice_runtime = LiveVoiceRuntime(
-                self, storage_root=self._live_voice_storage_root or
-                get_hermes_home() / "plugin-data" / "loopdy" / "live-voice",
-                provider_factory=self._live_voice_provider_factory,
-                settings_getter=self._live_voice_settings_getter)
-        return self._live_voice_runtime
-
     async def _dispatch_live_voice(self, context, payload, route):
-        dispatch = self._voice_dispatch or self._ensure_live_voice_runtime().dispatch
-        return await dispatch(context, payload, route)
+        # Live voice runs through the native routes (native_voice.py); Link's own voice runtime is gone.
+        if self._voice_dispatch is None:
+            raise ValueError("Live voice is unavailable over bighelp Link")
+        return await self._voice_dispatch(context, payload, route)
 
     def _direct_current_config(self):
         # Configuration is reread without depending on the relay socket's state.
@@ -1046,12 +1031,6 @@ class BighelpAdapter(BasePlatformAdapter):
                             record["incomplete"] = False
         except Exception:
             logger.warning("bighelp session presentation update unavailable")
-        voice = self._live_voice_runtime
-        if voice is not None:
-            try:
-                voice.observe(event_name, **coordinates)
-            except Exception:
-                logger.warning("bighelp live job observer unavailable")
         observer = self._presentation_observer
         if observer is not None:
             try:
@@ -1288,10 +1267,6 @@ class BighelpAdapter(BasePlatformAdapter):
         return bool(getattr(client, "connected", False))
 
     def _on_link_status(self, state: str, detail: str = "") -> None:
-        voice = self._live_voice_runtime
-        if voice is not None and state != "connected":
-            voice.transport_lost(transport="link",
-                revoked=state in {"authentication_error", "superseded", "unready"})
         if state in {"authentication_error", "superseded"}:
             self._close_session_presentation()
             if self.direct_runtime is not None:
@@ -1455,9 +1430,6 @@ class BighelpAdapter(BasePlatformAdapter):
             )
 
     async def disconnect(self) -> None:
-        voice, self._live_voice_runtime = self._live_voice_runtime, None
-        if voice is not None:
-            await voice.shutdown()
         self._transport_generation = encode_base64url(os.urandom(18))
         start, self._direct_start_task = self._direct_start_task, None
         if start is not None and not start.done():
@@ -1854,13 +1826,6 @@ class BighelpAdapter(BasePlatformAdapter):
                 # fail or duplicate it because optional push projection is absent.
                 code = str(getattr(error, "code", "") or type(error).__name__)
                 logger.warning("Managed clarification notification unavailable (%s)", code[:96])
-
-        voice = self._live_voice_runtime
-        if voice is not None and await voice.clarification(
-                chat_id=chat_id, question=question, clarify_id=clarify_id,
-                session_key=session_key, lease=current_turn_lease.get()):
-            await publish_managed_clarification()
-            return SendResult(success=True, message_id=clarify_id)
 
         normalized_choices = [
             value
@@ -2871,6 +2836,7 @@ class BighelpAdapter(BasePlatformAdapter):
                 _link_workspace_connection.reset(connection_token)
             if negotiated:
                 result["capabilities"] = workspace_capabilities(
+                    live_voice=self._voice_dispatch is not None,
                     direct_enrollment=self.direct_runtime is not None and self.direct_runtime.available)
                 if result["status"] == "completed" and request.operation == "sessions.history":
                     context = await self._workspace_history_context(request, result["payload"])
@@ -3565,19 +3531,9 @@ def profile_display_name(profile: str) -> str:
     elif home.parent.name != "profiles" and profile != "default":
         home = home / "profiles" / profile
     try:
-        import yaml
+        from .yaml_compat import profile_name, safe_load
 
-        value = (
-            yaml.safe_load((home / "profile.yaml").read_text(encoding="utf-8"))
-            or {}
-        )
-        ui_meta = value.get("ui_meta") if isinstance(value, dict) else {}
-        display_name = (
-            ui_meta.get("displayName")
-            if isinstance(ui_meta, dict)
-            else None
-        ) or (value.get("display_name") if isinstance(value, dict) else None)
-        resolved = _text(display_name, 80)
+        resolved = _text(profile_name(safe_load((home / "profile.yaml").read_text(encoding="utf-8"))), 80)
         if resolved:
             return resolved
     except Exception:

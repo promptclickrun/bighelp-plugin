@@ -36,6 +36,18 @@ def _provided_tools() -> set[str]:
 
 
 class AgentGuideTests(unittest.TestCase):
+    def test_workflows_stay_drafts_until_the_user_asks_to_publish(self) -> None:
+        # Agents built workflows that people could only make live by running them once. A workflow an
+        # agent builds stays a draft; it publishes only when the person asks, and the person approves.
+        brief = agent_guide.CHAT_BRIEF
+        self.assertIn("bighelp_workflows", brief)
+        self.assertRegex(brief, r"stays a draft")
+        self.assertRegex(brief, r"[Pp]ublish only when the user explicitly asks")
+        from loopdy_plugin.workflow_tools import SCHEMA
+        description = SCHEMA["description"]
+        self.assertIn("stay drafts", description)
+        self.assertIn("Publish only when the person explicitly asks", description)
+
     def test_bighelp_chats_get_the_brief_instead_of_a_terminal(self) -> None:
         # The app's chats carry source "bighelp". Unlabelled, Hermes called them its terminal UI and
         # agents doubted they could send files, cards or reminders.

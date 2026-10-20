@@ -10,14 +10,32 @@ import uuid
 from unittest.mock import patch
 
 from loopdy_plugin import workflow_api, workflow_coordinator
+from loopdy_plugin import workflow_model as model
 import test_native_api as native_fixtures
-from workflow_fixtures import AGENTS, BINDINGS, DRAFT, Engine, INPUTS
+from workflow_fixtures import AGENTS, BINDINGS, DRAFT, Engine, INPUTS, fake_gh, git_project, graph_definition
 
 
 VECTORS = Path(__file__).resolve().parents[1] / "fixtures" / "contracts" / "workflows-v1"
 PREFIX = native_fixtures.PREFIX + "/workflows/"
 # Keys a response leaves out when they don't apply (docs/WORKFLOWS.md marks them with ?).
-OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey"}
+OPTIONAL = {"attention", "failure", "waiting", "signoff", "previous", "wordCount", "value", "reason", "stageKey",
+            "decisions",
+            # Dev Factory: only a command stage's attempts and a sign-off on changes carry these.
+            "kind", "exit_code", "tries", "log", "changes",
+            # Dev Factory: every workflow in `list` says its schemaVersion; a recipe adds its projects.
+            "schemaVersion", "projects"}
+# Fields v2 added to v1 responses: the v1 vectors stay as they were, and apps ignore fields they don't know.
+ADDED_IN_V2 = frozenset({"pinned", "source", "updatedAt", "mode", "uses", "decisions", "trigger"})
+
+
+V2_VECTORS = {"draft-save-new.json", "draft-save-v2.json", "validate-v2.json", "pin.json", "unarchive.json",
+              "list-v2.json", "get-v2.json", "templates-save.json", "templates-list-v2.json",
+              "templates-use-yours.json", "templates-delete.json", "status-v2.json", "runs-get-text-runner.json",
+              "context-unavailable.json"}
+# Dev Factory (schemaVersion 3, docs/DEV_FACTORY.md): new files, no changed ones.
+CODE_VECTORS = {"templates-list-code.json", "draft-save-code.json", "runs-start-code.json",
+                "runs-get-code-command.json", "runs-get-code-review.json", "runs-signoff-code.json",
+                "runs-get-code-done.json"}
 
 
 def vector(name: str) -> dict:
@@ -34,20 +52,20 @@ def kind(value):
     return type(value).__name__
 
 
-def assert_shape(test, expected, actual, path="response"):
+def assert_shape(test, expected, actual, path="response", added=frozenset()):
     """Same keys (apart from optional ones) and the same JSON types, all the way down."""
     if isinstance(expected, dict) and isinstance(actual, dict):
         if path.endswith(".definition") or path.endswith(".inputs") or path.endswith(".value"):
             return
         missing = set(expected) - set(actual) - OPTIONAL
-        extra = set(actual) - set(expected) - OPTIONAL
+        extra = set(actual) - set(expected) - OPTIONAL - added
         test.assertEqual((missing, extra), (set(), set()), path)
         for key in set(expected) & set(actual):
-            assert_shape(test, expected[key], actual[key], f"{path}.{key}")
+            assert_shape(test, expected[key], actual[key], f"{path}.{key}", added)
     elif isinstance(expected, list) and isinstance(actual, list):
         if expected:
             for index, item in enumerate(actual):
-                assert_shape(test, expected[0], item, f"{path}[{index}]")
+                assert_shape(test, expected[0], item, f"{path}[{index}]", added)
     elif kind(expected) is not None and kind(actual) is not None:
         test.assertEqual(kind(expected), kind(actual), path)
 
@@ -79,7 +97,8 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store")
         value = response.json()
         if vector_name is not None:
-            assert_shape(self, vector(vector_name)["response"], value)
+            assert_shape(self, vector(vector_name)["response"], value,
+                         added=frozenset() if vector_name in V2_VECTORS | CODE_VECTORS else ADDED_IN_V2)
         return value
 
     def error(self, path, body, status, code):
@@ -88,16 +107,403 @@ class WorkflowRouteTests(unittest.TestCase):
         return value
 
     def test_context_advertises_workflows(self):
-        features = self.fixture.context().json()["features"]
-        self.assertIn("native-workflows-v1", features)
-        with patch.object(workflow_api, "probe", return_value="hermes_update_needed"):
-            self.assertNotIn("native-workflows-v1", self.fixture.context().json()["features"])
-            self.error("status", {}, 503, "workflows_unavailable")
+        context = self.fixture.context().json()
+        self.assertIn("native-workflows-v1", context["features"])
+        self.assertIn("native-workflows-edit-v1", context["features"])
+        self.assertNotIn("unavailable", context)
+        for reason in workflow_api.REASONS:
+            with self.subTest(reason=reason), patch.object(workflow_api, "probe", return_value=reason):
+                value = self.fixture.context().json()
+                self.assertNotIn("native-workflows-v1", value["features"])
+                self.assertNotIn("native-workflows-edit-v1", value["features"])
+                self.assertEqual(value["unavailable"], {"native-workflows-v1": reason})
+                assert_shape(self, vector("context-unavailable.json")["response"],
+                             {key: value[key] for key in vector("context-unavailable.json")["response"]})
+                self.error("status", {}, 503, "workflows_unavailable")
+
+    def test_context_advertises_coding_workflows_where_git_is(self):
+        self.assertIn("native-workflows-code-v1", self.fixture.context().json()["features"])
+        with patch.object(workflow_api, "code_available", return_value=False):
+            context = self.fixture.context().json()
+            self.assertNotIn("native-workflows-code-v1", context["features"])
+            self.assertIn("native-workflows-v1", context["features"])
+
+    def coding_workflow(self, fix_tries: int = 2) -> tuple[str, dict]:
+        """A Dev Factory recipe from its template, with two real projects filled in, bound and published."""
+        listed = [item["id"] for item in self.ok("templates/list", {})["templates"]]
+        self.assertNotIn("fix-test-pr", listed, "Apps without Dev Factory never see its templates")
+        listed = [item["id"] for item in self.ok("templates/list", {"includeCode": True},
+                                                 "templates-list-code.json")["templates"]]
+        self.assertIn("fix-test-pr", listed)
+        used = self.ok("templates/use", {"templateId": "fix-test-pr", "name": "Fix the check"})
+        # A template has no projects yet; the app fills them in (and picks the coder) before it can run.
+        self.assertEqual([issue["code"] for issue in used["validation"]["issues"]], ["no_projects", "role_unbound"])
+        definition = self.ok("get", {"workflowId": used["workflowId"]})["workflow"]["definition"]
+        projects = {"app": git_project(self, "app"), "web": git_project(self, "web")}
+        definition["projects"] = [{"key": key, "label": key.title(), "path": str(path)}
+                                  for key, path in projects.items()]
+        definition["stages"][1]["run"] = {"*": "sh check.sh"}
+        definition["stages"][1]["fix"]["maxTries"] = fix_tries
+        self.ok("bind", {"workflowId": used["workflowId"], "role": "coder", "agentId": "writer"})
+        saved = self.ok("draft/save", {"workflowId": used["workflowId"], "baseDraftVersion": used["draftVersion"],
+                                       "definition": definition}, "draft-save-code.json")
+        self.assertEqual(saved["validation"], {"valid": True, "host": True, "issues": []})
+        self.ok("publish", {"workflowId": used["workflowId"], "draftVersion": saved["draftVersion"]})
+        return used["workflowId"], projects
+
+    def test_coding_runs_through_the_routes(self):
+        workflow_id, projects = self.coding_workflow()
+        body = {"workflowId": workflow_id, "revision": 1, "inputs": {"task": "Make the check pass"},
+                "clientRunToken": str(uuid.uuid4())}
+        started = self.ok("runs/start", body)
+        self.assertEqual([item["project"] for item in started["runs"]], ["app", "web"])
+        self.assertEqual(started["run"]["group_id"], started["group_id"])
+        one = self.ok("runs/start", dict(body, clientRunToken=str(uuid.uuid4()), projects=["web"]))
+        self.assertEqual([item["project"] for item in one["runs"]], ["web"])
+        self.error("runs/start", dict(body, clientRunToken=str(uuid.uuid4()), projects=["mobile"]), 422,
+                   "projects_invalid")
+        self.error("runs/start", dict(body, clientRunToken=str(uuid.uuid4()), projects=["Not A Key"]), 422,
+                   "invalid_request")
+        run = self.ok("runs/get", {"runId": started["runs"][1]["run_id"]})["run"]
+        self.assertEqual((run["project"], run["workspace"], run["pull_request"], run["reason"]),
+                         ({"key": "web", "label": "Web", "path": str(projects["web"])}, None, None, None))
+        self.assertEqual([(item["key"], item["state"]) for item in run["stages"]],
+                         [("fix", "pending"), ("tests", "pending"), ("review", "pending"), ("open_pr", "pending")])
+        listed = self.ok("runs/list", {"workflowId": workflow_id})["runs"]
+        self.assertEqual({item["group_id"] for item in listed}, {started["group_id"], one["group_id"]})
+
+    def test_coding_routes_match_the_vectors(self):
+        """One project's run end to end: a fix that doesn't help, Try again, your review, a pull request."""
+        workflow_id, projects = self.coding_workflow(fix_tries=1)
+        started = self.ok("runs/start", {"workflowId": workflow_id, "revision": 1, "inputs": {"task": "Fix it"},
+                                         "clientRunToken": str(uuid.uuid4()), "projects": ["app"]},
+                          "runs-start-code.json")
+        run_id = started["runs"][0]["run_id"]
+        engine = Engine(self, home=self.home)
+        engine.host.real_enabled = True
+        gh = fake_gh(self, number=42)
+        engine.coordinator.environ["PATH"] = f"{gh}:/usr/bin:/bin"
+        engine.start()
+        engine.tick()
+        engine.finish_stage({"title": "Make the check pass", "summary": {"content": "# Summary\n\nA first try."}})
+        engine.wait(run_id, lambda run: engine.host.latest().alive)
+        engine.finish_stage({"summary": "Looked at the check."})
+        engine.wait(run_id, lambda run: run["state"] == "waiting_for_you")
+        waiting = self.ok("runs/get", {"runId": run_id}, "runs-get-code-command.json")["run"]
+        self.assertEqual((waiting["waiting"]["kind"], waiting["reason"]),
+                         ("command", "Run the tests: still failing after 1 try."))
+        (Path(waiting["workspace"]["path"]) / "fixed.txt").write_text("fixed\n")
+        self.ok("runs/control", {"runId": run_id, "action": "retry", "expectedVersion": waiting["version"]})
+        engine.wait(run_id, lambda run: run["state"] == "waiting_for_you")
+        review = self.ok("runs/get", {"runId": run_id}, "runs-get-code-review.json")["run"]
+        self.assertEqual(review["signoff"]["changes"]["files"], 1)
+        self.ok("runs/signoff", {"runId": run_id, "stageKey": "review", "decision": "approve",
+                                 "artifactSha256": review["signoff"]["sha256"]}, "runs-signoff-code.json")
+        engine.wait(run_id, lambda run: run["state"] == "succeeded")
+        done = self.ok("runs/get", {"runId": run_id}, "runs-get-code-done.json")["run"]
+        self.assertEqual(done["pull_request"], {"url": "https://github.example/fixture/app/pull/42", "number": 42})
+        self.assertNotIn(str(projects["web"]), json.dumps(done))
+
+    def test_agents_build_and_start_coding_workflows(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        tools = WorkflowTools(approve=lambda description, rule_key: (True, ""))
+        self.assertIn("fix-test-pr", [item["id"] for item in tools.call({"action": "templates"})["templates"]])
+        workflow_id, _projects = self.coding_workflow()
+        started = tools.call({"action": "start", "workflowId": workflow_id, "inputs": {"task": "x"},
+                              "projects": ["app"]})
+        self.assertEqual([item["project"] for item in started["runs"]], ["app"])
+        created = tools.call({"action": "create", "templateId": "bump-dependency"})
+        self.assertEqual([issue["code"] for issue in created["validation"]["issues"]], ["no_projects", "role_unbound"])
+
+    def test_probe_reasons_are_fixed_codes(self):
+        with patch.object(workflow_api, "hermes_features", return_value=frozenset({"toolsets"})):
+            self.assertEqual(workflow_api.probe(), "chat_runner_missing")
+        with patch.object(workflow_api, "hermes_features", return_value=frozenset({"query", "toolsets"})):
+            self.assertIsNone(workflow_api.probe())
+            self.assertEqual(workflow_api.runner_mode(), "text")
+        with patch.object(workflow_api.os, "name", "nt"):
+            self.assertEqual(workflow_api.probe(), "not_posix")
+        with patch.dict(sys.modules, {"hermes_cli.profiles": None}):
+            self.assertEqual(workflow_api.probe(), "profile_helpers_missing")
+        workflow_api._probe_cache.clear()
+        with patch.object(workflow_api, "workflows_root", side_effect=OSError("unreadable")):
+            self.assertEqual(workflow_api.probe(), "store_unavailable")
+
+    def test_windows_says_not_posix_without_loading_the_coordinator(self):
+        # Native Windows has no fcntl, so the coordinator can't load there. The probe must say why first (#156).
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        with patch.object(workflow_api.os, "name", "nt"), patch.dict(sys.modules, {"fcntl": None}):
+            sys.modules.pop(workflow_coordinator.__name__)
+            self.assertEqual(workflow_api.probe(), "not_posix")
+            self.assertEqual(WorkflowTools().call({"action": "list", "filter": "all", "limit": 1}),
+                             {"error": "workflows_unavailable",
+                              "message": "Workflows can't run on this computer (not_posix)."})
+            self.assertNotIn(workflow_coordinator.__name__, sys.modules)
+
+    def test_store_root_works_with_stable_hermes(self):
+        # Stable Hermes' get_default_hermes_root() takes no arguments; newer builds take `home`.
+        import hermes_constants
+        root = Path("/tmp/loopdy-stable-root")
+
+        def stable():
+            return root
+
+        def newer(*, home=None):
+            return root
+
+        for helper in (stable, newer):
+            with self.subTest(helper=helper.__name__), \
+                    patch.object(hermes_constants, "get_default_hermes_root", helper):
+                self.assertEqual(workflow_api.workflows_root(), root / "plugin-data" / "loopdy" / "workflows")
+
+    def test_version_two_routes_match_the_vectors(self):
+        status = self.ok("status", {}, "status-v2.json")
+        self.assertEqual(status["runner"], {"available": True, "mode": "stream"})
+        empty = vector("draft-save-new.json")["request"]
+        created = self.ok("draft/save", empty, "draft-save-new.json")
+        workflow_id = created["workflowId"]
+        self.assertEqual(created["validation"], vector("draft-save-new.json")["response"]["validation"])
+        request = dict(vector("draft-save-v2.json")["request"], workflowId=workflow_id)
+        saved = self.ok("draft/save", request, "draft-save-v2.json")
+        self.assertEqual(saved["validation"], vector("draft-save-v2.json")["response"]["validation"])
+        broken = graph_definition()
+        broken["stages"][0]["next"] = "nowhere"
+        self.ok("draft/save", {"workflowId": workflow_id, "baseDraftVersion": 2, "definition": broken})
+        issues = self.ok("validate", {"workflowId": workflow_id}, "validate-v2.json")["validation"]["issues"]
+        self.assertIn("next_unknown", [issue["code"] for issue in issues])
+        self.ok("draft/save", {"workflowId": workflow_id, "baseDraftVersion": 3, "definition": graph_definition()})
+        self.assertEqual(self.ok("pin", {"workflowId": workflow_id, "pinned": True}, "pin.json"),
+                         {"workflowId": workflow_id, "pinned": True})
+        other = self.ok("templates/use", {"templateId": "research-draft-review"})["workflowId"]
+        listed = self.ok("list", {}, "list-v2.json")["workflows"]
+        self.assertEqual([(item["id"], item["pinned"]) for item in listed], [(workflow_id, True), (other, False)])
+        got = self.ok("get", {"workflowId": workflow_id}, "get-v2.json")["workflow"]
+        self.assertEqual(got["definition"], model.parse_definition(graph_definition()))
+        self.assertEqual(got["definition"]["layout"], graph_definition()["layout"])
+        saved_template = self.ok("templates/save", {"workflowId": workflow_id, "name": "Newsletter with a loop",
+                                                    "description": "Draft until the review passes."},
+                                 "templates-save.json")
+        templates = self.ok("templates/list", {}, "templates-list-v2.json")["templates"]
+        self.assertEqual([item["source"] for item in templates], ["yours", "builtin", "builtin"])
+        used = self.ok("templates/use", {"templateId": saved_template["templateId"], "name": "Monthly newsletter"},
+                       "templates-use-yours.json")
+        self.assertEqual(self.ok("get", {"workflowId": used["workflowId"]})["workflow"]["name"], "Monthly newsletter")
+        self.assertEqual(self.ok("templates/delete", {"templateId": saved_template["templateId"]},
+                                 "templates-delete.json"), {"deleted": True})
+        self.error("templates/delete", {"templateId": "research-draft-review"}, 409, "not_allowed")
+        self.error("templates/delete", {"templateId": saved_template["templateId"]}, 404, "template_not_found")
+        self.ok("archive", {"workflowId": other})
+        self.assertEqual(self.ok("unarchive", {"workflowId": other}, "unarchive.json"),
+                         {"workflowId": other, "archived": False})
+        for path, body in (("pin", {"workflowId": workflow_id, "pinned": 1}),
+                           ("pin", {"workflowId": workflow_id}),
+                           ("templates/save", {"workflowId": workflow_id, "name": "x" * 81}),
+                           ("templates/save", {"workflowId": workflow_id, "name": "x", "roles": []}),
+                           ("templates/delete", {"templateId": "Bad_Id"})):
+            with self.subTest(path=path, body=body):
+                self.error(path, body, 422, "invalid_request")
+
+    def test_text_runner_run_detail_matches_its_vector(self):
+        used = self.ok("templates/use", {"templateId": "research-draft-review"})
+        for role, agent in BINDINGS:
+            self.ok("bind", {"workflowId": used["workflowId"], "role": role, "agentId": agent})
+        self.ok("publish", {"workflowId": used["workflowId"], "draftVersion": 1})
+        run = self.ok("runs/start", {"workflowId": used["workflowId"], "revision": 1, "inputs": INPUTS,
+                                     "clientRunToken": str(uuid.uuid4())})["run"]
+        engine = Engine(self, home=self.home)
+        engine.coordinator.features = frozenset({"cli", "source", "toolsets", "query", "query_file", "quiet"})
+        engine.coordinator.mode = "text"
+        engine.start()
+        engine.tick()
+        detail = self.ok("runs/get", {"runId": run["id"]}, "runs-get-text-runner.json")["run"]
+        self.assertIsNone(detail["stages"][0]["attempts"][0]["tokens"])
+        # Each stage says what it read, so the app can show a stage's inputs.
+        uses = {stage["key"]: stage["uses"] for stage in detail["stages"]}
+        self.assertEqual(uses["draft"], ["inputs.topic", "inputs.audience", "inputs.length", "research.brief"])
+        self.assertEqual(uses["review_decision"], ["review.decision"])
+        self.assertEqual([stage["decisions"] for stage in detail["stages"] if stage["kind"] == "signoff"], [[]])
+
+    def published(self):
+        used = self.ok("templates/use", {"templateId": "research-draft-review"})
+        for role, agent in BINDINGS:
+            self.ok("bind", {"workflowId": used["workflowId"], "role": role, "agentId": agent})
+        self.ok("publish", {"workflowId": used["workflowId"], "draftVersion": 1})
+        return used["workflowId"]
+
+    def test_a_schedule_is_a_cron_job_that_starts_runs(self):
+        import cron.jobs
+        self.assertIn("native-workflows-trigger-v1", self.fixture.context().json()["features"])
+        workflow_id = self.published()
+        jobs: dict[str, dict] = {}
+
+        def create_job(**fields):
+            job = dict(fields, id=f"job{len(jobs) + 1}")
+            jobs[job["id"]] = job
+            return job
+
+        with patch.object(cron.jobs, "create_job", side_effect=create_job), \
+                patch.object(cron.jobs, "remove_job", side_effect=lambda job_id: jobs.pop(job_id, None) is not None):
+            self.assertEqual(self.ok("get", {"workflowId": workflow_id})["workflow"]["trigger"], {"kind": "manual"})
+            self.error("trigger/set", {"workflowId": workflow_id, "trigger": {"kind": "schedule", "schedule": "nope"}},
+                       422, "schedule_invalid")
+            self.error("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "0 9 * * 1-5", "inputs": {}}}, 422, "inputs_invalid")
+            trigger = self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "0 9 * * 1-5", "inputs": INPUTS}})["trigger"]
+            self.assertEqual((trigger["kind"], trigger["schedule"], trigger["jobId"]), ("schedule", "0 9 * * 1-5", "job1"))
+            job = jobs["job1"]
+            # No agent: the job only runs the script, which starts the run.
+            self.assertEqual((job["no_agent"], job["prompt"], job["script"], job["deliver"]),
+                             (True, None, f"bighelp-workflow-{workflow_id}.py", "local"))
+            script = self.home / "scripts" / job["script"]
+            self.assertIn(f"run_scheduled({workflow_id!r})", script.read_text())
+            listed = next(w for w in self.ok("list", {})["workflows"] if w["id"] == workflow_id)
+            self.assertEqual(listed["trigger"]["schedule"], "0 9 * * 1-5")
+
+            # The job firing (twice in one minute) starts one run.
+            from loopdy_plugin.workflow_trigger import run_scheduled
+            self.assertEqual(run_scheduled(workflow_id, now=1_800_000_000), 0)
+            self.assertEqual(run_scheduled(workflow_id, now=1_800_000_030), 0)
+            runs = self.ok("runs/list", {"workflowId": workflow_id, "filter": "all", "limit": 10})["runs"]
+            self.assertEqual(len(runs), 1)
+
+            # A new schedule replaces the job; manual removes it and its script.
+            self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "30 7 * * *", "inputs": INPUTS}})
+            self.assertEqual(list(jobs), ["job2"])
+            self.assertEqual(self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {"kind": "manual"}}),
+                             {"trigger": {"kind": "manual"}})
+            self.assertEqual(jobs, {})
+            self.assertFalse(script.exists())
+
+            # Archiving a scheduled workflow stops its schedule.
+            self.ok("trigger/set", {"workflowId": workflow_id, "trigger": {
+                "kind": "schedule", "schedule": "30 7 * * *", "inputs": INPUTS}})
+            self.ok("archive", {"workflowId": workflow_id})
+            self.assertEqual(jobs, {})
+
+    def test_agents_read_draft_and_run_workflows_and_ask_before_publishing(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        asked = []
+        answer = [False]
+
+        def approve(description, rule_key):
+            asked.append(description)
+            return answer[0], "The person said no."
+
+        tools = WorkflowTools(approve=approve)
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Agent made"})
+        workflow_id = created["workflowId"]
+        self.assertIn(workflow_id, [w["id"] for w in tools.call({"action": "list"})["workflows"]])
+        self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
+                         "not_published")
+        bindings = dict(BINDINGS)
+        refused = tools.call({"action": "publish", "workflowId": workflow_id, "bindings": bindings})
+        self.assertEqual(refused["error"], "not_approved")
+        self.assertIn("Agent made", asked[0])
+        self.assertIsNone(self.ok("get", {"workflowId": workflow_id})["workflow"]["latestRevision"])
+        answer[0] = True
+        tools.call({"action": "publish", "workflowId": workflow_id, "bindings": bindings})
+        run = tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["run"]
+        self.assertEqual(tools.call({"action": "run", "runId": run["id"]})["run"]["id"], run["id"])
+        self.assertEqual(tools.call({"action": "control", "runId": run["id"], "runAction": "cancel"})["run"]["id"],
+                         run["id"])
+        # A stage reads, but never starts or changes runs.
+        with patch.dict("os.environ", {"HERMES_SESSION_SOURCE": "workflow"}):
+            self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
+                             "not_in_a_stage")
+            self.assertIn("workflows", tools.call({"action": "list"}))
+        # A schedule asks too.
+        answer[0] = False
+        self.assertEqual(tools.call({"action": "set_trigger", "workflowId": workflow_id, "trigger": "schedule",
+                                     "schedule": "0 9 * * *", "inputs": INPUTS})["error"], "not_approved")
+        self.assertEqual(tools.call({"action": "nope"})["error"], "action_invalid")
+
+    def test_agents_pick_agents_on_a_draft_that_never_ran_without_asking(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        asked = []
+
+        def approve(description, rule_key):
+            asked.append(description)
+            return False, "No one can approve this right now."
+
+        tools = WorkflowTools(approve=approve)
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Picked"})
+        workflow_id, version = created["workflowId"], created["draftVersion"]
+        definition = self.ok("get", {"workflowId": workflow_id})["workflow"]["definition"]
+        saved = tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": version,
+                            "definition": definition, "bindings": dict(BINDINGS)})
+        self.assertNotIn("error", saved, saved)
+        self.assertEqual(asked, [])
+        # The app's own get shows the picks, so the role pickers open filled in.
+        workflow = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual({item["role"]: item["agentId"] for item in workflow["bindings"]}, dict(BINDINGS))
+        self.assertNotIn("role_unbound", [issue["code"] for issue in saved["validation"]["issues"]])
+        # Still nothing runs until the person publishes.
+        self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
+                         "not_published")
+        # A new workflow can come with its picks in one call.
+        fresh = tools.call({"action": "save_draft", "baseDraftVersion": 0, "definition": definition,
+                            "bindings": {"writer": "writer"}})
+        fresh_bindings = self.ok("get", {"workflowId": fresh["workflowId"]})["workflow"]["bindings"]
+        self.assertEqual({item["role"]: item["agentId"] for item in fresh_bindings}["writer"], "writer")
+
+    def test_draft_picks_refuse_unknown_agents_and_roles_and_save_nothing(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        tools = WorkflowTools(approve=lambda description, rule_key: (False, "no"))
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Checked"})
+        workflow_id, version = created["workflowId"], created["draftVersion"]
+        definition = self.ok("get", {"workflowId": workflow_id})["workflow"]["definition"]
+        missing = tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": version,
+                              "definition": definition, "bindings": {"writer": "nobody-here"}})
+        self.assertEqual(missing["error"], "profile_not_found")
+        unknown = tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": version,
+                              "definition": definition, "bindings": {"ghost": "writer"}})
+        self.assertEqual(unknown["error"], "role_not_found")
+        workflow = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual(workflow["draftVersion"], version)
+        self.assertEqual([item["agentId"] for item in workflow["bindings"]], [None, None, None])
+
+    def test_agents_ask_before_changing_agents_on_a_published_workflow(self):
+        from loopdy_plugin.workflow_tools import WorkflowTools
+        answer = [True]
+        asked = []
+
+        def approve(description, rule_key):
+            asked.append(description)
+            return answer[0], "The person said no."
+
+        tools = WorkflowTools(approve=approve)
+        created = tools.call({"action": "create", "templateId": "research-draft-review", "name": "Live"})
+        workflow_id = created["workflowId"]
+        tools.call({"action": "publish", "workflowId": workflow_id, "bindings": dict(BINDINGS)})
+        current = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        answer[0] = False
+        asked.clear()
+        refused = tools.call({"action": "save_draft", "workflowId": workflow_id,
+                              "baseDraftVersion": current["draftVersion"], "definition": current["definition"],
+                              "bindings": {"writer": "editor"}})
+        self.assertEqual(refused["error"], "not_approved")
+        self.assertEqual(len(asked), 1)
+        self.assertIn("writer: editor", asked[0])
+        after = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual({item["role"]: item["agentId"] for item in after["bindings"]}["writer"], "writer")
+        self.assertEqual(after["draftVersion"], current["draftVersion"])
+        # A plain draft save of a published workflow still needs no approval.
+        saved = tools.call({"action": "save_draft", "workflowId": workflow_id,
+                            "baseDraftVersion": current["draftVersion"], "definition": current["definition"]})
+        self.assertNotIn("error", saved, saved)
+        # With approval, the new pick lands.
+        answer[0] = True
+        tools.call({"action": "save_draft", "workflowId": workflow_id, "baseDraftVersion": saved["draftVersion"],
+                    "definition": current["definition"], "bindings": {"writer": "editor"}})
+        after = self.ok("get", {"workflowId": workflow_id})["workflow"]
+        self.assertEqual({item["role"]: item["agentId"] for item in after["bindings"]}["writer"], "editor")
 
     def test_every_route_matches_the_vectors(self):
         status = self.ok("status", {}, "status.json")
         self.assertEqual((status["coordinator"]["state"], status["slots"]["total"], status["runner"]),
-                         ("offline", 2, {"available": True}))
+                         ("offline", 2, {"available": True, "mode": "stream"}))
         self.assertEqual(self.ok("templates/list", {}, "templates-list.json")["templates"][0]["id"],
                          "research-draft-review")
         used = self.ok("templates/use", {"templateId": "research-draft-review", "name": "Weekly newsletter"},

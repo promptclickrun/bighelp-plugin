@@ -27,10 +27,54 @@ class WorkspaceArtifactRouteTests(unittest.TestCase):
         (self.home / "config.yaml").write_text(yaml.safe_dump({"terminal": {"cwd": str(root)}}))
         return root
 
-    def request(self, operation, path=None, headers=None):
+    def request(self, operation, path=None, headers=None, profile=None):
+        body = {"path": path} if profile is None else {"path": path, "profile": profile}
         return self.client.post(PREFIX + "/workspace-files/" + operation,
                                 headers=headers if headers is not None else self.headers(),
-                                json={"path": path})
+                                json=body)
+
+    def test_another_agents_files_come_from_its_own_folder(self):
+        own = self.configure()
+        (own / "mine.txt").write_text("the serving agent's")
+        research = self.home / "profiles/research"
+        folder = self.home / "research-work"
+        (folder / "reports").mkdir(parents=True)
+        (folder / "findings.md").write_text("made by research")
+        (research / "config.yaml").write_text(yaml.safe_dump({"terminal": {"cwd": str(folder)}}))
+        scope = self.request("scope", profile="research")
+        self.assertEqual(scope.status_code, 200, scope.text)
+        self.assertEqual(scope.json()["workspace"]["root"], str(folder.resolve()))
+        self.assertEqual(scope.json()["workspace"]["profileId"], "research")
+        listing = self.request("list", profile="research")
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual({row["name"] for row in listing.json()["entries"]}, {"findings.md", "reports"})
+        read = self.request("read", str(folder / "findings.md"), profile="research")
+        self.assertEqual(read.status_code, 200, read.text)
+        self.assertEqual(base64.b64decode(read.json()["data_url"].split(",", 1)[1]), b"made by research")
+        # Each agent's folder is its own: another agent's path is outside it.
+        outside = self.request("read", str(own / "mine.txt"), profile="research")
+        self.assertNotEqual(outside.status_code, 200, outside.text)
+        # Without a profile, it is the serving agent's folder, as before.
+        self.assertEqual(self.request("scope").json()["workspace"]["root"], str(own))
+
+    def test_unknown_or_malformed_agent_ids_are_refused(self):
+        self.configure()
+        missing = self.request("scope", profile="nobody")
+        self.assertEqual(missing.status_code, 404, missing.text)
+        self.assertEqual(missing.json()["error"]["code"], "agent_not_found")
+        for bad in ["../research", "Research", "", "a" * 65]:
+            with self.subTest(profile=bad):
+                response = self.request("list", profile=bad)
+                self.assertEqual(response.status_code, 422, response.text)
+
+    def test_another_agent_working_in_hermes_folder_is_refused_like_the_serving_one(self):
+        self.configure()
+        research = self.home / "profiles/research"
+        (research / "config.yaml").write_text(yaml.safe_dump({"terminal": {"cwd": str(self.home)}}))
+        (self.home / ".env").write_text("FIXTURE_KEY=not-for-the-phone\n")
+        response = self.request("list", profile="research")
+        self.assertNotEqual(response.status_code, 200, response.text)
+        self.assertNotIn("not-for-the-phone", response.text)
 
     def test_scope_listing_and_read_use_configured_root_and_true_birth_time(self):
         root = self.configure()

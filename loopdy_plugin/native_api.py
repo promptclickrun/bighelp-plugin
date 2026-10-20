@@ -66,6 +66,8 @@ async def _native_lifespan(app):
     # Hermes mounts this router separately from its profile-scoped plugin
     # registration module. Log the inventory from the namespace serving HTTP.
     log_native_feature_startup()
+    from .host_restart import release_locks_left_by_restart
+    release_locks_left_by_restart()
     yield
 
 
@@ -235,6 +237,12 @@ def _precondition(request: Request, context: NativeContext) -> str:
 @router.get("/context")
 async def context(request: Request) -> Response:
     owner = native_context(request)
+    # Each app connection starts here, in the process that serves its chats.
+    from . import durable_sessions
+    try:
+        durable_sessions.install()
+    except Exception:  # never let it fail the context
+        logger.warning("Durable bighelp sessions unavailable")
     if request.query_params:
         raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
     async for chunk in request.stream():
@@ -499,6 +507,98 @@ async def people_speaking(request: Request) -> Response:
     return _response(value, owner, request_id)
 
 
+class _AgentTalkCall(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    message: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class _AgentTalk(_Body):
+    sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    calls: list[_AgentTalkCall] = Field(max_length=16)
+
+
+def _agent_talk(body: _AgentTalk) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from .agent_talk import find_runs
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    return {"runs": find_runs((call.agentId, call.message) for call in body.calls)}
+
+
+@router.post("/agents/talk")
+async def agents_talk(request: Request) -> Response:
+    """What the agents this chat's agent asked are doing: IDs, times and a tool name, read-only."""
+    from .agent_talk import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "agent_talk_unavailable", "Agent conversations aren't available on this host.")
+    body = await _body(request, _AgentTalk)
+    value = await run_in_threadpool(_agent_talk, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+class _ChatActivity(_Body):
+    sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _chat_activity(body: _ChatActivity, stopping: bool) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from . import chat_activity
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    if stopping:
+        return {"stopped": chat_activity.stop(body.agentId, body.sessionId)}
+    return chat_activity.activity(body.agentId, body.sessionId)
+
+
+async def _chat_activity_route(request: Request, stopping: bool) -> Response:
+    from .chat_activity import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "chat_activity_unavailable", "Chat activity isn't available on this host.")
+    body = await _body(request, _ChatActivity)
+    value = await run_in_threadpool(_chat_activity, body, stopping)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+@router.post("/chat/activity")
+async def chat_activity(request: Request) -> Response:
+    """Whether another Hermes process is running this chat now (an agent another one asked), read-only."""
+    return await _chat_activity_route(request, stopping=False)
+
+
+@router.post("/chat/stop")
+async def chat_stop(request: Request) -> Response:
+    """Stops the run another Hermes process has on this chat, as Ctrl-C would."""
+    return await _chat_activity_route(request, stopping=True)
+
+
+class _Team(_Body):
+    enabled: StrictBool | None = None
+
+
+@router.post("/team")
+async def team_settings(request: Request) -> Response:
+    """Teamwork: whether every agent gets the team brief, and who's on the team."""
+    from .team import CAPABILITY, team
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "team_unavailable", "Teamwork isn't available on this host.")
+    body = await _body(request, _Team)
+    value = await run_in_threadpool(team().set_enabled, body.enabled)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=65_536)
+
+
 def _live_alerts_call(operation, *args, **kwargs):
     from .live_alerts import LiveAlertError
     from .managed_notifications import ManagedNotificationError
@@ -551,6 +651,40 @@ async def live_alerts_ack(request: Request) -> Response:
     owner, request_id, body, service = await _live_alerts_request(request, live_alerts.AckBody)
     settled = await run_in_threadpool(_live_alerts_call, live_alerts.ack, service, body)
     return _response({"settled": settled}, owner, request_id)
+
+
+class _QuietHours(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    grantId: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    enabled: StrictBool
+    startMinute: StrictInt = Field(ge=0, le=1439)
+    endMinute: StrictInt = Field(ge=0, le=1439)
+    timeZone: str = Field(min_length=1, max_length=64)
+
+
+def _quiet_hours(body: _QuietHours) -> dict:
+    from .managed_notifications import ManagedNotificationError, get_managed_notifications
+    try:
+        return get_managed_notifications().set_quiet_hours(
+            body.grantId, enabled=body.enabled, start_minute=body.startMinute,
+            end_minute=body.endMinute, time_zone=body.timeZone)
+    except ManagedNotificationError as error:
+        raise NativeAPIError(error.status, error.code, "The Quiet Hours request was refused.") from None
+
+
+@router.post("/notifications/quiet-hours")
+async def notification_quiet_hours(request: Request) -> Response:
+    """This device's Quiet Hours for its notification grant (bighelp app: Settings › Notifications)."""
+    from .quiet_hours import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "quiet_hours_unavailable", "Quiet Hours aren't available on this host.")
+    body = await _body(request, _QuietHours)
+    value = await run_in_threadpool(_quiet_hours, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
 
 
 class _Usage(_Body):
@@ -667,3 +801,83 @@ async def provider_sign_in(operation: str, request: Request) -> Response:
     body = await _body(request, model)
     value = await run_in_threadpool(_sign_in, operation, body)
     return _response({"agentId": body.agentId, **value}, owner, request_id)
+
+
+def _composio(operation: str, agent_id: str) -> dict:
+    from . import composio
+    try:
+        value = composio.install(agent_id) if operation == "install" else composio.status(agent_id)
+    except composio.ComposioError as error:
+        raise NativeAPIError(error.status, error.code, error.message) from None
+    return {"agentId": agent_id, **value}
+
+
+async def _composio_request(request: Request, operation: str) -> Response:
+    from .composio import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "composio_unavailable", "This Hermes can't set up Composio from the app.")
+    body = await _body(request, _Body)
+    if PROFILE_ID.fullmatch(body.agentId) is None:
+        raise NativeAPIError(422, "invalid_request", "The profile is invalid.")
+    value = await run_in_threadpool(_composio, operation, body.agentId)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+@router.post("/composio/status")
+async def composio_status(request: Request) -> Response:
+    """Composio MCP servers in the agent's Hermes config (bighelp app: Settings › Apps)."""
+    return await _composio_request(request, "status")
+
+
+@router.post("/composio/install")
+async def composio_install(request: Request) -> Response:
+    """Turn on or add Composio Connect's MCP server for the agent; the app then signs it in with Hermes' MCP OAuth."""
+    return await _composio_request(request, "install")
+
+
+class _MyTemplatesList(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _MyTemplatesSave(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    template: dict[str, Any]
+
+
+class _MyTemplatesDelete(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+
+
+def _my_templates(operation: str, body: BaseModel) -> dict:
+    from . import my_templates
+    try:
+        if operation == "save":
+            return {"template": my_templates.store().save(body.template)}
+        if operation == "delete":
+            return {"id": body.id, "deleted": my_templates.store().delete(body.id)}
+        return my_templates.store().list()
+    except my_templates.MyTemplateError as error:
+        raise NativeAPIError(error.status, error.code, error.message) from None
+
+
+@router.post("/my-templates/{operation}")
+async def my_templates_request(operation: str, request: Request) -> Response:
+    """My Templates: bots saved as templates on this computer, listed in the app's template picker."""
+    from .my_templates import CAPABILITY, MAX_RESPONSE_BYTES
+    models = {"list": _MyTemplatesList, "save": _MyTemplatesSave, "delete": _MyTemplatesDelete}
+    if operation not in models:
+        raise NativeAPIError(404, "operation_not_found", "The operation is not supported.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "my_templates_unavailable", "Saved templates aren't available on this host.")
+    body = await _body(request, models[operation])
+    value = await run_in_threadpool(_my_templates, operation, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=MAX_RESPONSE_BYTES)

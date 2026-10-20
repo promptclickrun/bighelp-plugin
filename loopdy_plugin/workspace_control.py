@@ -2504,27 +2504,15 @@ class HermesWorkspaceBackend:
         description: str,
         instructions: str,
     ) -> None:
-        def create() -> None:
-            from hermes_cli import profiles
-            from utils import atomic_write_text
+        from .agent_profiles import create_agent_profile
 
-            path = profiles.create_profile(
-                name=agent_id,
-                no_skills=False,
-                description=description,
-            )
-            profiles.seed_profile_skills(path, quiet=True)
-            if not profiles.check_alias_collision(agent_id):
-                profiles.create_wrapper_script(agent_id)
-            profiles.set_profile_display_name(agent_id, display_name)
-            atomic_write_text(
-                path / "SOUL.md",
-                instructions,
-                preserve_mode=True,
-                create_mode=0o644,
-            )
-
-        await asyncio.to_thread(create)
+        await asyncio.to_thread(
+            create_agent_profile,
+            agent_id=agent_id,
+            display_name=display_name,
+            description=description,
+            instructions=instructions,
+        )
 
     async def _update_profile(
         self,
@@ -3529,9 +3517,9 @@ def _skill_frontmatter_name(content: str) -> str:
     if not match:
         raise WorkspaceControlError("SKILL.md requires YAML frontmatter")
     try:
-        import yaml
+        from .yaml_compat import safe_load
 
-        frontmatter = yaml.safe_load(match.group(1))
+        frontmatter = safe_load(match.group(1))
     except Exception as exc:
         raise WorkspaceControlError("SKILL.md frontmatter is invalid") from exc
     if not isinstance(frontmatter, dict):
@@ -3730,9 +3718,9 @@ def _agent_id_from_name(value: str) -> str:
 def _profile_ui_display_name(path: Any) -> str:
     """Read the user-facing name from Hermes profile metadata locally."""
     try:
-        import yaml
+        from .yaml_compat import safe_load
 
-        document = yaml.safe_load((path / "profile.yaml").read_text(encoding="utf-8"))
+        document = safe_load((path / "profile.yaml").read_text(encoding="utf-8"))
         if not isinstance(document, dict):
             return ""
         ui_meta = document.get("ui_meta")

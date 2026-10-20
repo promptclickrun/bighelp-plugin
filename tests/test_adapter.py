@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,6 +88,14 @@ class _Service:
     def adopt_link_relay_device(self, registration, *, sender_device_id):
         self.link_relay_registrations.append((registration, sender_device_id))
         return {"ready": True}
+
+
+def signing_fixture(device_id="host-fixture"):
+    import secrets
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from loopdy_plugin.link_client import LinkRuntimeConfig
+    return LinkRuntimeConfig("https://link.example", device_id, 1, ec.generate_private_key(ec.SECP256R1()),
+                             secrets.token_bytes(32))
 
 
 class _LinkClient:
@@ -959,6 +968,21 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(event.profile, "default")
         self.assertEqual(event.detail["agent_name"], "Atlas")
 
+    def test_profile_name_is_the_bot_title_without_pyyaml(self) -> None:
+        """Alerts say the agent's name, as the app shows it, on Hermes 0.22 and later (no PyYAML)."""
+        from loopdy_plugin.adapter import profile_display_name
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "profile.yaml").write_text(
+                "display_name: Hermes\nui_meta:\n  hermes-bots:\n    title: Alfie\n", encoding="utf-8")
+            with patch("loopdy_plugin.adapter.get_hermes_home", return_value=home), \
+                    patch.dict(sys.modules, {"yaml": None}):
+                self.assertEqual(profile_display_name("default"), "Alfie")
+            (home / "profile.yaml").write_text("description: no name here\n", encoding="utf-8")
+            with patch("loopdy_plugin.adapter.get_hermes_home", return_value=home):
+                self.assertEqual(profile_display_name("default"), "Default")
+
     def test_non_channel_event_resolves_the_configured_profile_display_name(
         self,
     ) -> None:
@@ -1039,7 +1063,6 @@ class AdapterTests(unittest.TestCase):
         from loopdy_plugin.link_contracts import UserMessage
 
         link = _LinkClient()
-        from test_live_voice_runtime import signing_fixture
         link.config = signing_fixture("hermes-host-private-coordinate")
         adapter = BighelpAdapter(
             PlatformConfig(enabled=True), service=_Service(), link_client=link

@@ -21,6 +21,14 @@ from .workflow_store import clean_text, open_private, secure_dir
 
 REPORT_ENV = "HERMES_QUIET_TURN_REPORT_FILE"
 SESSION_SOURCE = "workflow"
+
+
+def in_workflow_stage(environ: Mapping[str, str] = os.environ) -> bool:
+    """This Hermes process runs one stage of a workflow (`worker_env` sets the session source).
+
+    Its turns are machinery: the run itself alerts when it needs the person or ends.
+    """
+    return environ.get("HERMES_SESSION_SOURCE", "").strip() == SESSION_SOURCE
 # Hermes' own default toolset list is the whole platform. A stage with no tools gets only the to-do tool.
 EMPTY_TOOLSET = "todo"
 MAX_REPORT_BYTES = 4 * 1024 * 1024
@@ -49,36 +57,142 @@ def profile_home(hermes_root: Path, profile: str) -> Path | None:
     return home
 
 
-def hermes_argv(environ: Mapping[str, str] = os.environ) -> list[str]:
-    """`$HERMES_BIN` when set, else this interpreter's `-m hermes_cli.main` (never a PATH lookup first)."""
-    configured = environ.get("HERMES_BIN", "").strip()
-    if configured and os.path.isabs(configured) and os.access(configured, os.X_OK):
-        return [configured]
+FULL_FEATURES = frozenset({"cli", "source", "toolsets", "query", "query_file", "format", "quiet", "report"})
+# The stream runner needs all three; without them a stage runs as a plain `chat -q` turn (the text runner).
+STREAM_FEATURES = frozenset({"query_file", "format", "report"})
+MAX_INLINE_QUERY_BYTES = 96 * 1024
+STDERR_TAIL_BYTES = 4096
+STDERR_TRIM_AT = 64 * 1024
+_FLAG = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
+
+
+def runner_mode(features: frozenset[str]) -> str:
+    return "stream" if STREAM_FEATURES <= features else "text"
+
+
+def _looks_like_path(value: str) -> bool:
+    expanded = os.path.expanduser(value)
+    return expanded.startswith("~") or os.path.isabs(expanded) or bool(os.path.dirname(expanded))
+
+
+def _which_no_cwd(command: str, path: str) -> str | None:
+    """A PATH lookup that never searches the current folder."""
+    for folder in path.split(os.pathsep):
+        if not folder or folder == ".":
+            continue
+        candidate = os.path.join(os.path.expanduser(folder), command)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def module_argv() -> list[str]:
     return [sys.executable, "-m", "hermes_cli.main"]
 
 
-def worker_argv(base: list[str], profile: str, tools: list[str]) -> list[str]:
-    return [*base, "-p", profile, "--cli", "chat", "--source", SESSION_SOURCE,
-            "--toolsets", ",".join(tools) if tools else EMPTY_TOOLSET,
-            "--query-file", "brief.md", "--format", "stream-json"]
+def is_module_argv(argv: list[str]) -> bool:
+    return argv[1:3] == ["-m", "hermes_cli.main"]
+
+
+def hermes_argv(environ: Mapping[str, str] = os.environ, *, importable: bool | None = None) -> list[str]:
+    """How to start Hermes, like Hermes' Kanban dispatcher (`_resolve_hermes_argv`).
+
+    `$HERMES_BIN` first (a path, or a name looked up on PATH without the current folder), then this interpreter's
+    `-m hermes_cli.main` when `hermes_cli` imports here, and only then a `hermes` launcher on PATH. The module form
+    wins over PATH so a planted `hermes` can't stand in for the running install.
+    """
+    configured = environ.get("HERMES_BIN", "").strip()
+    if configured:
+        if _looks_like_path(configured):
+            path = os.path.abspath(os.path.expanduser(configured))
+            return [path] if os.access(path, os.X_OK) else module_argv()
+        found = _which_no_cwd(configured, environ.get("PATH", ""))
+        return [found] if found else module_argv()
+    if importable is None:
+        importable = hermes_import_root() is not None
+    if importable:
+        return module_argv()
+    found = _which_no_cwd("hermes", environ.get("PATH", ""))
+    return [found] if found else module_argv()
+
+
+def worker_argv(base: list[str], profile: str, tools: list[str], features: frozenset[str] = FULL_FEATURES,
+                *, query: str | None = None, brief: str = "brief.md") -> list[str]:
+    """The stage's Hermes command, with only the flags this Hermes has.
+
+    The stream runner reads brief.md and writes JSON lines. The text runner reads brief.md too when Hermes has
+    `--query-file`, and otherwise gets `query` (the brief itself, or a short prompt that points to brief.md).
+    `brief` is its full path when the agent works in a project folder instead of the attempt folder.
+    """
+    argv = [*base, "-p", profile]
+    if "cli" in features:
+        argv.append("--cli")
+    argv.append("chat")
+    if "source" in features:
+        argv += ["--source", SESSION_SOURCE]
+    if "toolsets" in features:
+        argv += ["--toolsets", ",".join(tools) if tools else EMPTY_TOOLSET]
+    if runner_mode(features) == "stream":
+        return argv + ["--query-file", brief, "--format", "stream-json"]
+    if "query_file" in features:
+        argv += ["--query-file", brief]
+    else:
+        argv += ["-q", query or text_query(None)]
+    if "quiet" in features:
+        argv.append("-Q")
+    return argv
+
+
+def send_argv(base: list[str], target: str, message_file: Path) -> list[str]:
+    """`hermes send` for a delivery stage. `--to=` keeps a target like "telegram:-100…" from reading as a flag."""
+    return [*base, "-p", "default", "send", f"--to={target}", "--file", str(message_file), "--json"]
+
+
+def send_env(base: Mapping[str, str], *, home: Path, import_path: list[str] | tuple[str, ...] = ()) -> dict[str, str]:
+    """The computer's own Hermes home: deliveries use its gateway settings, like scheduled tasks do."""
+    env = {key: base[key] for key in _SAFE_ENV if key in base}
+    env.update({"HERMES_HOME": str(home), "PYTHONUTF8": "1"})
+    if import_path:
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(import_path))
+    return env
+
+
+def text_query(brief: str | None, path: Path | None = None) -> str:
+    """The `-q` text when Hermes can't read a query file: the brief when it is small enough, else a pointer
+    (to `path` when the agent works somewhere else than its attempt folder)."""
+    if brief is not None and len(brief.encode("utf-8")) <= MAX_INLINE_QUERY_BYTES:
+        return brief
+    where = str(path) if path is not None else "brief.md in your working folder"
+    return (f"You are one stage of a bighelp workflow. Your full task is in the file {where}. Read it first and "
+            "follow it exactly, including how to hand off at the end.")
 
 
 def worker_env(base: Mapping[str, str], *, home: Path, profile: str, attempt_dir: Path,
-               import_root: str | None = None) -> dict[str, str]:
-    """An allowlist, not a copy: the agent's own keys come from its profile's .env, never from this process."""
+               import_path: list[str] | tuple[str, ...] = (), report: bool = True,
+               cwd: Path | None = None) -> dict[str, str]:
+    """An allowlist, not a copy: the agent's own keys come from its profile's .env, never from this process.
+
+    `cwd` is where the agent's terminal and file tools work: its project folder in a coding workflow, else the
+    attempt folder.
+
+    `import_path` is where `hermes_cli` (and its dependencies) live for a module-form worker. A bundled bare
+    interpreter only finds them in-process, so the scrubbed child gets them pinned like Hermes' own Kanban and
+    cron workers do; without it the worker dies with ModuleNotFoundError before its first line.
+    """
     env = {key: base[key] for key in _SAFE_ENV if key in base}
     env.update({
-        "HERMES_HOME": str(home), "HERMES_PROFILE": profile, "TERMINAL_CWD": str(attempt_dir),
-        "HERMES_SESSION_SOURCE": SESSION_SOURCE, REPORT_ENV: str(attempt_dir / "report.json"),
-        "PYTHONUTF8": "1",
+        "HERMES_HOME": str(home), "HERMES_PROFILE": profile, "TERMINAL_CWD": str(cwd or attempt_dir),
+        "HERMES_SESSION_SOURCE": SESSION_SOURCE, "PYTHONUTF8": "1",
     })
-    if import_root:
-        env["PYTHONPATH"] = import_root
+    if report:
+        env[REPORT_ENV] = str(attempt_dir / "report.json")
+    if import_path:
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(import_path))
     return env
 
 
 def hermes_import_root() -> str | None:
-    """Where `hermes_cli` lives, so a module-form child can import it from a scrubbed environment."""
+    """Where `hermes_cli` lives in this process (a bundled interpreter may know it only in-process)."""
     try:
         import importlib.util
         spec = importlib.util.find_spec("hermes_cli")
@@ -87,6 +201,107 @@ def hermes_import_root() -> str | None:
     if spec is None or not spec.origin:
         return None
     return str(Path(spec.origin).resolve().parent.parent)
+
+
+def hermes_import_path(root: str | None = None) -> list[str]:
+    """What a module-form worker needs on PYTHONPATH: the Hermes tree, and its dependency folder when Hermes
+    manages one. Uses Hermes' own pin (`cron.scheduler_worker_env`) when it exists. Empty when nothing is needed
+    (an installed wheel) or Hermes isn't importable here."""
+    root = root if root is not None else hermes_import_root()
+    if not root:
+        return []
+    try:
+        from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
+        pinned = pin_hermes_tree_on_pythonpath({}, Path(root))
+        return [item for item in pinned.get("PYTHONPATH", "").split(os.pathsep) if item]
+    except Exception:
+        pass
+    try:
+        import sysconfig
+        if Path(sysconfig.get_paths()["purelib"]).resolve() == Path(root).resolve():
+            return []
+    except (KeyError, OSError):
+        pass
+    return [root]
+
+
+def _parser_features() -> frozenset[str] | None:
+    try:
+        from hermes_cli._parser import build_top_level_parser
+        parser, _subparsers, chat = build_top_level_parser()
+        top = {option for action in parser._actions for option in action.option_strings}
+        flags = {option for action in chat._actions for option in action.option_strings}
+        formats = {choice for action in chat._actions if "--format" in action.option_strings
+                   for choice in (action.choices or ())}
+    except Exception:
+        return None
+    return _features_from_flags(top | flags, flags, "stream-json" in formats)
+
+
+def _features_from_flags(every: set[str], chat: set[str], stream_json: bool) -> frozenset[str]:
+    found = set()
+    for name, options in (("source", ("--source",)), ("toolsets", ("--toolsets",)), ("query", ("-q", "--query")),
+                          ("query_file", ("--query-file",)), ("quiet", ("-Q",))):
+        if any(option in chat for option in options):
+            found.add(name)
+    if "--cli" in every:
+        found.add("cli")
+    if "--format" in chat and stream_json:
+        found.add("format")
+    return frozenset(found)
+
+
+def _help_features(argv: list[str], env: dict[str, str]) -> frozenset[str] | None:
+    """`hermes chat --help` for a Hermes whose parser can't be read in-process."""
+    try:
+        result = subprocess.run([*argv, "chat", "--help"], stdin=subprocess.DEVNULL, capture_output=True,
+                                timeout=30, check=False, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    text = result.stdout[: 256 * 1024].decode("utf-8", "replace")
+    flags = set(_FLAG.findall(text))
+    return _features_from_flags(flags, flags, "stream-json" in text)
+
+
+_detected: dict[tuple, frozenset[str]] = {}
+
+
+def detect_hermes_features(argv: list[str] | None = None, import_path: list[str] | None = None) -> frozenset[str]:
+    """Which chat flags and turn report this Hermes has, asked once per process. Empty when Hermes can't be asked."""
+    key = (tuple(argv or ()), tuple(import_path or ()))
+    if key not in _detected:
+        _detected[key] = _detect(argv, import_path)
+    return _detected[key]
+
+
+def _detect(argv: list[str] | None, import_path: list[str] | None) -> frozenset[str]:
+    found = _parser_features()
+    if found is None:
+        argv = argv or hermes_argv()
+        env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "TMPDIR") if key in os.environ}
+        path = hermes_import_path() if import_path is None else import_path
+        if path and is_module_argv(argv):
+            env["PYTHONPATH"] = os.pathsep.join(path)
+        found = _help_features(argv, env)
+    if found is None:
+        return frozenset()
+    try:
+        from hermes_cli.quiet_single_query import TURN_REPORT_FILE_ENV
+        if TURN_REPORT_FILE_ENV == REPORT_ENV:
+            found = found | {"report"}
+    except Exception:
+        pass
+    return found
+
+
+def encode_features(features: frozenset[str]) -> str:
+    return ",".join(sorted(features & FULL_FEATURES)) or "none"
+
+
+def decode_features(value: str) -> frozenset[str]:
+    return frozenset(item for item in value.split(",") if item in FULL_FEATURES)
 
 
 # MARK: Processes
@@ -158,13 +373,19 @@ class OSProcessHost:
     def __init__(self):
         self._children: dict[int, subprocess.Popen] = {}
 
-    def spawn(self, argv: list[str], *, env: dict[str, str], cwd: Path, stdout_path: Path) -> int:
+    def spawn(self, argv: list[str], *, env: dict[str, str], cwd: Path, stdout_path: Path,
+              stderr_path: Path | None = None) -> int:
         descriptor = open_private(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+        errors = subprocess.DEVNULL
         try:
+            if stderr_path is not None:
+                errors = open_private(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
             process = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, stdout=descriptor,
-                                       stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+                                       stderr=errors, start_new_session=True, close_fds=True)
         finally:
             os.close(descriptor)
+            if errors != subprocess.DEVNULL:
+                os.close(errors)
         self._children[process.pid] = process
         return process.pid
 
@@ -243,7 +464,7 @@ def write_private(path: Path, data: bytes, *, read_only: bool = False) -> None:
 
 
 _TYPE_NAMES = {"markdown_file": "Markdown file", "text": "text", "number": "number", "decision": "decision",
-               "notes": "notes"}
+               "notes": "notes", "file": "file", "image": "picture"}
 
 
 def handoff_help(outputs: list[dict]) -> list[str]:
@@ -259,6 +480,11 @@ def handoff_help(outputs: list[dict]) -> list[str]:
             how = "a number."
         elif kind == "decision":
             how = "one of: " + ", ".join(f'"{value}"' for value in output.get("values", [])) + "."
+        elif kind == "file":
+            how = '{"path": "out/<name>.<ext>"}. Save the file in your out folder first. At most 10 MB.'
+        elif kind == "image":
+            how = ('{"path": "out/<name>.png"}. Save the picture in your out folder first. A PNG, JPEG, GIF, WebP '
+                   'or HEIC picture, at most 10 MB.')
         else:
             how = ('a list of at most 20 notes like {"severity": "major", "text": "..."}; '
                    'severity is "minor" or "major". Use [] for no notes.')
@@ -273,30 +499,62 @@ def _example(outputs: list[dict]) -> str:
         example[output["name"]] = {
             "markdown_file": {"content": "# Title\n\n..."}, "text": "...", "number": 0,
             "decision": (output.get("values") or ["pass"])[0], "notes": [],
+            "file": {"path": f"out/{output['name']}.pdf"}, "image": {"path": f"out/{output['name']}.png"},
         }[kind]
     return json.dumps({"outputs": example}, ensure_ascii=False)
 
 
+FIX_LOG_CHARS = 8000
+
+
 def render_brief(*, workflow_name: str, run_number: int, stage: dict, iteration: int,
-                 uses: list[dict], change_notes: dict | None) -> str:
-    """The query file. `uses` items: {reference, label, type, text?, file?}."""
-    lines = [f"# Workflow stage: {stage['title']}", "",
-             f"You are one stage of the bighelp workflow \"{workflow_name}\" (run {run_number}"
-             + (f", round {iteration}" if iteration > 1 else "") + ").",
-             "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
-             "yourself. Your working folder is this stage's own folder; read-only copies of earlier work are in "
-             "inputs/ and any file you hand off goes in out/.", "", "## Your task", "",
+                 uses: list[dict], change_notes: dict | None, project: dict | None = None,
+                 workspace: dict | None = None, folder: Path | None = None, failure: dict | None = None) -> str:
+    """The query file. `uses` items: {reference, label, type, text?, file?}.
+
+    In a coding workflow the agent works in its run's `workspace` (a worktree or the project folder) and
+    `folder` is the attempt folder that holds this brief, its inputs and what it hands off. `failure` is the
+    command a fix attempt must make pass: {command, exit_code, timed_out, minutes, log}.
+    """
+    run = f"run {run_number}" + (f", round {iteration}" if iteration > 1 else "")
+    if workspace is None or folder is None:
+        intro = [f"You are one stage of the bighelp workflow \"{workflow_name}\" ({run}).",
+                 "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
+                 "yourself. Your working folder is this stage's own folder; read-only copies of earlier work are in "
+                 "inputs/ and any file you hand off goes in out/."]
+    else:
+        intro = [f"You are one stage of the bighelp workflow \"{workflow_name}\" ({run}) for the project "
+                 f"{project['label'] if project else 'you work on'}.",
+                 "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
+                 "yourself.",
+                 f"You work in the project folder {workspace['path']} (branch {workspace['branch']}). You may read "
+                 "and change files there and run commands in it. Leave your changes in the folder; don't push them "
+                 "or open pull requests yourself.",
+                 f"Your hand-off folder is {folder}: read-only copies of earlier work are in {folder}/inputs/, and a "
+                 f"file you hand off goes in {folder}/out/ (hand it off as out/<name>)."]
+    lines = [f"# Workflow stage: {stage['title']}", "", *intro, "", "## Your task", "",
              stage["instructions"].strip() or "Do the stage's task.", ""]
+    if failure is not None:
+        what = (f"ran out of time after {failure['minutes']} min" if failure.get("timed_out")
+                else f"failed with exit code {failure['exit_code']}")
+        log = failure.get("log") or ""
+        lines += ["## What failed", "",
+                  f"The command `{failure['command']}` {what} in the project folder. The end of its output:", "",
+                  "~~~~text", log[-FIX_LOG_CHARS:].rstrip() or "(no output)", "~~~~", ""]
+        if folder is not None and failure.get("file"):
+            lines += [f"Its whole output (the last 64 KB) is in {folder}/{failure['file']}.", ""]
+        lines += ["Fix the cause in the project folder. The workflow runs the command again when you are done.", ""]
     if uses:
         lines += ["## What you have", ""]
         for item in uses:
             lines.append(f"### {item['label']} ({item['reference']})")
             lines.append("")
+            shown = f"{folder}/{item['file']}" if item.get("file") and folder is not None else item.get("file")
             if item.get("file") and item.get("text") is None:
-                lines.append(f"Too long to include here. Read it from {item['file']}.")
+                lines.append(f"Too long to include here. Read it from {shown}.")
             else:
                 if item.get("file"):
-                    lines.append(f"(Also in {item['file']}.)")
+                    lines.append(f"(Also in {shown}.)")
                     lines.append("")
                 lines.append(item.get("text") or "(empty)")
             lines.append("")
@@ -422,6 +680,78 @@ def tokens(record: dict) -> tuple[int, int] | None:
         return value if type(value) is int and 0 <= value < 10**12 else 0
 
     return number("input"), number("output")
+
+
+# MARK: Worker errors
+
+def trim_stderr(path: Path, *, above: int = STDERR_TRIM_AT, keep: int = STDERR_TAIL_BYTES) -> bytes:
+    """Keep only the last `keep` bytes of the worker's error output once it is over `above`; returns that tail.
+
+    The worker appends to the same file, so its next lines land after the kept tail.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    except OSError:
+        return b""
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return b""
+        start = max(0, info.st_size - keep)
+        os.lseek(descriptor, start, os.SEEK_SET)
+        tail = os.read(descriptor, keep)
+        if info.st_size > above:
+            os.ftruncate(descriptor, 0)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, tail)
+        return tail
+    finally:
+        os.close(descriptor)
+
+
+_ERROR_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]{0,60}(?:\.[A-Za-z_][A-Za-z0-9_]{0,60}){0,4}"
+                         r"(?:Error|Exception|Exit|Interrupt))\b(?::\s*(.*))?$")
+_MISSING_MODULE = re.compile(r"No module named '([A-Za-z_][A-Za-z0-9_.]{0,100})'")
+
+
+def stderr_summary(tail: bytes) -> str:
+    """One fixed sentence about why a worker stopped, built from its error output but never quoting it.
+
+    Only a missing module's name or a Python error's class name gets through; paths and messages don't.
+    """
+    lines = [line.strip() for line in tail.decode("utf-8", "replace").splitlines() if line.strip()]
+    for line in reversed(lines):
+        # `python -m` reports a missing package as "Error while finding module specification … (ModuleNotFoundError:
+        # No module named 'hermes_cli')", so look inside the line too.
+        missing = _MISSING_MODULE.search(line)
+        if missing:
+            return f"Hermes couldn't load the Python module {missing.group(1)}."
+        match = _ERROR_LINE.match(line)
+        if match is not None:
+            return f"Hermes stopped with {match.group(1).rsplit('.', 1)[-1]}."
+    return "Hermes printed an error before the turn began." if lines else "Hermes gave no error output."
+
+
+def read_tail(path: Path, limit: int) -> bytes | None:
+    """The last `limit` bytes of a regular file, or None."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        os.lseek(descriptor, max(0, info.st_size - limit), os.SEEK_SET)
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def stop_signals() -> tuple[int, int]:

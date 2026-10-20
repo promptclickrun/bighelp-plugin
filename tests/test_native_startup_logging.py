@@ -18,12 +18,20 @@ LOG = "hermes.plugins.bighelp"
 SUMMARY = "bighelp native features advertised at startup: "
 PROCESS_FEATURES = (
     "native-context-v1", "serving-profile-v1", "native-card-templates-v1",
-    "native-voice-v1", "native-device-tools-v1", "native-device-location-v1", "native-room-activity-v1",
+    "native-voice-v1", "native-device-tools-v1", "native-device-location-v1", "native-device-appearance-v1",
+    "native-room-activity-v1", "native-room-typing-v1", "native-room-peer-typing-v1",
     "native-project-git-read-v1", "native-agent-templates-v1",
     "native-workspace-files-v1", "native-workspace-recent-v1", "native-workspace-hermes-home-v1",
+    "native-workspace-files-agents-v1",
     "native-host-restart-v1",
-    "native-provider-usage-v1", "native-provider-sign-in-v1", "native-workflows-v1",
-    "native-live-alerts-v1",
+    "native-provider-usage-v1", "native-provider-sign-in-v1", "native-workflows-v1", "native-workflows-edit-v1",
+    "native-workflows-parallel-v1", "native-workflows-delivery-v1", "native-workflows-outcomes-v1",
+    "native-workflows-trigger-v1", "native-workflows-code-v1",
+    "native-live-alerts-v1", "native-notification-quiet-hours-v1", "native-composio-v1",
+    "native-agent-talk-v1",
+    "native-chat-activity-v1",
+    "native-team-v1",
+    "native-my-templates-v1",
 )
 WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
 
@@ -49,34 +57,51 @@ class NativeStartupLoggingTests(unittest.TestCase):
             set_hermes_home_override=Mock(), reset_hermes_home_override=Mock(),
         )
         self.profiles = module("hermes_cli.profiles", profile_exists=Mock(return_value=True))
-        self.hub = SimpleNamespace(available=True)
+        self.hub = SimpleNamespace(available=True, peer_typing_available=True)
         self.device = module("loopdy_plugin.native_device_tools", CAPABILITY=PROCESS_FEATURES[4],
-                             LOCATION_CAPABILITY=PROCESS_FEATURES[5],
+                             LOCATION_CAPABILITY=PROCESS_FEATURES[5], APPEARANCE_CAPABILITY=PROCESS_FEATURES[6],
                              available=Mock(return_value=True), register_middleware=Mock(return_value=True))
-        self.room = module("loopdy_plugin.room_activity", CAPABILITY=PROCESS_FEATURES[6],
+        self.room = module("loopdy_plugin.room_activity", CAPABILITY=PROCESS_FEATURES[7],
+                           TYPING_CAPABILITY=PROCESS_FEATURES[8], PEER_TYPING_CAPABILITY=PROCESS_FEATURES[9],
                            activity_hub=Mock(return_value=self.hub), register_room_activity=Mock())
-        self.git = module("loopdy_plugin.native_project_git", CAPABILITY=PROCESS_FEATURES[7],
+        self.git = module("loopdy_plugin.native_project_git", CAPABILITY=PROCESS_FEATURES[10],
                           supported=Mock(return_value=True))
-        self.templates = module("loopdy_plugin.agent_templates", CAPABILITY=PROCESS_FEATURES[8],
+        self.templates = module("loopdy_plugin.agent_templates", CAPABILITY=PROCESS_FEATURES[11],
                                 available=Mock(return_value=True))
-        self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[9],
-                            RECENT_CAPABILITY=PROCESS_FEATURES[10], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[11],
-                            available=Mock(return_value=True))
+        self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[12],
+                            RECENT_CAPABILITY=PROCESS_FEATURES[13], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[14],
+                            AGENTS_CAPABILITY=PROCESS_FEATURES[15], available=Mock(return_value=True))
         self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
-        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[12],
-                              available=Mock(return_value=True))
-        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[13],
+        self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[16],
+                              available=Mock(return_value=True), release_locks_left_by_restart=Mock())
+        self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[17],
                             available=Mock(return_value=True))
-        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[14],
+        self.sign_in = module("loopdy_plugin.provider_sign_in", CAPABILITY=PROCESS_FEATURES[18],
                               available=Mock(return_value=True))
-        self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[15],
-                                probe=Mock(return_value=None))
-        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[16],
+        self.workflows = module("loopdy_plugin.workflow_api", CAPABILITY=PROCESS_FEATURES[19],
+                                EDIT_CAPABILITY=PROCESS_FEATURES[20], PARALLEL_CAPABILITY=PROCESS_FEATURES[21],
+                                DELIVERY_CAPABILITY=PROCESS_FEATURES[22], OUTCOMES_CAPABILITY=PROCESS_FEATURES[23],
+                                TRIGGER_CAPABILITY=PROCESS_FEATURES[24], CODE_CAPABILITY=PROCESS_FEATURES[25],
+                                probe=Mock(return_value=None), triggers_available=Mock(return_value=True),
+                                code_available=Mock(return_value=True))
+        self.live_alerts = module("loopdy_plugin.live_alerts", CAPABILITY=PROCESS_FEATURES[26],
                                   available=Mock(return_value=True))
+        self.quiet = module("loopdy_plugin.quiet_hours", CAPABILITY=PROCESS_FEATURES[27],
+                            available=Mock(return_value=True))
+        self.composio = module("loopdy_plugin.composio", CAPABILITY=PROCESS_FEATURES[28],
+                               available=Mock(return_value=True))
+        self.agent_talk = module("loopdy_plugin.agent_talk", CAPABILITY=PROCESS_FEATURES[29],
+                                 available=Mock(return_value=True))
+        self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[30],
+                                    available=Mock(return_value=True))
+        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[31],
+                           available=Mock(return_value=True), register=Mock())
+        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[32],
+                                   available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
-                   self.live_alerts,
-                   module("hermes_cli.dashboard_auth.base", Session=Session)]
+                   self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.team,
+                   self.my_templates, module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
         self.stack.enter_context(patch.object(native_context.time, "time", return_value=1000))
@@ -113,14 +138,21 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.profiles.profile_exists = None
         self.device.available.return_value = False
         self.hub.available = False
+        self.hub.peer_typing_available = False
         self.git.supported.return_value = False
         self.templates.available.return_value = False
         self.files.available.return_value = False
         self.restart.available.return_value = False
         self.usage.available.return_value = False
         self.sign_in.available.return_value = False
-        self.workflows.probe.return_value = "hermes_update_needed"
+        self.workflows.probe.return_value = "chat_runner_missing"
         self.live_alerts.available.return_value = False
+        self.quiet.available.return_value = False
+        self.composio.available.return_value = False
+        self.agent_talk.available.return_value = False
+        self.chat_activity.available.return_value = False
+        self.team.available.return_value = False
+        self.my_templates.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
         expected = PROCESS_FEATURES[:2]
@@ -132,10 +164,12 @@ class NativeStartupLoggingTests(unittest.TestCase):
     def test_optional_import_failures_match_context_and_warn(self):
         missing = {
             "hermes_cli.profiles": ("native-card-templates-v1", "native-voice-v1"),
-            "loopdy_plugin.native_device_tools": ("native-device-tools-v1", "native-device-location-v1"),
+            "loopdy_plugin.native_device_tools": ("native-device-tools-v1", "native-device-location-v1",
+                                                  "native-device-appearance-v1"),
             "loopdy_plugin.agent_templates": ("native-agent-templates-v1",),
             "loopdy_plugin.workspace_artifacts": ("native-workspace-files-v1", "native-workspace-recent-v1",
-                                                  "native-workspace-hermes-home-v1"),
+                                                  "native-workspace-hermes-home-v1",
+                                                  "native-workspace-files-agents-v1"),
         }
         for name, omitted in missing.items():
             with self.subTest(module=name), patch.dict(sys.modules, {name: None}), \
@@ -155,7 +189,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         context = native_context.native_context(self.request())
         expected = tuple(feature for feature in PROCESS_FEATURES
                          if feature not in ("serving-profile-v1", "native-device-tools-v1",
-                                            "native-device-location-v1"))
+                                            "native-device-location-v1", "native-device-appearance-v1"))
         self.assertEqual(self.logged_features(logs.records), expected)
         self.assertEqual(context.features, expected)
         self.assertIsNone(context.serving_profile_id)
@@ -209,7 +243,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         for feature in WIKI_FEATURES:
             self.assertIn(feature, notes)
         self.assertEqual(native_context.native_context(self.request(principal=True)).features,
-                         PROCESS_FEATURES[:7] + WIKI_FEATURES + PROCESS_FEATURES[7:])
+                         PROCESS_FEATURES[:10] + WIKI_FEATURES + PROCESS_FEATURES[10:])
         self.wiki.available_wiki_operations.return_value = False
         self.assertEqual(native_context.native_context(self.request(principal=True)).features, PROCESS_FEATURES)
         self.profiles.profile_exists = None
@@ -255,6 +289,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
 
     def test_router_lifespan_logs_http_namespace_inventory_once(self):
         self.hub.available = False
+        self.hub.peer_typing_available = False
 
         async def start():
             async with native_api.router.lifespan_context(None):
@@ -267,13 +302,17 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.assertEqual(self.logged_features(logs.records),
                          native_context.native_context(self.request()).features)
         self.assertNotIn("native-room-activity-v1", self.logged_features(logs.records))
+        self.assertNotIn("native-room-typing-v1", self.logged_features(logs.records))
+        self.assertNotIn("native-room-peer-typing-v1", self.logged_features(logs.records))
 
     def test_registration_does_not_claim_http_namespace_inventory(self):
         self.hub.available = False
+        self.hub.peer_typing_available = False
         self.device.available.return_value = False  # callback accepted, no lifecycle ownership
 
         def register_room(ctx):
             self.hub.available = True
+            self.hub.peer_typing_available = True
             return Mock()
 
         self.room.register_room_activity.side_effect = register_room
@@ -285,14 +324,12 @@ class NativeStartupLoggingTests(unittest.TestCase):
             "loopdy_plugin.direct_runtime": module("loopdy_plugin.direct_runtime", DirectSettings=Mock()),
         }))
         for name in ("production_manager", "DeviceToolBridge", "register_tools", "register_device_tools",
-                     "register_marketplace_publish_skill", "BighelpApprovalTransport", "profile_display_name",
-                     "_home_target"):
+                     "BighelpApprovalTransport", "profile_display_name", "_home_target"):
             self.stack.enter_context(patch.object(registration, name))
         self.stack.enter_context(patch.object(registration, "_device_tools_supported", return_value=False))
         ctx = Mock(profile_name="research", state=None)
         with patch.object(native_context.logger, "info") as info:
-            registration.register(ctx, service=SimpleNamespace(store=object()), activity_broker=Mock(),
-                                  attachment_store=object(), marketplace_gateway_client=object())
+            registration.register(ctx, service=SimpleNamespace(store=object()), activity_broker=Mock())
         self.room.register_room_activity.assert_called_once_with(ctx)
         self.device.register_middleware.assert_called_once_with(ctx)
         info.assert_not_called()

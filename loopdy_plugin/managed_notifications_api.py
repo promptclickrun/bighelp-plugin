@@ -32,8 +32,17 @@ class SessionBody(VersionedBody):
     enabled: StrictBool
 
 
+class WorkflowAlertsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    needsYou: StrictBool
+    succeeded: StrictBool
+    failed: StrictBool
+    cancelled: StrictBool
+
+
 class PreferencesBody(VersionedBody):
     peerChats: StrictBool
+    workflows: WorkflowAlertsBody | None = None
 
 
 class WorkBody(VersionedBody):
@@ -105,8 +114,11 @@ def preferences(grant_id: str):
 
 @router.put("/enrollments/{grant_id}/preferences")
 def set_preferences(grant_id: str, body: PreferencesBody):
-    """This phone's alert choices for the host: peer chats (agents talking to each other) start off."""
-    return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats))
+    """This phone's alert choices for the host: peer chats (agents talking to each other) start off,
+    workflow alerts (needs you, succeeded, failed, cancelled) start on."""
+    workflows = body.workflows.model_dump() if body.workflows is not None else None
+    return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats,
+                                                                      workflows=workflows))
 
 
 @router.post("/enrollments/{grant_id}/work")

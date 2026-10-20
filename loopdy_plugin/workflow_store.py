@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from . import workflow_factory as factory
 from . import workflow_model as model
 from .sensitive import SENSITIVE_CREDENTIAL_RE
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 4
 DEFAULT_SLOTS = 2
 MAX_PLANNED = 20
 MAX_RUN_ARTIFACT_BYTES = 50 * 1024 * 1024
@@ -36,6 +37,8 @@ LAUNCH_GRACE_SECONDS = 20
 MAX_READ_LENGTH = 98_304
 INLINE_TEXT_BYTES = 2048
 MAX_ATTEMPTS_SHOWN = 10
+MAX_TEMPLATES = 100
+TEMPLATE_PREFIX = "tpl-"
 DETAIL_BUDGET_BYTES = 160 * 1024
 ACTIVE_STATES = ("launched", "running", "checking_output", "accepted")
 LIVE_ATTEMPT_STATES = ("launched", "running", "checking_output")
@@ -48,10 +51,11 @@ FILTERS = {
     "for_you": ("waiting_for_you",),
     "attention": ("needs_attention",),
 }
-_ID = re.compile(r"(?:wf|run|att)_[0-9a-f]{16}\Z")
+_ID = re.compile(r"(?:wf|run|att|grp)_[0-9a-f]{16}\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
+_TEMPLATE_ID = re.compile(r"tpl-[0-9a-f]{16}\Z")
 _TABLES = {"workflows", "revisions", "bindings", "runs", "attempts", "artifacts", "approvals", "events",
-           "live_lines", "coordinator", "requests", "sqlite_sequence"}
+           "live_lines", "coordinator", "requests", "templates", "triggers", "sqlite_sequence"}
 
 
 class WorkflowError(Exception):
@@ -72,6 +76,10 @@ class HostFacts:
     """What this computer has: used for the `host` half of validation."""
     profile_exists: Callable[[str], bool] | None = None
     toolset_known: Callable[[str], bool] | None = None
+    # False when this Hermes can't limit a chat turn's tools (`--toolsets`): agent stages can't run then.
+    tool_scope: bool = True
+    # Is this folder a git repository on this computer (a Dev Factory project, schemaVersion 3)?
+    repository: Callable[[str], bool] | None = None
 
 
 @dataclass
@@ -142,11 +150,18 @@ def root_for_home(hermes_root: Path) -> Path:
     return Path(hermes_root) / "plugin-data" / "loopdy" / "workflows"
 
 
+# How a workflow starts: by hand (no row), or on a schedule through a Hermes cron job (workflow_trigger.py).
+_TRIGGERS_TABLE = """CREATE TABLE IF NOT EXISTS triggers (
+        workflow_id TEXT PRIMARY KEY, kind TEXT NOT NULL, schedule TEXT, inputs_json TEXT NOT NULL,
+        job_id TEXT, updated_at REAL NOT NULL)"""
+_TEMPLATES_TABLE = """CREATE TABLE IF NOT EXISTS templates (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, definition_json TEXT NOT NULL,
+        stage_count INTEGER NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)"""
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS workflows (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, draft_json TEXT NOT NULL, draft_version INTEGER NOT NULL,
         latest_revision INTEGER, archived INTEGER NOT NULL DEFAULT 0, run_counter INTEGER NOT NULL DEFAULT 0,
-        created_at REAL NOT NULL, updated_at REAL NOT NULL)""",
+        created_at REAL NOT NULL, updated_at REAL NOT NULL, pinned INTEGER NOT NULL DEFAULT 0)""",
     """CREATE TABLE IF NOT EXISTS revisions (
         workflow_id TEXT NOT NULL, revision INTEGER NOT NULL, definition_json TEXT NOT NULL, sha256 TEXT NOT NULL,
         created_at REAL NOT NULL, PRIMARY KEY (workflow_id, revision))""",
@@ -163,7 +178,8 @@ SCHEMA = (
         failure_stage TEXT, failure_code TEXT, failure_message TEXT, retry_stage TEXT, change_notes_json TEXT,
         waiting_sha256 TEXT, waiting_since REAL, tokens_in INTEGER NOT NULL DEFAULT 0,
         tokens_out INTEGER NOT NULL DEFAULT 0, artifact_bytes INTEGER NOT NULL DEFAULT 0,
-        created_at REAL NOT NULL, started_at REAL, updated_at REAL NOT NULL, ended_at REAL)""",
+        created_at REAL NOT NULL, started_at REAL, updated_at REAL NOT NULL, ended_at REAL,
+        group_id TEXT, project_json TEXT, workspace_json TEXT, pull_request_json TEXT, waiting_reason TEXT)""",
     "CREATE INDEX IF NOT EXISTS runs_state ON runs(state, seq)",
     "CREATE INDEX IF NOT EXISTS runs_workflow ON runs(workflow_id, seq)",
     """CREATE TABLE IF NOT EXISTS attempts (
@@ -172,7 +188,8 @@ SCHEMA = (
         coordinator_epoch INTEGER NOT NULL, launched_at REAL NOT NULL, deadline_at REAL NOT NULL, ended_at REAL,
         exit_code INTEGER, outcome_code TEXT, tokens_in INTEGER NOT NULL DEFAULT 0,
         tokens_out INTEGER NOT NULL DEFAULT 0, stream_offset INTEGER NOT NULL DEFAULT 0, stop_reason TEXT,
-        kill_at REAL, dir TEXT NOT NULL)""",
+        kill_at REAL, dir TEXT NOT NULL, runner TEXT NOT NULL DEFAULT 'stream',
+        tokens_known INTEGER NOT NULL DEFAULT 1, tries INTEGER)""",
     "CREATE INDEX IF NOT EXISTS attempts_run ON attempts(run_id, launched_at)",
     "CREATE INDEX IF NOT EXISTS attempts_state ON attempts(state)",
     """CREATE TABLE IF NOT EXISTS artifacts (
@@ -198,7 +215,23 @@ SCHEMA = (
         boot_id TEXT, heartbeat_at REAL, slots_total INTEGER NOT NULL, launched_at REAL)""",
     """CREATE TABLE IF NOT EXISTS requests (
         request_id TEXT PRIMARY KEY, op TEXT NOT NULL, response_json TEXT NOT NULL, at REAL NOT NULL)""",
+    _TEMPLATES_TABLE,
+    _TRIGGERS_TABLE,
 )
+# Store version 1 (plugin 3.5.0) to 2: pins, your templates and the text runner's attempts.
+MIGRATE_1_TO_2 = (
+    "ALTER TABLE workflows ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE attempts ADD COLUMN runner TEXT NOT NULL DEFAULT 'stream'",
+    "ALTER TABLE attempts ADD COLUMN tokens_known INTEGER NOT NULL DEFAULT 1",
+    _TEMPLATES_TABLE,
+)
+# Store version 2 (plugin 3.6) to 3: triggers.
+MIGRATE_2_TO_3 = (_TRIGGERS_TABLE,)
+# Store version 3 to 4: Dev Factory runs (a project, its workspace and pull request, why a run waits) and the fix
+# tries a command attempt had used. Added only where missing.
+COLUMNS_4 = (("runs", "group_id", "TEXT"), ("runs", "project_json", "TEXT"), ("runs", "workspace_json", "TEXT"),
+             ("runs", "pull_request_json", "TEXT"), ("runs", "waiting_reason", "TEXT"),
+             ("attempts", "tries", "INTEGER"))
 
 
 class WorkflowStore:
@@ -236,29 +269,13 @@ class WorkflowStore:
         try:
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("PRAGMA trusted_schema=OFF")
-            if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-                connection.execute("PRAGMA journal_mode=WAL")
+            self._use_wal(connection)
             connection.execute("PRAGMA synchronous=FULL")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, SCHEMA_VERSION):
+            if version not in (0, 1, 2, 3, SCHEMA_VERSION):
                 raise StoreUnavailable("This workflow store needs a newer bighelp plugin.")
-            if version == 0:
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    tables = {row[0] for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'")}
-                    if tables - _TABLES:
-                        raise StoreUnavailable()
-                    for statement in SCHEMA:
-                        connection.execute(statement)
-                    connection.execute(
-                        "INSERT OR IGNORE INTO coordinator (id, epoch, slots_total) VALUES (1, 0, ?)",
-                        (DEFAULT_SLOTS,))
-                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-                    connection.execute("COMMIT")
-                except BaseException:
-                    connection.execute("ROLLBACK")
-                    raise
+            if version != SCHEMA_VERSION:
+                self._migrate(connection)
         except sqlite3.Error:
             connection.close()
             raise StoreUnavailable() from None
@@ -266,6 +283,47 @@ class WorkflowStore:
             connection.close()
             raise
         return connection
+
+    @staticmethod
+    def _use_wal(connection: sqlite3.Connection) -> None:
+        """Switch a new store to WAL. The switch ignores busy_timeout, so wait here while another connection
+        (the other module copy, the coordinator) is creating the store; WAL is stored in the file once set."""
+        for _ in range(50):
+            if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+                return
+            try:
+                connection.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError:
+                time.sleep(0.1)
+        raise StoreUnavailable("The workflow store is busy. Try again.")
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            # Read again under the write lock: another process may have done this meanwhile.
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version == 0:
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if tables - _TABLES:
+                    raise StoreUnavailable()
+                for statement in SCHEMA:
+                    connection.execute(statement)
+                connection.execute("INSERT OR IGNORE INTO coordinator (id, epoch, slots_total) VALUES (1, 0, ?)",
+                                   (DEFAULT_SLOTS,))
+            elif version in (1, 2, 3):
+                for statement in (MIGRATE_1_TO_2 if version == 1 else ()) + (MIGRATE_2_TO_3 if version < 3 else ()):
+                    connection.execute(statement)
+                for table, column, kind in COLUMNS_4:
+                    if column not in {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}:
+                        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+            if version != SCHEMA_VERSION:
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:
@@ -410,12 +468,57 @@ class WorkflowStore:
         bindings = {role: row["agent_id"] for role, row in self._bindings(connection, workflow_id).items()}
         host = host or HostFacts()
         return model.validate(definition, bindings=bindings, profile_exists=host.profile_exists,
-                              toolset_known=host.toolset_known)
+                              toolset_known=host.toolset_known, tool_scope=host.tool_scope,
+                              repository=host.repository)
+
+    @staticmethod
+    def _trigger(connection: sqlite3.Connection, workflow_id: str) -> dict:
+        row = connection.execute("SELECT * FROM triggers WHERE workflow_id=?", (workflow_id,)).fetchone()
+        if row is None or row["kind"] != "schedule":
+            return {"kind": "manual"}
+        return {"kind": "schedule", "schedule": row["schedule"], "inputs": json.loads(row["inputs_json"]),
+                "jobId": row["job_id"]}
+
+    def trigger(self, workflow_id: str) -> dict:
+        with self.read() as connection:
+            self._workflow(connection, workflow_id)
+            return self._trigger(connection, workflow_id)
+
+    def scheduled_start(self, workflow_id: str, inputs: Any, host: HostFacts | None) -> tuple[str, int, dict]:
+        """(name, latest revision, parsed inputs) for a run on a schedule; refuses what couldn't run."""
+        with self.read() as connection:
+            row = self._workflow(connection, workflow_id)
+            if row["archived"]:
+                raise WorkflowError(409, "workflow_archived", "This workflow is archived.")
+            if not row["latest_revision"]:
+                raise WorkflowError(409, "not_published", "Run this workflow once before you schedule it.")
+            definition = self._definition(connection, workflow_id, row["latest_revision"])
+            validation = self._validation(connection, workflow_id, definition, host)
+            if not (validation["valid"] and validation["host"]):
+                raise WorkflowError(409, "not_valid", "Fix the problems in this workflow first.")
+            try:
+                parsed = model.parse_inputs(definition, inputs)
+            except model.InputsError as error:
+                raise WorkflowError(422, "inputs_invalid", str(error)) from None
+            return row["name"], row["latest_revision"], parsed
+
+    def save_trigger(self, workflow_id: str, kind: str, schedule: str | None, inputs: dict,
+                     job_id: str | None) -> dict:
+        with self.transaction() as connection:
+            self._workflow(connection, workflow_id)
+            if kind == "manual":
+                connection.execute("DELETE FROM triggers WHERE workflow_id=?", (workflow_id,))
+            else:
+                connection.execute(
+                    "INSERT OR REPLACE INTO triggers (workflow_id, kind, schedule, inputs_json, job_id, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (workflow_id, kind, schedule, model.canonical_json(inputs), job_id, self.now()))
+            return self._trigger(connection, workflow_id)
 
     def list_workflows(self, include_archived: bool, host: HostFacts | None) -> dict:
         with self.read() as connection:
             rows = connection.execute(
-                "SELECT * FROM workflows WHERE archived=0 OR ? ORDER BY updated_at DESC, id",
+                "SELECT * FROM workflows WHERE archived=0 OR ? ORDER BY pinned DESC, updated_at DESC, id",
                 (1 if include_archived else 0,)).fetchall()
             workflows = []
             for row in rows[:200]:
@@ -425,7 +528,7 @@ class WorkflowStore:
                 validation = self._validation(connection, row["id"], draft, host)
                 bindings = {role: binding["agent_id"] for role, binding in
                             self._bindings(connection, row["id"]).items()}
-                used = {stage["role"] for stage in current["stages"] if stage["kind"] == "agent"}
+                used = {stage["role"] for stage in model.all_stages(current) if stage["kind"] == "agent"}
                 missing = [role["key"] for role in current["roles"] if role["key"] in used and (
                     not bindings.get(role["key"]) or (host is not None and host.profile_exists is not None
                                                       and not host.profile_exists(bindings[role["key"]])))]
@@ -434,12 +537,19 @@ class WorkflowStore:
                 has_draft = row["latest_revision"] is None or model.definition_sha256(draft) != connection.execute(
                     "SELECT sha256 FROM revisions WHERE workflow_id=? AND revision=?",
                     (row["id"], row["latest_revision"])).fetchone()[0]
-                workflows.append({
+                summary = {
                     "id": row["id"], "name": row["name"], "revision": row["latest_revision"],
                     "draftVersion": row["draft_version"], "hasDraft": has_draft,
                     "stageCount": len(current["stages"]), "needsSetupRoles": missing,
                     "valid": validation["valid"], "archived": bool(row["archived"]), "lastRunAt": iso(last),
-                })
+                    "pinned": bool(row["pinned"]), "trigger": self._trigger(connection, row["id"]),
+                    "schemaVersion": current["schemaVersion"],
+                }
+                # Dev Factory lists recipes by their projects without opening each one.
+                if current["schemaVersion"] >= 3:
+                    summary["projects"] = [{"key": project["key"], "label": project["label"]}
+                                           for project in current.get("projects") or []]
+                workflows.append(summary)
             cache: dict = {}
             waiting = [self._summary(connection, run, cache) for run in connection.execute(
                 "SELECT * FROM runs WHERE state='waiting_for_you' ORDER BY waiting_since, seq LIMIT 50")]
@@ -457,8 +567,10 @@ class WorkflowStore:
                 definition, number = self._definition(connection, workflow_id, revision), revision
             return {"workflow": {
                 "id": row["id"], "name": row["name"], "revision": number, "latestRevision": row["latest_revision"],
-                "draftVersion": row["draft_version"], "archived": bool(row["archived"]), "definition": definition,
+                "draftVersion": row["draft_version"], "archived": bool(row["archived"]),
+                "pinned": bool(row["pinned"]), "definition": definition,
                 "bindings": self._binding_list(connection, workflow_id, definition),
+                "trigger": self._trigger(connection, workflow_id),
             }, "validation": self._validation(connection, workflow_id, definition, host)}
 
     @staticmethod
@@ -571,18 +683,100 @@ class WorkflowStore:
             connection.execute("UPDATE workflows SET archived=1, updated_at=? WHERE id=?", (self.now(), workflow_id))
             return self._remember(connection, mutation, "archive", {"workflowId": workflow_id, "archived": True})
 
+    def unarchive(self, workflow_id: str, mutation: Mutation | None = None) -> dict:
+        with self.mutate("unarchive", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            self._workflow(connection, workflow_id)
+            connection.execute("UPDATE workflows SET archived=0, updated_at=? WHERE id=?", (self.now(), workflow_id))
+            return self._remember(connection, mutation, "unarchive", {"workflowId": workflow_id, "archived": False})
+
+    def pin(self, workflow_id: str, pinned: bool, mutation: Mutation | None = None) -> dict:
+        with self.mutate("pin", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            self._workflow(connection, workflow_id)
+            # Pinning only reorders the list, so it leaves updated_at alone.
+            connection.execute("UPDATE workflows SET pinned=? WHERE id=?", (1 if pinned else 0, workflow_id))
+            return self._remember(connection, mutation, "pin", {"workflowId": workflow_id, "pinned": pinned})
+
+    # MARK: Templates
+
+    @staticmethod
+    def _your_template(connection: sqlite3.Connection, template_id: str) -> sqlite3.Row:
+        row = None
+        if isinstance(template_id, str) and _TEMPLATE_ID.fullmatch(template_id):
+            row = connection.execute("SELECT * FROM templates WHERE id=?", (template_id,)).fetchone()
+        if row is None:
+            raise WorkflowError(404, "template_not_found", "That template doesn't exist.")
+        return row
+
+    def list_templates(self, include_code: bool = False) -> dict:
+        with self.read() as connection:
+            rows = connection.execute("SELECT * FROM templates ORDER BY updated_at DESC, id LIMIT ?",
+                                      (MAX_TEMPLATES,)).fetchall()
+        yours = []
+        for row in rows:
+            definition = json.loads(row["definition_json"])
+            if not include_code and definition.get("schemaVersion", 1) >= 3:
+                continue  # An app without Dev Factory can't open it.
+            yours.append({"id": row["id"], "name": row["name"], "description": row["description"],
+                          "source": "yours", "stageCount": row["stage_count"],
+                          "roles": definition.get("roles", []), "updatedAt": iso(row["updated_at"])})
+        builtin = [dict(item, source="builtin", updatedAt=None)
+                   for item in model.template_summaries(include_code=include_code)]
+        return {"templates": yours + builtin}
+
+    def save_template(self, workflow_id: str, name: str, description: str | None,
+                      mutation: Mutation | None = None) -> dict:
+        """Your template: a copy of the workflow's latest saved draft, without who does each role."""
+        name = name.strip()
+        if not name or len(name) > model.MAX_TITLE or "\x00" in name:
+            raise WorkflowError(422, "invalid_request", "Give the template a name of at most 80 characters.")
+        if description is not None and (len(description) > model.MAX_DESCRIPTION or "\x00" in description):
+            raise WorkflowError(422, "invalid_request", "The description is too long.")
+        with self.mutate("templates/save", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            row = self._workflow(connection, workflow_id)
+            if connection.execute("SELECT COUNT(*) FROM templates").fetchone()[0] >= MAX_TEMPLATES:
+                raise WorkflowError(409, "not_allowed", f"You already have {MAX_TEMPLATES} templates. Delete one first.")
+            definition = json.loads(row["draft_json"])
+            definition["name"] = name
+            if description is not None:
+                definition["description"] = description
+            now = self.now()
+            template_id = TEMPLATE_PREFIX + secrets.token_hex(8)
+            connection.execute(
+                "INSERT INTO templates (id, name, description, definition_json, stage_count, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (template_id, name, definition.get("description", ""), model.canonical_json(definition),
+                 len(definition["stages"]), now, now))
+            return self._remember(connection, mutation, "templates/save", {"templateId": template_id})
+
+    def delete_template(self, template_id: str, mutation: Mutation | None = None) -> dict:
+        if model.template(template_id) is not None:
+            raise WorkflowError(409, "not_allowed", "Built-in templates can't be deleted.")
+        with self.mutate("templates/delete", mutation) as (connection, replay):
+            if replay is not None:
+                return replay
+            self._your_template(connection, template_id)
+            connection.execute("DELETE FROM templates WHERE id=?", (template_id,))
+            return self._remember(connection, mutation, "templates/delete", {"deleted": True})
+
     def use_template(self, template_id: str, name: str | None, host: HostFacts | None,
                      mutation: Mutation | None = None) -> dict:
         definition = model.template(template_id)
-        if definition is None:
+        if definition is None and not template_id.startswith(TEMPLATE_PREFIX):
             raise WorkflowError(404, "template_not_found", "That template doesn't exist.")
-        if name:
-            definition["name"] = name
-        parsed = self._parse(definition)
         with self.mutate("templates/use", mutation) as (connection, replay):
             if replay is not None:
                 return replay
-            response = self._save(connection, None, 0, parsed, host)
+            if definition is None:
+                definition = json.loads(self._your_template(connection, template_id)["definition_json"])
+            if name:
+                definition["name"] = name
+            response = self._save(connection, None, 0, self._parse(definition), host)
             return self._remember(connection, mutation, "templates/use", response)
 
     # MARK: Runs
@@ -597,16 +791,22 @@ class WorkflowStore:
         return row
 
     def start_run(self, workflow_id: str, revision: int, inputs: Any, client_run_token: str, sample: bool,
-                  host: HostFacts | None, mutation: Mutation | None = None) -> dict:
+                  host: HostFacts | None, mutation: Mutation | None = None, *,
+                  projects: list[str] | None = None) -> dict:
+        """One run, or for a Dev Factory recipe (schemaVersion 3) one run per project, grouped by `group_id`.
+
+        `projects` picks some of a recipe's projects (by key); all of them when it is None.
+        """
         if sample:
             raise WorkflowError(422, "sample_unsupported", "Runs with sample inputs aren't available yet.")
         with self.mutate("runs/start", mutation) as (connection, replay):
             if replay is not None:
                 return replay
-            existing = connection.execute("SELECT * FROM runs WHERE client_run_token=?",
-                                          (client_run_token,)).fetchone()
-            if existing is not None:
-                return {"run": self._summary(connection, existing, {})}
+            # A recipe's runs carry the token with their project key: "<token>/<key>".
+            existing = connection.execute("SELECT * FROM runs WHERE client_run_token=? OR client_run_token LIKE ? "
+                                          "ORDER BY seq", (client_run_token, client_run_token + "/%")).fetchall()
+            if existing:
+                return self._started(connection, existing)
             row = self._workflow(connection, workflow_id)
             if row["archived"]:
                 raise WorkflowError(409, "workflow_archived", "This workflow is archived.")
@@ -618,25 +818,41 @@ class WorkflowStore:
                 parsed = model.parse_inputs(definition, inputs)
             except model.InputsError as error:
                 raise WorkflowError(422, "inputs_invalid", str(error)) from None
+            chosen = _chosen_projects(definition, projects)
             planned = connection.execute("SELECT COUNT(*) FROM runs WHERE state='planned'").fetchone()[0]
-            if planned >= MAX_PLANNED:
+            if planned + max(1, len(chosen)) > MAX_PLANNED:
                 raise WorkflowError(429, "queue_full", "Too many runs are waiting. Try again later.")
             now = self.now()
-            number = row["run_counter"] + 1
-            connection.execute("UPDATE workflows SET run_counter=? WHERE id=?", (number, workflow_id))
-            run_id = new_id("run")
+            number = row["run_counter"]
             bindings = {role: binding["agent_id"] for role, binding in self._bindings(connection, workflow_id).items()}
             first = definition["stages"][0]["key"]
-            connection.execute(
-                "INSERT INTO runs (id, number, workflow_id, revision, state, stage_key, iteration, inputs_json, "
-                "bindings_json, stages_json, client_run_token, version, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, 'planned', ?, 1, ?, ?, ?, ?, 1, ?, ?)",
-                (run_id, number, workflow_id, revision, first, model.canonical_json(parsed),
-                 model.canonical_json(bindings), model.canonical_json(initial_stages(definition)),
-                 client_run_token, now, now))
-            add_event(connection, run_id, now, "run_planned", f"Run {number} is waiting for a free slot.")
-            response = {"run": self._summary(connection, self._run(connection, run_id), {})}
-            return self._remember(connection, mutation, "runs/start", response)
+            group_id = new_id("grp") if chosen else None
+            rows = []
+            for project in chosen or [None]:
+                number += 1
+                run_id = new_id("run")
+                connection.execute(
+                    "INSERT INTO runs (id, number, workflow_id, revision, state, stage_key, iteration, inputs_json, "
+                    "bindings_json, stages_json, client_run_token, version, created_at, updated_at, group_id, "
+                    "project_json) VALUES (?, ?, ?, ?, 'planned', ?, 1, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                    (run_id, number, workflow_id, revision, first, model.canonical_json(parsed),
+                     model.canonical_json(bindings), model.canonical_json(initial_stages(definition)),
+                     client_run_token if project is None else f"{client_run_token}/{project['key']}", now, now,
+                     group_id, None if project is None else model.canonical_json(project)))
+                add_event(connection, run_id, now, "run_planned", f"Run {number} is waiting for a free slot.")
+                rows.append(self._run(connection, run_id))
+            connection.execute("UPDATE workflows SET run_counter=? WHERE id=?", (number, workflow_id))
+            return self._remember(connection, mutation, "runs/start", self._started(connection, rows))
+
+    def _started(self, connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> dict:
+        """`{run}` (the first run), and for a recipe `group_id` and `runs: [{run_id, project}]`."""
+        cache: dict = {}
+        response: dict[str, Any] = {"run": self._summary(connection, rows[0], cache)}
+        if rows[0]["group_id"] is not None:
+            response["group_id"] = rows[0]["group_id"]
+            response["runs"] = [{"run_id": row["id"], "project": json.loads(row["project_json"])["key"]}
+                                for row in rows]
+        return response
 
     def list_runs(self, workflow_id: str | None, filter_name: str, before: str | None, limit: int) -> dict:
         states = FILTERS[filter_name]
@@ -709,8 +925,25 @@ class WorkflowStore:
             response = {"run": self._summary(connection, self._run(connection, run_id), cache)}
             return self._remember(connection, mutation, "runs/control", response)
 
+    def _changes_now(self, run_id: str, stage_key: str) -> str | None:
+        """For a sign-off on a project's changes: the folder's state now. Read before the write transaction,
+        because git can take a while. None when it isn't such a sign-off or the folder can't be read."""
+        with self.read() as connection:
+            run = self._run(connection, run_id)
+            if run["state"] != "waiting_for_you" or run["stage_key"] != stage_key or not run["workspace_json"]:
+                return None
+            stage = model.stage_by_key(self._definition(connection, run["workflow_id"], run["revision"]), stage_key)
+        if not stage or not stage.get("changes"):
+            return None
+        workspace = json.loads(run["workspace_json"])
+        try:
+            return factory.changes(workspace["path"], workspace["base"], factory.git_env(os.environ))[1]
+        except (factory.FactoryError, OSError):
+            return None
+
     def signoff(self, run_id: str, stage_key: str, decision: str, artifact_sha256: str, notes: str,
                 mutation: Mutation | None = None) -> dict:
+        changes_now = self._changes_now(run_id, stage_key)
         with self.mutate("runs/signoff", mutation) as (connection, replay):
             if replay is not None:
                 return replay
@@ -718,31 +951,42 @@ class WorkflowStore:
             if run["state"] != "waiting_for_you" or run["stage_key"] != stage_key or not run["waiting_sha256"]:
                 raise WorkflowError(409, "not_waiting", "This stage isn't waiting for you.")
             given = run["waiting_sha256"]
-            try:
-                stored = hashlib.sha256(self.read_artifact_bytes(given)).hexdigest()
-            except WorkflowError:
-                stored = None
-            if artifact_sha256 != given or stored != given:
-                raise WorkflowError(409, "approval_stale", "The file changed since you opened it. Look at it again.")
+            stage = model.stage_by_key(self._definition(connection, run["workflow_id"], run["revision"]), stage_key)
+            if stage.get("changes"):
+                # The project's changes: the folder must still be exactly what the person looked at.
+                if artifact_sha256 != given or changes_now != given:
+                    raise WorkflowError(409, "approval_stale",
+                                        "The project changed since you looked at it. Look at it again.")
+            else:
+                try:
+                    stored = hashlib.sha256(self.read_artifact_bytes(given)).hexdigest()
+                except WorkflowError:
+                    stored = None
+                if artifact_sha256 != given or stored != given:
+                    raise WorkflowError(409, "approval_stale",
+                                        "The file changed since you opened it. Look at it again.")
             now = self.now()
             cache: dict = {}
             definition = self._definition(connection, run["workflow_id"], run["revision"], cache)
             connection.execute("INSERT INTO approvals (run_id, stage_key, iteration, artifact_sha256, decision, notes, "
                                "decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                (run_id, stage_key, run["iteration"], given, decision, notes, now))
-            stage = model.stage_by_key(definition, stage_key)
             stages = json.loads(run["stages_json"])
             if decision == "approve":
                 stage_state(stages, stage_key, "accepted", now, end=True)
-                add_event(connection, run_id, now, "approved", "You approved the file.", stage_key)
+                add_event(connection, run_id, now, "approved",
+                          "You approved the changes." if stage.get("changes") else "You approved the file.", stage_key)
                 following = model.next_stage_key(definition, stage_key)
                 if following is None:
                     finish(connection, run, now, stages)
                 else:
                     update_run(connection, run, now, state="planned", stage_key=following,
-                               stages_json=model.canonical_json(stages), waiting_sha256=None, waiting_since=None)
+                               stages_json=model.canonical_json(stages), waiting_sha256=None, waiting_since=None,
+                               waiting_reason=None)
             else:
-                producer, _ = model.split_reference(stage["file"])
+                # Back to the stage that wrote the file, or (changes) the nearest coding agent before this one.
+                producer = (model.changes_target(definition, stage_key) if stage.get("changes")
+                            else model.split_reference(stage["file"])[0])
                 add_event(connection, run_id, now, "changes_requested", "You asked for changes.",
                           stage_key)
                 notes_value = [{"severity": "major", "text": notes.strip()}] if notes.strip() else []
@@ -802,7 +1046,8 @@ class WorkflowStore:
             "workflowName": cache[name_key], "revision": run["revision"], "state": run["state"],
             "stageKey": run["stage_key"], "stageTitle": stage["title"],
             "stageState": stages.get(run["stage_key"], {}).get("state", "pending"),
-            "stagesDone": sum(1 for item in stages.values() if item["state"] == "accepted"),
+            "stagesDone": sum(1 for item in definition["stages"]
+                              if stages.get(item["key"], {}).get("state") == "accepted"),
             "stageCount": len(definition["stages"]), "iteration": run["iteration"],
             "startedAt": iso(run["started_at"]), "updatedAt": iso(run["updated_at"]), "endedAt": iso(run["ended_at"]),
             "paused": bool(run["pause_requested"]), "version": run["version"], "sample": bool(run["sample"]),
@@ -813,7 +1058,11 @@ class WorkflowStore:
             value["failure"] = {"stageKey": run["failure_stage"] or run["stage_key"], "code": run["failure_code"],
                                 "message": run["failure_message"] or ""}
         if run["state"] == "waiting_for_you":
-            value["waiting"] = {"kind": "signoff", "stageKey": run["stage_key"], "since": iso(run["waiting_since"])}
+            # A sign-off, or (Dev Factory) a command or pull request that needs you: see `reason`.
+            kind = stage.get("kind") if stage.get("kind") in ("command", "pull_request") else "signoff"
+            value["waiting"] = {"kind": kind, "stageKey": run["stage_key"], "since": iso(run["waiting_since"])}
+        if run["group_id"] is not None:
+            value.update(code_fields(run))
         return value
 
     @staticmethod
@@ -833,35 +1082,82 @@ class WorkflowStore:
         stages = json.loads(run["stages_json"])
         bindings = json.loads(run["bindings_json"])
         attempts: dict[str, list] = {}
+        logs = {row["attempt_id"]: {"sha256": row["sha256"], "bytes": row["bytes"]} for row in connection.execute(
+            "SELECT attempt_id, sha256, bytes FROM artifacts WHERE run_id=? AND name='log' AND attempt_id IS NOT NULL",
+            (run["id"],))}
         for row in connection.execute("SELECT * FROM attempts WHERE run_id=? ORDER BY launched_at, number",
                                       (run["id"],)):
             ended = row["ended_at"]
-            attempts.setdefault(row["stage_key"], []).append({
+            entry = {
                 "id": row["id"], "number": row["number"], "iteration": row["iteration"], "state": row["state"],
                 "agentId": row["agent_id"], "launchedAt": iso(row["launched_at"]), "endedAt": iso(ended),
                 "durationMs": int(round((ended - row["launched_at"]) * 1000)) if ended is not None else None,
-                "tokens": {"in": row["tokens_in"], "out": row["tokens_out"]}, "outcomeCode": row["outcome_code"]})
+                # The text runner can't count tokens: null means unknown, not zero.
+                "tokens": {"in": row["tokens_in"], "out": row["tokens_out"]} if row["tokens_known"] else None,
+                "outcomeCode": row["outcome_code"]}
+            if (model.stage_by_key(definition, row["stage_key"]) or {}).get("kind") == "command":
+                # Dev Factory: the command's own runs, and the agent turns that fixed what it found.
+                if row["runner"] == "command":
+                    entry.update(kind="command", exit_code=row["exit_code"], tries=row["tries"] or 0,
+                                 log=logs.get(row["id"]))
+                else:
+                    entry["kind"] = "fix"
+            attempts.setdefault(row["stage_key"], []).append(entry)
         value["inputs"] = json.loads(run["inputs_json"])
+        decisions: dict[str, list] = {}
+        for row in connection.execute("SELECT * FROM approvals WHERE run_id=? ORDER BY id", (run["id"],)):
+            decisions.setdefault(row["stage_key"], []).append({
+                "iteration": row["iteration"], "decision": row["decision"], "notes": row["notes"][:2_000],
+                "decidedAt": iso(row["decided_at"])})
         value["stages"] = []
-        for stage in definition["stages"]:
+        for stage in model.all_stages(definition):
             current = stages.get(stage["key"], {})
             agent = stage["kind"] == "agent"
-            value["stages"].append({
+            entry = {
                 "key": stage["key"], "kind": stage["kind"], "title": stage["title"],
                 "role": stage.get("role"), "agentId": bindings.get(stage["role"]) if agent else None,
                 "iteration": current.get("iteration", 1), "state": current.get("state", "pending"),
-                "minutes": model.stage_minutes(definition, stage) if agent else None,
+                "minutes": model.stage_minutes(definition, stage) if agent or stage["kind"] == "command" else None,
                 "startedAt": iso(current.get("startedAt")), "endedAt": iso(current.get("endedAt")),
                 "attempts": attempts.get(stage["key"], [])[-MAX_ATTEMPTS_SHOWN:],
-            })
+                # What the stage read: run inputs ("inputs.topic") and earlier outputs ("draft.file").
+                "uses": stage_reads(stage),
+            }
+            if current.get("outcome") in model.OUTCOMES:
+                # A decision that ended the run: how, and why.
+                entry["outcome"] = {"end": current["outcome"], "note": str(current.get("note") or "")[:200]}
+            if stage["kind"] == "signoff":
+                # The person's sign-offs, newest last.
+                entry["decisions"] = decisions.get(stage["key"], [])[-20:]
+                if isinstance(current.get("changes"), dict):
+                    # Dev Factory: the project's changes this sign-off showed.
+                    entry["changes"] = current["changes"]
+            group = model.parent_key(definition, stage["key"])
+            if group is not None:
+                # An agent of a parallel block: it runs with the others in `group`.
+                entry["group"] = group
+            value["stages"].append(entry)
         latest: dict[tuple[str, str], sqlite3.Row] = {}
         history: dict[tuple[str, str], list[sqlite3.Row]] = {}
         for row in connection.execute("SELECT * FROM artifacts WHERE run_id=? ORDER BY id", (run["id"],)):
             latest[(row["stage_key"], row["name"])] = row
             history.setdefault((row["stage_key"], row["name"]), []).append(row)
         value["outputs"] = [self._output(row) for row in latest.values()]
-        if run["state"] == "waiting_for_you":
-            stage = model.stage_by_key(definition, run["stage_key"])
+        waiting = model.stage_by_key(definition, run["stage_key"]) if run["state"] == "waiting_for_you" else None
+        notes = [note for row in latest.values() if row["type"] == "notes" and row["value_json"]
+                 for note in json.loads(row["value_json"])]
+        decided = [{
+            "iteration": row["iteration"], "decision": row["decision"], "notes": row["notes"],
+            "artifactSha256": row["artifact_sha256"], "decidedAt": iso(row["decided_at"]),
+        } for row in connection.execute("SELECT * FROM approvals WHERE run_id=? AND stage_key=? ORDER BY id",
+                                        (run["id"], run["stage_key"]))][-20:] if waiting is not None else []
+        if waiting is not None and waiting["kind"] == "signoff" and waiting.get("changes"):
+            # Dev Factory: approve with `sha256` as `artifactSha256`; it binds to the folder as you saw it.
+            value["signoff"] = {"stageKey": waiting["key"],
+                                "changes": stages.get(waiting["key"], {}).get("changes"),
+                                "sha256": run["waiting_sha256"], "reviewNotes": notes[:40], "history": decided}
+        elif waiting is not None and waiting["kind"] == "signoff":
+            stage = waiting
             producer, name = model.split_reference(stage["file"])
             rows = history.get((producer, name), [])
             current_row = next((row for row in reversed(rows) if row["sha256"] == run["waiting_sha256"]), None)
@@ -870,16 +1166,8 @@ class WorkflowStore:
                 previous = next((row for row in reversed(rows) if row["iteration"] < current_row["iteration"]), None)
                 if previous is not None:
                     signoff["previous"] = self._output(previous)
-                notes = []
-                for row in latest.values():
-                    if row["type"] == "notes" and row["value_json"]:
-                        notes.extend(json.loads(row["value_json"]))
                 signoff["reviewNotes"] = notes[:40]
-                signoff["history"] = [{
-                    "iteration": row["iteration"], "decision": row["decision"], "notes": row["notes"],
-                    "artifactSha256": row["artifact_sha256"], "decidedAt": iso(row["decided_at"]),
-                } for row in connection.execute(
-                    "SELECT * FROM approvals WHERE run_id=? AND stage_key=? ORDER BY id", (run["id"], stage["key"]))][-20:]
+                signoff["history"] = decided
                 value["signoff"] = signoff
         value["tokens"] = {"in": run["tokens_in"], "out": run["tokens_out"]}
         value["allowedActions"] = allowed_actions(run)
@@ -898,11 +1186,43 @@ _LIVE = ",".join(f"'{state}'" for state in LIVE_ATTEMPT_STATES)
 _ACTIVE = ",".join(f"'{state}'" for state in ACTIVE_STATES)
 
 
+def _chosen_projects(definition: dict, keys: list[str] | None) -> list[dict]:
+    """The projects a start runs: all of a recipe's, or the ones `keys` names. Empty for older workflows."""
+    projects = definition.get("projects") if definition["schemaVersion"] >= 3 else None
+    if projects is None:
+        if keys is not None:
+            raise WorkflowError(422, "projects_invalid", "This workflow doesn't work on projects.")
+        return []
+    if keys is None:
+        return list(projects)
+    known = {project["key"] for project in projects}
+    if not keys or len(set(keys)) != len(keys) or not set(keys) <= known:
+        raise WorkflowError(422, "projects_invalid", "Choose projects this workflow has.")
+    return [project for project in projects if project["key"] in keys]
+
+
 # MARK: Run transitions shared by the routes and the coordinator. Each runs inside a caller's transaction.
 
 def initial_stages(definition: dict) -> dict:
     return {stage["key"]: {"state": "pending", "iteration": 1, "startedAt": None, "endedAt": None}
-            for stage in definition["stages"]}
+            for stage in model.all_stages(definition)}
+
+
+def reset_stage(stages: dict, definition: dict, key: str, now: float, *, iteration: int | None = None,
+                keep_accepted_branches: bool = False, rerun: str | None = None) -> None:
+    """Back to pending, a parallel block with its agents. On a retry the agents that finished keep their work,
+    except `rerun` (the one whose work a check refused)."""
+    stage_state(stages, key, "pending", now, iteration=iteration)
+    stages[key]["startedAt"] = stages[key]["endedAt"] = None
+    for name in ("outcome", "note", "tries", "fixing", "changes"):
+        stages[key].pop(name, None)
+    stage = model.stage_by_key(definition, key) or {}
+    for branch in stage.get("branches", ()):
+        item = stages.get(branch["key"], {})
+        if keep_accepted_branches and item.get("state") == "accepted" and branch["key"] != rerun:
+            continue
+        stage_state(stages, branch["key"], "pending", now, iteration=iteration)
+        stages[branch["key"]]["startedAt"] = stages[branch["key"]]["endedAt"] = None
 
 
 def stage_state(stages: dict, key: str, state: str, now: float, *, start: bool = False, end: bool = False,
@@ -915,6 +1235,27 @@ def stage_state(stages: dict, key: str, state: str, now: float, *, start: bool =
         item["startedAt"], item["endedAt"] = now, None
     if end:
         item["endedAt"] = now
+
+
+def stage_reads(stage: dict) -> list[str]:
+    """The references one stage reads, in definition order, without repeats."""
+    kind = stage["kind"]
+    if kind == "agent":
+        reads = list(stage.get("uses") or [])
+    elif kind == "check":
+        reads = [rule["of"] for rule in stage.get("rules") or [] if isinstance(rule.get("of"), str)]
+    elif kind == "decision":
+        on = stage.get("on")
+        reads = [on] if isinstance(on, str) else [item for item in on or [] if isinstance(item, str)]
+    elif kind == "signoff":
+        reads = [stage["file"]] if isinstance(stage.get("file"), str) else []
+    elif kind == "delivery":
+        reads = [item for item in stage.get("deliver") or [] if isinstance(item, str)]
+    elif kind == "pull_request":
+        reads = [stage["titleFrom"]] if isinstance(stage.get("titleFrom"), str) else []
+    else:
+        reads = []
+    return list(dict.fromkeys(reads))[:32]
 
 
 def add_event(connection: sqlite3.Connection, run_id: str, now: float, kind: str, text: str,
@@ -934,13 +1275,24 @@ def update_run(connection: sqlite3.Connection, run: sqlite3.Row, now: float, **c
         raise WorkflowError(409, "run_conflict", "The run changed. Load it again.")
 
 
+def code_fields(run: sqlite3.Row) -> dict:
+    """What a Dev Factory run (schemaVersion 3) adds to its summary. Older runs have none of these."""
+    reason = {"waiting_for_you": run["waiting_reason"], "needs_attention": run["attention_message"],
+              "failed": run["failure_message"]}.get(run["state"])
+    return {"group_id": run["group_id"], "project": json.loads(run["project_json"]),
+            "workspace": json.loads(run["workspace_json"]) if run["workspace_json"] else None,
+            "pull_request": json.loads(run["pull_request_json"]) if run["pull_request_json"] else None,
+            "reason": reason or None}
+
+
 def allowed_actions(run: sqlite3.Row) -> list[str]:
     state = run["state"]
     actions: list[str] = []
     if state in ("planned",) + ACTIVE_STATES + ("waiting_for_you", "needs_attention") and not (
             state in LIVE_ATTEMPT_STATES and run["cancel_requested"]):
         actions.append("cancel")
-    if state in ("failed", "needs_attention"):
+    # A run waiting on a command or a pull request (not on a sign-off) can try that step again.
+    if state in ("failed", "needs_attention") or (state == "waiting_for_you" and not run["waiting_sha256"]):
         actions.append("retry")
     if state in ("planned",) + ACTIVE_STATES + ("waiting_for_you",):
         actions.append("resume" if run["pause_requested"] else "pause")
@@ -949,28 +1301,29 @@ def allowed_actions(run: sqlite3.Row) -> list[str]:
 
 def finish(connection: sqlite3.Connection, run: sqlite3.Row, now: float, stages: dict) -> None:
     update_run(connection, run, now, state="succeeded", stages_json=model.canonical_json(stages), ended_at=now,
-               waiting_sha256=None, waiting_since=None, next_stage=None)
+               waiting_sha256=None, waiting_since=None, waiting_reason=None, next_stage=None)
     add_event(connection, run["id"], now, "succeeded", "The run is done.")
 
 
 def go_back(connection: sqlite3.Connection, run: sqlite3.Row, definition: dict, target: str, notes: dict,
             now: float, *, state: str, count_loop: str | None = None, through: str | None = None,
             stages: dict | None = None) -> None:
-    """Send the run back to `target` with the next iteration; stages from there to `through` start over."""
-    index = model.stage_index(definition)
+    """Send the run back to `target` with the next iteration; stages on the way from there to `through` start
+    over."""
     stages = json.loads(run["stages_json"]) if stages is None else stages
     iteration = run["iteration"] + 1
-    for stage in definition["stages"][index[target]: index[through or run["stage_key"]] + 1]:
-        stage_state(stages, stage["key"], "pending", now, iteration=iteration)
-        stages[stage["key"]]["startedAt"] = stages[stage["key"]]["endedAt"] = None
+    # A parallel block's agent goes back as its whole block.
+    target = model.top_key(definition, target)
+    for key in model.stages_between(definition, target, through or run["stage_key"]):
+        reset_stage(stages, definition, key, now, iteration=iteration)
     loops = json.loads(run["loops_json"] or "{}")
     if count_loop is not None:
         loops[count_loop] = int(loops.get(count_loop, 0)) + 1
     update_run(connection, run, now, state=state, stage_key=target, iteration=iteration,
                stages_json=model.canonical_json(stages), loops_json=model.canonical_json(loops),
                change_notes_json=model.canonical_json(notes), waiting_sha256=None, waiting_since=None,
-               attention_code=None, attention_message=None, failure_stage=None, failure_code=None,
-               failure_message=None, retry_stage=None, next_stage=None)
+               waiting_reason=None, attention_code=None, attention_message=None, failure_stage=None,
+               failure_code=None, failure_message=None, retry_stage=None, next_stage=None)
 
 
 def retry(connection: sqlite3.Connection, store: WorkflowStore, run: sqlite3.Row, definition: dict, now: float) -> None:
@@ -984,13 +1337,13 @@ def retry(connection: sqlite3.Connection, store: WorkflowStore, run: sqlite3.Row
         go_back(connection, run, definition, decision["changes"]["goTo"], notes, now, state="planned",
                 count_loop=decision["key"])
         return
-    target = run["retry_stage"] or run["failure_stage"] or run["stage_key"]
+    retry_stage = run["retry_stage"] or run["failure_stage"] or run["stage_key"]
+    # In a parallel block only the agents that didn't finish run again (and the one a check refused).
+    target = model.top_key(definition, retry_stage)
     stages = json.loads(run["stages_json"])
-    index = model.stage_index(definition)
-    for stage in definition["stages"][index[target]: index[run["stage_key"]] + 1]:
-        stage_state(stages, stage["key"], "pending", now)
-        stages[stage["key"]]["startedAt"] = stages[stage["key"]]["endedAt"] = None
+    for key in model.stages_between(definition, target, model.top_key(definition, run["stage_key"])):
+        reset_stage(stages, definition, key, now, keep_accepted_branches=True, rerun=retry_stage)
     update_run(connection, run, now, state="planned", stage_key=target, bindings_json=model.canonical_json(bindings),
                stages_json=model.canonical_json(stages), attention_code=None, attention_message=None,
                failure_stage=None, failure_code=None, failure_message=None, retry_stage=None, cancel_requested=0,
-               ended_at=None, next_stage=None)
+               ended_at=None, next_stage=None, waiting_since=None, waiting_reason=None)

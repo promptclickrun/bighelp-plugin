@@ -45,6 +45,8 @@ class NativeContext:
     serving_profile_id: str | None
     features: tuple[str, ...]
     runtime_id: str
+    # (feature, fixed reason code) for features this computer can't offer and the app can explain.
+    unavailable: tuple[tuple[str, str], ...] = ()
 
     def payload(self) -> dict:
         return {
@@ -58,6 +60,7 @@ class NativeContext:
                 "displayName": self.display_name,
             } if self.provider is not None else None,
             "features": list(self.features),
+            **({"unavailable": dict(self.unavailable)} if self.unavailable else {}),
         }
 
     @property
@@ -140,12 +143,15 @@ def native_context(request: Request) -> NativeContext:
             raise NativeAPIError(401, "native_identity_invalid",
                                  "The Hermes identity is invalid or expired.") from None
 
-    profile, features = _native_features(provider)
-    return NativeContext(provider, user_id, display_name, profile, features, RUNTIME_ID)
+    unavailable: dict[str, str] = {}
+    profile, features = _native_features(provider, unavailable=unavailable)
+    return NativeContext(provider, user_id, display_name, profile, features, RUNTIME_ID,
+                         tuple(sorted(unavailable.items())))
 
 
 def _native_features(
     provider: str | None, *, skipped: list[tuple[str, str]] | None = None,
+    unavailable: dict[str, str] | None = None,
 ) -> tuple[str | None, tuple[str, ...]]:
     """Single source for API predicates/order and optional startup diagnostics."""
     def skip(feature: str, reason: str) -> None:
@@ -190,10 +196,11 @@ def _native_features(
         from .native_device_tools import (
             CAPABILITY as device_tools_capability,
             LOCATION_CAPABILITY as device_location_capability,
+            APPEARANCE_CAPABILITY as device_appearance_capability,
             available as device_tools_available,
         )
         if profile is not None and device_tools_available(profile):
-            features.extend((device_tools_capability, device_location_capability))
+            features.extend((device_tools_capability, device_location_capability, device_appearance_capability))
         else:
             reason = ("no unique lifecycle-owned middleware registration matches the "
                       "verified serving profile (missing profile/registration, "
@@ -201,14 +208,21 @@ def _native_features(
                       "Restart `hermes serve` and check the middleware registration warnings.")
             skip(device_tools_capability, reason)
             skip(device_location_capability, reason)
+            skip(device_appearance_capability, reason)
     except ImportError:
         skip("native-device-tools-v1", "native device-tool support is unimportable.")
         skip("native-device-location-v1", "native device-tool support is unimportable.")
-    from .room_activity import CAPABILITY, activity_hub
+        skip("native-device-appearance-v1", "native device-tool support is unimportable.")
+    from .room_activity import CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, activity_hub
     if activity_hub().available:
-        features.append(CAPABILITY)
+        features.extend((CAPABILITY, TYPING_CAPABILITY))
     else:
         skip(CAPABILITY, "the room activity hub is unavailable after registration.")
+        skip(TYPING_CAPABILITY, "the room activity hub is unavailable after registration.")
+    if activity_hub().peer_typing_available:
+        features.append(PEER_TYPING_CAPABILITY)
+    else:
+        skip(PEER_TYPING_CAPABILITY, "Hermes has no agent stream hook here.")
     from .wiki_contract import available_wiki_operations
     if provider is not None and "native-card-templates-v1" in features and available_wiki_operations():
         features.extend(("native-wiki-v1", "native-wiki-disconnect-v1"))
@@ -230,17 +244,21 @@ def _native_features(
         from .workspace_artifacts import CAPABILITY as workspace_files_capability
         from .workspace_artifacts import RECENT_CAPABILITY as workspace_recent_capability
         from .workspace_artifacts import HERMES_HOME_CAPABILITY as workspace_home_capability
+        from .workspace_artifacts import AGENTS_CAPABILITY as workspace_agents_capability
         from .workspace_artifacts import available as workspace_files_available
         if workspace_files_available():
-            features.extend((workspace_files_capability, workspace_recent_capability, workspace_home_capability))
+            features.extend((workspace_files_capability, workspace_recent_capability, workspace_home_capability,
+                             workspace_agents_capability))
         else:
             skip(workspace_files_capability, "workspace file availability checks failed.")
             skip(workspace_recent_capability, "workspace file availability checks failed.")
             skip(workspace_home_capability, "workspace file availability checks failed.")
+            skip(workspace_agents_capability, "workspace file availability checks failed.")
     except ImportError:
         skip("native-workspace-files-v1", "workspace file support is unimportable.")
         skip("native-workspace-recent-v1", "workspace file support is unimportable.")
         skip("native-workspace-hermes-home-v1", "workspace file support is unimportable.")
+        skip("native-workspace-files-agents-v1", "workspace file support is unimportable.")
     try:
         from .agent_board import CAPABILITY as board_capability
         from .agent_board import FEEDBACK_CAPABILITY as board_feedback_capability
@@ -303,22 +321,82 @@ def _native_features(
     else:
         skip(sign_in_capability, "sign-ins need a POSIX terminal and public profile helpers.")
     try:
-        from .workflow_api import CAPABILITY as workflows_capability, probe as workflows_probe
+        from .workflow_api import (CAPABILITY as workflows_capability, EDIT_CAPABILITY as workflows_edit_capability,
+                                   TRIGGER_CAPABILITY as workflows_trigger_capability,
+                                   PARALLEL_CAPABILITY as workflows_parallel_capability,
+                                   DELIVERY_CAPABILITY as workflows_delivery_capability,
+                                   OUTCOMES_CAPABILITY as workflows_outcomes_capability,
+                                   CODE_CAPABILITY as workflows_code_capability,
+                                   probe as workflows_probe, triggers_available, code_available)
         reason = workflows_probe()
         if reason is None:
-            features.append(workflows_capability)
+            features.extend((workflows_capability, workflows_edit_capability, workflows_parallel_capability,
+                             workflows_delivery_capability, workflows_outcomes_capability))
+            if triggers_available():
+                features.append(workflows_trigger_capability)
+            else:
+                skip(workflows_trigger_capability, "this Hermes has no cron jobs.")
+            if code_available():
+                features.append(workflows_code_capability)
+            else:
+                skip(workflows_code_capability, "git isn't installed on this computer.")
         else:
-            skip(workflows_capability, {
+            why = {
                 "not_posix": "workflows need a POSIX host.",
-                "service_manager_missing": "workflows need launchctl (macOS) or systemd-run (Linux).",
-                "hermes_update_needed": "this Hermes lacks the turn report or the chat runner flags.",
+                "chat_runner_missing": "this Hermes has no `chat -q` runner.",
                 "profile_helpers_missing": "public profile helpers are unimportable.",
-            }.get(reason, "the workflow store can't be opened."))
+            }.get(reason, "the workflow store can't be opened.")
+            skip(workflows_capability, why)
+            skip(workflows_edit_capability, why)
+            skip(workflows_parallel_capability, why)
+            skip(workflows_delivery_capability, why)
+            skip(workflows_outcomes_capability, why)
+            skip(workflows_trigger_capability, why)
+            skip(workflows_code_capability, why)
+            if unavailable is not None:
+                # A fixed code, so the app can say what to do (update Hermes, for example).
+                unavailable[workflows_capability] = reason
     except ImportError:
         skip("native-workflows-v1", "workflow support is unimportable.")
+        skip("native-workflows-edit-v1", "workflow support is unimportable.")
+        skip("native-workflows-parallel-v1", "workflow support is unimportable.")
+        skip("native-workflows-delivery-v1", "workflow support is unimportable.")
+        skip("native-workflows-outcomes-v1", "workflow support is unimportable.")
+        skip("native-workflows-trigger-v1", "workflow support is unimportable.")
+        skip("native-workflows-code-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
     if live_alerts_available():
         features.append(live_alerts_capability)
     else:
         skip(live_alerts_capability, "the notification journal needs a POSIX host and Hermes' home helpers.")
+    from .quiet_hours import CAPABILITY as quiet_capability, available as quiet_available
+    if quiet_available():
+        features.append(quiet_capability)
+    else:
+        skip(quiet_capability, "notifications need a POSIX host that can read time zones.")
+    from .composio import CAPABILITY as composio_capability, available as composio_available
+    if composio_available():
+        features.append(composio_capability)
+    else:
+        skip(composio_capability, "Hermes' MCP config helpers are unimportable.")
+    from .agent_talk import CAPABILITY as agent_talk_capability, available as agent_talk_available
+    if agent_talk_available():
+        features.append(agent_talk_capability)
+    else:
+        skip(agent_talk_capability, "public profile helpers are unimportable.")
+    from .chat_activity import CAPABILITY as chat_activity_capability, available as chat_activity_available
+    if chat_activity_available():
+        features.append(chat_activity_capability)
+    else:
+        skip(chat_activity_capability, "Hermes' chat leases are unreadable here.")
+    from .team import CAPABILITY as team_capability, available as team_available
+    if team_available():
+        features.append(team_capability)
+    else:
+        skip(team_capability, "Hermes' profile and config helpers are unimportable.")
+    from .my_templates import CAPABILITY as my_templates_capability, available as my_templates_available
+    if my_templates_available():
+        features.append(my_templates_capability)
+    else:
+        skip(my_templates_capability, "saved templates need a POSIX host and Hermes' home helpers.")
     return profile, tuple(features)

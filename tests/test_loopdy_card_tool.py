@@ -53,7 +53,7 @@ class LoopdyCardToolTests(unittest.TestCase):
 
         self.assertEqual(1, context.names.count("bighelp_render_card"))
         self.assertEqual(
-            [*LEGACY_RENDERERS, "bighelp_render_checklist", "bighelp_render_selection", "bighelp_render_automation", "bighelp_render_card", "bighelp_await_form_response", "bighelp_marketplace_prepare_upload", "bighelp_react_to_message", "bighelp_request_secure_input"],
+            [*LEGACY_RENDERERS, "bighelp_render_checklist", "bighelp_render_selection", "bighelp_render_automation", "bighelp_render_card", "bighelp_await_form_response", "bighelp_react_to_message", "bighelp_request_secure_input"],
             context.names,
         )
 

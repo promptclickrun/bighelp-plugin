@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import os
+import shutil
 import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Annotated, Any, Callable, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -17,12 +19,27 @@ from starlette.concurrency import run_in_threadpool
 
 from .native_api import _NativeRoute, _body, _precondition, _response
 from .native_context import NativeAPIError, PROFILE_ID, native_context
-from .workflow_runner import REPORT_ENV
+from . import workflow_factory as factory
+from . import workflow_runner as runner
 from .workflow_store import HostFacts, Mutation, WorkflowError, WorkflowStore, root_for_home
 
 
 logger = logging.getLogger(__name__)
 CAPABILITY = "native-workflows-v1"
+# Graph edits, layout, your templates, pin and unarchive (docs/WORKFLOWS.md, "Version 2").
+EDIT_CAPABILITY = "native-workflows-edit-v1"
+# Manual or scheduled triggers (workflow_trigger.py); needs Hermes' cron jobs.
+TRIGGER_CAPABILITY = "native-workflows-trigger-v1"
+# Parallel blocks (several agent stages at once) and decisions that read several verdicts.
+PARALLEL_CAPABILITY = "native-workflows-parallel-v1"
+# Delivery stages (`hermes send` to a place Hermes can message) and file and picture outputs.
+DELIVERY_CAPABILITY = "native-workflows-delivery-v1"
+# A decision's way can end the run as succeeded, cancelled or failed, with a note.
+OUTCOMES_CAPABILITY = "native-workflows-outcomes-v1"
+# Dev Factory (docs/DEV_FACTORY.md): schemaVersion 3 coding recipes, one run per git project. Needs git.
+CODE_CAPABILITY = "native-workflows-code-v1"
+# Why workflows can't run here: fixed codes for /native/context `unavailable` and status `runner.reason`.
+REASONS = ("not_posix", "profile_helpers_missing", "chat_runner_missing", "store_unavailable")
 router = APIRouter(prefix="/native/workflows", route_class=_NativeRoute)
 _PROBE_SECONDS = 30.0
 _probe_cache: dict[str, tuple[float, str | None]] = {}
@@ -30,6 +47,7 @@ _WORKFLOW = r"^wf_[0-9a-f]{16}$"
 _RUN = r"^run_[0-9a-f]{16}$"
 _KEY = r"^[a-z][a-z0-9_]{0,31}$"
 _SHA = r"^[0-9a-f]{64}$"
+_PROJECT = r"^[a-z0-9][a-z0-9_-]{0,39}$"
 _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 
@@ -37,41 +55,42 @@ _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 
 def workflows_root() -> Path:
     from hermes_constants import get_default_hermes_root, get_process_hermes_home
-    return root_for_home(Path(get_default_hermes_root(home=get_process_hermes_home())))
+    # Stable Hermes (0.21.5 and earlier) has no `home` argument; it reads HERMES_HOME,
+    # which is the process home there too.
+    if "home" in inspect.signature(get_default_hermes_root).parameters:
+        return root_for_home(Path(get_default_hermes_root(home=get_process_hermes_home())))
+    return root_for_home(Path(get_default_hermes_root()))
 
 
 @functools.lru_cache(maxsize=1)
-def _chat_flags_present() -> bool:
-    """The worker command needs these Hermes chat flags (Hermes 0.21.4 and later)."""
-    try:
-        from hermes_cli._parser import build_top_level_parser
-        parser, _subparsers, chat = build_top_level_parser()
-    except Exception:
-        return False
-    top = {option for action in parser._actions for option in action.option_strings}
-    flags = {option for action in chat._actions for option in action.option_strings}
-    # `-p` is read before argparse (Hermes' PRE_ARGPARSE_INHERITED_FLAGS), so it isn't in either parser.
-    return "--cli" in top | flags and {"--query-file", "--format", "--source", "--toolsets"} <= flags
+def hermes_features() -> frozenset[str]:
+    """The chat flags and turn report this Hermes has, read once per process."""
+    return runner.detect_hermes_features()
+
+
+def runner_mode() -> str:
+    """`stream` (Hermes 0.21.4 and later) or `text` (a plain `chat -q` turn, for older Hermes)."""
+    return runner.runner_mode(hermes_features())
+
+
+_store_errors_logged: set[str] = set()
 
 
 def probe() -> str | None:
-    """None when workflows can run on this computer, else a fixed reason code."""
-    from .workflow_coordinator import service_manager
+    """None when workflows can run on this computer, else one of REASONS."""
+    # Before the coordinator: it imports fcntl, which native Windows doesn't have.
     if os.name != "posix":
         return "not_posix"
+    from .workflow_coordinator import service_manager
     if service_manager() is None:
-        return "service_manager_missing"
-    try:
-        from hermes_cli.quiet_single_query import TURN_REPORT_FILE_ENV
-    except ImportError:
-        return "hermes_update_needed"
-    if TURN_REPORT_FILE_ENV != REPORT_ENV or not _chat_flags_present():
-        return "hermes_update_needed"
+        return "not_posix"
     try:
         from hermes_cli.profiles import profile_exists  # noqa: F401
         from hermes_constants import get_default_hermes_root, get_process_hermes_home  # noqa: F401
     except ImportError:
         return "profile_helpers_missing"
+    if not hermes_features() & {"query", "query_file"}:
+        return "chat_runner_missing"
     try:
         root = workflows_root()
         cached = _probe_cache.get(str(root))
@@ -79,13 +98,23 @@ def probe() -> str | None:
             return cached[1]
         WorkflowStore(root).status()
         _probe_cache[str(root)] = (time.monotonic(), None)
-    except Exception:
+    except Exception as error:
+        # The app only gets the code; the host's log says what failed, once per kind of failure.
+        name = type(error).__name__
+        if name not in _store_errors_logged:
+            _store_errors_logged.add(name)
+            logger.warning("bighelp workflows unavailable: the store can't be opened (%s)", name)
         return "store_unavailable"
     return None
 
 
 def available() -> bool:
     return probe() is None
+
+
+def code_available() -> bool:
+    """Coding workflows need git on this computer (the GitHub CLI only for pull requests, checked when used)."""
+    return shutil.which("git") is not None
 
 
 def host_name() -> str:
@@ -101,7 +130,8 @@ def _host_facts() -> HostFacts:
         known = validate_toolset
     except Exception:
         known = None
-    return HostFacts(profile_exists=profile_exists, toolset_known=known)
+    return HostFacts(profile_exists=profile_exists, toolset_known=known, tool_scope="toolsets" in hermes_features(),
+                     repository=factory.is_repository_root)
 
 
 def ensure_on_start() -> None:
@@ -157,6 +187,8 @@ class _Start(_WorkflowBody):
     inputs: dict[str, Any]
     clientRunToken: str = Field(pattern=_UUID)
     sample: StrictBool = False
+    # Dev Factory: some of the recipe's projects, by key (all when left out).
+    projects: list[Annotated[str, Field(pattern=_PROJECT)]] | None = Field(default=None, max_length=10)
 
 
 class _Runs(_Strict):
@@ -193,9 +225,37 @@ class _Read(_RunBody):
     length: StrictInt = Field(ge=1, le=98_304)
 
 
+class _Templates(_Strict):
+    # Dev Factory templates are listed only for an app that asks (older apps can't open them).
+    includeCode: StrictBool = False
+
+
 class _Use(_Strict):
     templateId: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     name: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class _TemplateBody(_Strict):
+    templateId: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+class _SaveTemplate(_WorkflowBody):
+    name: str = Field(min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class _Pin(_WorkflowBody):
+    pinned: StrictBool
+
+
+class _TriggerValue(_Strict):
+    kind: Literal["manual", "schedule"]
+    schedule: str | None = Field(default=None, max_length=200)
+    inputs: dict[str, Any] | None = None
+
+
+class _Trigger(_WorkflowBody):
+    trigger: _TriggerValue
 
 
 # MARK: Operations
@@ -205,9 +265,10 @@ def _status(store: WorkflowStore, body: _Empty, mutation: Mutation) -> dict:
     ensure_coordinator(store.root)
     value = store.status()
     reason = probe()
-    value.update({"survivesAppClose": True,
-                  "runner": {"available": True} if reason is None else {"available": False, "reason": reason},
-                  "hostName": host_name()})
+    runner_value: dict[str, Any] = {"available": True} if reason is None else {"available": False, "reason": reason}
+    if reason is None:
+        runner_value["mode"] = runner_mode()
+    value.update({"survivesAppClose": True, "runner": runner_value, "hostName": host_name()})
     return value
 
 
@@ -240,14 +301,32 @@ def _bind(store, body: _Bind, mutation):
 
 
 def _archive(store, body: _WorkflowBody, mutation):
-    return store.archive(body.workflowId, mutation)
+    result = store.archive(body.workflowId, mutation)
+    # An archived workflow doesn't run on its schedule any more.
+    if store.trigger(body.workflowId)["kind"] == "schedule":
+        from .workflow_trigger import set_trigger
+        set_trigger(store, body.workflowId, {"kind": "manual"}, None)
+    return result
+
+
+def _set_trigger(store, body: _Trigger, mutation):
+    from .workflow_trigger import set_trigger
+    return set_trigger(store, body.workflowId, body.trigger.model_dump(), _host_facts())
+
+
+def triggers_available() -> bool:
+    try:
+        from cron.jobs import create_job, parse_schedule, remove_job  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _start(store, body: _Start, mutation):
     if probe() is not None:
         raise WorkflowError(503, "runner_unavailable", "This computer can't run workflow stages right now.")
     return store.start_run(body.workflowId, body.revision, body.inputs, body.clientRunToken, body.sample,
-                           _host_facts(), mutation)
+                           _host_facts(), mutation, projects=body.projects)
 
 
 def _runs(store, body: _Runs, mutation):
@@ -274,13 +353,28 @@ def _read(store, body: _Read, mutation):
     return store.read_artifact(body.runId, body.sha256, body.offset, body.length)
 
 
-def _templates(store, body: _Empty, mutation):
-    from .workflow_model import template_summaries
-    return {"templates": template_summaries()}
+def _unarchive(store, body: _WorkflowBody, mutation):
+    return store.unarchive(body.workflowId, mutation)
+
+
+def _pin(store, body: _Pin, mutation):
+    return store.pin(body.workflowId, body.pinned, mutation)
+
+
+def _templates(store, body: _Templates, mutation):
+    return store.list_templates(include_code=body.includeCode)
 
 
 def _use(store, body: _Use, mutation):
     return store.use_template(body.templateId, body.name, _host_facts(), mutation)
+
+
+def _save_template(store, body: _SaveTemplate, mutation):
+    return store.save_template(body.workflowId, body.name, body.description, mutation)
+
+
+def _delete_template(store, body: _TemplateBody, mutation):
+    return store.delete_template(body.templateId, mutation)
 
 
 # path: (body, operation, starts work)
@@ -293,6 +387,9 @@ _ROUTES: dict[str, tuple[type[BaseModel], Callable[..., dict], bool]] = {
     "publish": (_Publish, _publish, False),
     "bind": (_Bind, _bind, False),
     "archive": (_WorkflowBody, _archive, False),
+    "unarchive": (_WorkflowBody, _unarchive, False),
+    "pin": (_Pin, _pin, False),
+    "trigger/set": (_Trigger, _set_trigger, False),
     "runs/start": (_Start, _start, True),
     "runs/list": (_Runs, _runs, False),
     "runs/get": (_RunBody, _run, False),
@@ -300,8 +397,10 @@ _ROUTES: dict[str, tuple[type[BaseModel], Callable[..., dict], bool]] = {
     "runs/control": (_Control, _control, True),
     "runs/signoff": (_Signoff, _signoff, True),
     "artifacts/read": (_Read, _read, False),
-    "templates/list": (_Empty, _templates, False),
+    "templates/list": (_Templates, _templates, False),
     "templates/use": (_Use, _use, False),
+    "templates/save": (_SaveTemplate, _save_template, False),
+    "templates/delete": (_TemplateBody, _delete_template, False),
 }
 
 

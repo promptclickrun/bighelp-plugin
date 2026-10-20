@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 from loopdy_plugin import native_context, room_activity, room_activity_api
 from loopdy_plugin.native_context import NativeAPIError
-from loopdy_plugin.room_activity import RoomActivityHub, RoomScope, register_room_activity
+from loopdy_plugin.room_activity import PeerScope, RoomActivityHub, RoomScope, peer_session_id, register_room_activity
+from loopdy_plugin.room_presence import RoomPresence
 import test_native_api as native_fixtures
 from test_native_api import ROOT, PREFIX
 from hermes_cli.plugins import VALID_HOOKS
@@ -43,6 +44,13 @@ class RoomActivityTests(unittest.TestCase):
         self.client = self.fixture.client
         self.client.app.include_router(room_activity_api.router, prefix="/api/plugins/loopdy/native")
         self.hub = room_activity.activity_hub()
+        self.now = [100.0]
+        presence_folder = tempfile.TemporaryDirectory()
+        self.addCleanup(presence_folder.cleanup)
+        self.presence_path = Path(presence_folder.name) / "room-presence.sqlite3"
+        presence = RoomPresence(lambda: self.presence_path, monotonic=lambda: self.now[0])
+        patch.object(self.hub, "_presence", presence).start()
+        self.addCleanup(patch.stopall)
         self.callbacks = {}
         self.stop = register_room_activity(SimpleNamespace(register_hook=lambda name, callback: self.callbacks.update({name: callback})))
         self.addCleanup(self.stop)
@@ -132,6 +140,73 @@ class RoomActivityTests(unittest.TestCase):
         self.assertTrue(result["resetRequired"])
         self.assertEqual(result["events"], [])
         self.assertEqual(result["projectionDrops"], 1)
+
+    def test_feeds_that_ask_see_which_member_is_writing_without_the_text(self):
+        result = self.call("open", {"roomId": SCOPE.room_id, "include": ["member.responding"]})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.stream = result.json()["streamId"]
+        delta = {"text": "Private draft words"}
+        self.emit(kind="message.delta", seq=1, payload=delta)
+        page = self.poll()
+        self.assertEqual(page.status_code, 200, page.text)
+        first = page.json()["events"]
+        self.assertEqual([(row["memberId"], row["taskId"]) for row in first], [("alice", "dtask:1")])
+        self.assertEqual(set(first[0]), {"observationSequence", "observedAt", "roomId", "memberId", "threadId",
+                                         "turnId", "taskId", "executionGeneration", "sourceSequence", "kind"})
+        self.assertEqual(first[0]["kind"], "member.responding")
+        self.emit(kind="reasoning.delta", seq=2, payload=delta)  # within the interval: coalesced
+        self.emit(kind="message.delta", seq=3, member_id="bob", task_id="dtask:2", payload=delta)
+        self.assertEqual([row["memberId"] for row in self.poll(1).json()["events"]], ["bob"])
+        self.now[0] += room_activity.RESPONDING_INTERVAL_SECONDS
+        self.emit(kind="message.interim", seq=4, payload=delta)
+        page = self.poll(2)
+        self.assertEqual([row["memberId"] for row in page.json()["events"]], ["alice"])
+        self.assertNotIn("Private draft words", page.text)
+
+    def test_writing_noted_by_another_hermes_process_reaches_the_feed(self):
+        # The turn runs in the gateway; the app's feed lives in the dashboard.
+        result = self.call("open", {"roomId": SCOPE.room_id, "include": ["member.responding"]})
+        self.stream = result.json()["streamId"]
+        other_process = RoomPresence(lambda: self.presence_path)
+        other_process.note("room\0room-fixture\0bob\0dtask:9\01", room_id=SCOPE.room_id, member_id="bob",
+                           thread_id="thread-1", turn_id="turn-9", task_id="dtask:9", execution_generation=1)
+        events = self.poll().json()["events"]
+        self.assertEqual([(row["memberId"], row["taskId"]) for row in events], [("bob", "dtask:9")])
+
+    def test_agents_here_in_a_room_homed_elsewhere_report_writing_from_their_own_stream(self):
+        scope = PeerScope("room-elsewhere", "install:home", (("rio-desk", "research"),))
+        with patch.object(room_activity_api, "read_peer_scope", return_value=scope):
+            result = self.call("open", {"roomId": "room-elsewhere", "include": ["member.responding"],
+                                        "peer": {"homeInstallId": "install:home",
+                                                 "members": [{"memberId": "rio-desk", "profile": "research"}]}})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.stream = result.json()["streamId"]
+        session = peer_session_id("install:home", "room-elsewhere", "rio-desk", "research")
+        stream = self.callbacks[room_activity.STREAM_HOOK]
+        stream(session_id=session, turn_id="turn-1", delta="Private draft", kind="text")
+        stream(session_id="room_" + "0" * 32, turn_id="turn-1", delta="x", kind="text")  # another room
+        stream(session_id="tui-session", turn_id="turn-1", delta="x", kind="text")  # not a room turn
+        page = self.call("poll", {"roomId": "room-elsewhere", "streamId": self.stream, "after": 0, "limit": 8})
+        self.assertEqual(page.status_code, 200, page.text)
+        events = page.json()["events"]
+        self.assertEqual([(row["memberId"], row["taskId"], row["kind"]) for row in events],
+                         [("rio-desk", session, "member.responding")])
+        self.assertNotIn("Private draft", page.text)
+        # Without asking for writing, a room homed elsewhere shows nothing.
+        with patch.object(room_activity_api, "read_peer_scope", return_value=scope):
+            refused = self.call("open", {"roomId": "room-elsewhere", "peer": {
+                "homeInstallId": "install:home", "members": [{"memberId": "rio-desk", "profile": "research"}]}})
+        self.assertEqual(refused.status_code, 503)
+        self.assertIn(room_activity.PEER_TYPING_CAPABILITY, self.fixture.context().json()["features"])
+
+    def test_feeds_that_dont_ask_never_see_member_writing(self):
+        self.open()
+        self.emit(kind="message.delta", payload={"text": "words"})
+        self.emit()
+        events = self.poll().json()["events"]
+        self.assertEqual([row["kind"] for row in events], ["tool.started"])
+        self.assertIn(room_activity.TYPING_CAPABILITY, self.fixture.context().json()["features"])
+        self.assertEqual(self.call("open", {"roomId": SCOPE.room_id, "include": ["message.delta"]}).status_code, 422)
 
     def test_count_and_byte_overflow_are_bounded_and_require_reset_only_for_lost_cursor(self):
         self.open()

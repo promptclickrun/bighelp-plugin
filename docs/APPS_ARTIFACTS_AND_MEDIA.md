@@ -1,6 +1,6 @@
-# Apps tab: Artifacts and Media
+# Files tab: Artifacts and Media
 
-The bighelp app's Apps tab shows what an agent made. Both routes follow the
+The bighelp app's Files tab (it was called Apps) shows what an agent made. Both routes follow the
 native context/ETag/request-ID contract and never return host paths the phone
 could not already see.
 
@@ -23,8 +23,13 @@ answers in about a second on a large Mac workspace.
 
 ## Which folder
 
-`workspace-files/scope`, `list`, `read` and `recent` all start from the serving
-profile's working folder, found the way Hermes finds it (`workspace_root.py`):
+`workspace-files/scope`, `list`, `read` and `recent` all start from an agent's
+working folder, found the way Hermes finds it (`workspace_root.py`). The agent is
+the serving profile, or the profile that the request names in `profile` (for
+example `{"path": null, "profile": "research"}`). `/native/context` lists
+`native-workspace-files-agents-v1` when the plugin accepts `profile`. An unknown
+agent gets `404 agent_not_found`, and a malformed ID gets `422 invalid_request`.
+Each agent gets the same rules and refusals, from its own profile's config:
 
 - `terminal.cwd` when it names a folder. `~` is the user's home, and a relative
   path is relative to the folder Hermes was started in, as in Hermes.

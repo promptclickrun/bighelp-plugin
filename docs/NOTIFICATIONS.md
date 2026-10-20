@@ -105,6 +105,28 @@ canonical "Bot Chat" session. Replies, failures and helper results there alert o
 Peer chats in bighelp (`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`);
 it starts off. A question or approval in a peer chat still alerts, since it needs the person.
 
+The same switch covers an agent's message to another agent in any chat, for example the answer to work
+one agent handed to another with `message_agent`. Hermes saves it in the receiving agent's chat, signed
+`Message from 🤖 Nova (@nova):`. When the receiving agent's next turn starts, the plugin reads that turn's
+message and the messages saved since the agent last spoke. A message signed by another agent on this
+computer (`@hermes` is the default agent) alerts as a `session.completed` in the receiving agent's chat,
+with the sending agent's name and picture. Each message alerts once (its event key is the SHA-256 of the
+text). A handle that isn't an agent on this computer, a relayed `@name@peer`, or the agent's own handle
+never alerts.
+
+### Workflows
+
+A workflow stage is a `hermes chat --source workflow` turn. Its replies, failures and Live Activity updates
+never alert; a command it asks to run still asks for approval. The run alerts instead, read from the
+workflow store's run journal by the notification worker:
+
+- needs you (a sign-off waits, or the run needs attention): `clarification.required`
+- succeeded and cancelled: `session.completed`; failed: `session.failed`
+
+The alert's title is the workflow's name, and its chat is `workflow.run.<runId>` (the app opens the run).
+Each kind has a switch per device (`PUT /enrollments/<grantId>/preferences` with `"workflows": {"needsYou",
+"succeeded", "failed", "cancelled"}`); all start on. Capabilities list `preferences.workflows`.
+
 ## Instant alerts while bighelp is open
 
 A push can take 10 seconds or more to arrive. While bighelp is open on a device, the device gets its alerts
@@ -157,6 +179,44 @@ on the host, and `live_alerts_unavailable` (503).
 
 A device stays live for the wait it asked for plus 10 seconds, so that the next request can follow. After that,
 or after `alerts/stop`, the host sends its alerts as pushes immediately.
+
+### Quiet Hours
+
+Each phone can set a daily window when this host sends it no alerts, such as 22:00 to 07:00. The phone keeps
+the setting and sends it to every host that notifies it, with the phone's own IANA time zone. The window
+belongs to that phone's grant, so one person's iPhone and iPad can have different windows.
+
+- **When.** Just before the host sends an alert for a grant, it reads the time on that phone's clock in
+  that time zone, so the window follows daylight saving time. The start is inside the window and the end is
+  not. A window can cross midnight. Equal start and end times make an empty window.
+- **What it skips.** Every alert in the window: replies, failures, scheduled tasks, helper results, questions
+  and approvals. The alert never reaches the notification service or BuzzKit, and a device with bighelp open
+  does not get it as an instant alert. A retry that falls in the window is skipped too.
+- **Not sent later.** Quiet means quiet: a skipped alert is marked `quiet` and is never sent, also after the
+  window ends. The reply is in the chat, and a question or approval waits there for the person.
+- **Not affected.** Live Activity updates for a turn the person started, and the silent sign-in wake below.
+- **Older apps** never send a window, so their alerts are unchanged.
+
+The phone sets the window through the native API, when the host's `/native/context` lists
+`native-notification-quiet-hours-v1`. The request needs the usual `If-Match` context ETag and a lowercase
+`X-Loopdy-Request-ID`:
+
+```http
+POST /api/plugins/loopdy/native/notifications/quiet-hours
+{"grantId": "<grant UUID>", "enabled": true, "startMinute": 1320, "endMinute": 420, "timeZone": "Europe/Berlin"}
+```
+
+`startMinute` and `endMinute` are minutes after local midnight (0 to 1439). The reply echoes the stored window
+and tells whether it holds now:
+
+```json
+{"version": 1, "grantId": "<grant UUID>", "quietNow": true,
+ "quietHours": {"enabled": true, "startMinute": 1320, "endMinute": 420, "timeZone": "Europe/Berlin"}}
+```
+
+Errors: `422 invalid_request` for a malformed body, `422 quiet_hours_time_zone_invalid` for a zone the host
+can't read, `404 notification_enrollment_inactive` for a grant that isn't active here, and
+`503 quiet_hours_unavailable` when the capability isn't listed. Removing the grant deletes its window.
 
 ## End-to-end encryption
 
