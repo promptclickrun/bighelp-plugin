@@ -27,6 +27,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import tool_session
 from .naming import TOOLSET
 
 logger = logging.getLogger("hermes.plugins.bighelp")
@@ -286,12 +287,8 @@ TOOL_DESCRIPTION = (
 TOOL_PARAMETERS = {"type": "object", "properties": {}, "additionalProperties": False}
 
 
-def handle_tool(_args: Any = None) -> str:
-    try:
-        from gateway.session_context import get_session_env
-        session_id = get_session_env("HERMES_SESSION_ID", "")
-    except ImportError:
-        session_id = ""
+def handle_tool(_args: Any = None, context: dict[str, Any] | None = None) -> str:
+    session_id = tool_session.session_id(context, "HERMES_SESSION_ID")
     try:
         value = current_store().people(session_id if SESSION_ID.fullmatch(session_id or "") else None)
     except Exception as error:
@@ -306,6 +303,6 @@ def register(ctx: Any) -> None:
     ctx.register_tool(
         name=TOOL_NAME, toolset=TOOLSET,
         schema={"name": TOOL_NAME, "description": TOOL_DESCRIPTION, "parameters": TOOL_PARAMETERS},
-        handler=lambda args, **_: handle_tool(args), emoji="👥",
+        handler=lambda args, **context: handle_tool(args, context), emoji="👥",
     )
     ctx.register_hook("pre_llm_call", _pre_llm_call)
