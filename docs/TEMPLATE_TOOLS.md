@@ -4,7 +4,8 @@ Agents on the computer can use bighelp's Template Catalog. They can find a templ
 person. Only with the person's permission, they can make a new agent from it.
 
 The tools are in their own toolset, `bighelp_templates`. You can turn the toolset off in Hermes like any other
-toolset.
+toolset. The toolset also has the tools that submit templates to the catalog: see
+[Template Catalog submissions](TEMPLATE_CATALOG.md).
 
 | Tool | What it does | Changes the computer? |
 | --- | --- | --- |
