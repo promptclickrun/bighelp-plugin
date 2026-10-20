@@ -1,0 +1,35 @@
+# What a GitHub release of the plugin holds: only the files a Hermes host needs.
+#
+# scripts/publish_release.py copies these from the commit that set the version into a
+# release commit on the `releases` branch, and tags that commit. Hosts install the
+# tagged commit, so tests, docs and other work files never get to a host.
+#
+# Each line names one top-level file, or one top-level folder with a "/" at the end.
+# A line that starts with "!" names something that stays on main only.
+# Put each top-level file and folder on one of the two lists. If a release finds one
+# that is on no list, the release stops. Thus nothing new ships or stays behind by accident.
+
+# Shipped
+plugin.yaml
+__init__.py
+loopdy_plugin/
+dashboard/
+skills/
+spec/
+after-install.md
+# Keeps __pycache__ out of `git status` in the installed checkout. Without it, the
+# updater sees local changes and stops all updates of that host.
+.gitignore
+README.md
+LICENSE
+SECURITY.md
+model-names.json
+
+# Not shipped
+!tests/
+!fixtures/
+!docs/
+!scripts/
+!.github/
+!AGENTS.md
+!release-files.txt

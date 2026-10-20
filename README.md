@@ -32,13 +32,31 @@ dashboard and uses its sign-in. It opens no extra ports and needs no bighelp acc
 
 The bighelp app can install the plugin when you add a host. The app installs the latest release.
 
-To install from a terminal, run:
+A release has only the files that the plugin uses on a host. `main` also has the tests, the docs and the
+development tools. Each release is one commit on the `releases` branch. The commit message names the commit on
+`main` that the release comes from.
+
+To install a release from a terminal, do these steps:
+
+1. Find the commit of the release tag, for example `v3.22.0`:
+
+   ```bash
+   git ls-remote https://github.com/promptclickrun/bighelp-plugin refs/tags/v3.22.0
+   ```
+
+2. Install that commit. Hermes accepts only a full commit, not a tag name:
+
+   ```bash
+   hermes plugins install https://github.com/promptclickrun/bighelp-plugin --ref <commit> --enable
+   ```
+
+To install the newest commit on `main`, run:
 
 ```bash
 hermes plugins install promptclickrun/bighelp-plugin --enable
 ```
 
-This command installs the newest commit on `main`, not a release. If the app does not find the plugin, restart the
+This command installs `main` with all its files, not a release. If the app does not find the plugin, restart the
 Hermes gateway and dashboard.
 
 To install a local checkout, commit your changes first, because Hermes installs from Git. Then run:
@@ -60,6 +78,10 @@ hermes bighelp update-status     # check the last update
 `hermes bighelp update` installs only [GitHub Releases](https://github.com/promptclickrun/bighelp-plugin/releases).
 The maintainer releases merged changes together from time to time (`.github/workflows/release.yml`). Thus a merge
 alone does not get to hosts.
+
+Before a release, the maintainer can publish a test release, for example `v3.22.0-rc.1`. A test release is a GitHub
+pre-release. The app and `hermes bighelp update` do not offer it. Its release notes show the command that installs
+it on a test host. If nothing changes after the test release, the release uses the same commit.
 
 The updater does these steps:
 
@@ -240,6 +262,14 @@ hermes plugins doctor . --ci
 `fixtures/contracts/` has test vectors that the app shares, including the encrypted notification vector. When a
 pull request changes `plugin.yaml`, `loopdy_plugin/` or `tests/`, CI runs compatibility tests against Hermes 0.21.1
 and 0.21.2.
+
+`release-files.txt` lists the top-level files and folders that a release has, and the ones that stay on `main`.
+If you add a top-level file or folder, add it to one of the two lists. To make and check the release files of
+your branch without a release, run:
+
+```bash
+python scripts/publish_release.py --export /private/tmp/bighelp-release --source HEAD
+```
 
 ## License
 

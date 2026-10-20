@@ -27,6 +27,12 @@ Many features span both repos. The app's side of each route lives in the app rep
     open with a short summary in plain words for people who run hosts. Credit outside contributors.
   - After it merges, the maintainer runs the Release workflow (`gh workflow run release.yml`). It publishes the
     version from the release PR's merge; anything merged later waits for the next release.
+  - A release holds only the files in `release-files.txt`. The workflow copies them from the release PR's merge
+    into one commit on the `releases` branch, named `bighelp <version> from <main commit>`, and tags that commit.
+    Hosts install the tagged commit, so they never download tests, docs or fixtures.
+  - To try a release on your own host first, run `gh workflow run release.yml -f prerelease=true`. It publishes
+    `v<version>-rc.<n>` as a GitHub pre-release. The app and `hermes bighelp update` never offer a pre-release.
+    Its notes give the install command. When nothing changed, the release that follows tags the same commit.
   - The bighelp app offers the latest release to every host, and `hermes bighelp update` installs it. No app
     build is needed to ship a plugin update.
   - The maintainer merges.
@@ -75,6 +81,10 @@ Many features span both repos. The app's side of each route lives in the app rep
 | `spec/`, `fixtures/contracts/` | Card schemas and test vectors shared with the app |
 | `docs/` | One page per feature, with its route contract |
 | `tests/` | `unittest` suites |
+| `release-files.txt`, `scripts/publish_release.py` | What a release holds, and the Release workflow's script that builds, checks and tags it |
+
+Add each new top-level file or folder to `release-files.txt`: to the shipped list, or to the "!" list of what stays
+on main. If you don't, the Release files check fails on the pull request, and a release stops.
 
 ## Names
 
@@ -159,18 +169,24 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
   with Hermes' installer. It refuses to overwrite a modified install or move a host to an older version.
 - **New `capabilities:` in `plugin.yaml` block automatic updates** until someone approves them on the host. Avoid
   this unless it's truly needed, and call it out in the PR.
-- **Hermes scans the whole plugin on every update**, docs included. A `caution` verdict needs a person to approve it,
+- **Hermes scans every file of the release on every update.** A `caution` verdict needs a person to approve it,
   so the update stalls on unattended hosts.
   - The scan looks for things like shell pipes into interpreters, reads of secret files, instructions to edit agent
     config, and token-shaped examples.
-  - The limits are 400 files and 10 MB.
-- Before merging, scan a clean export of your branch with a separate Hermes checkout, and make sure the verdict is
-  still `safe` with no high or critical findings:
+  - Releases leave out tests, docs and fixtures, but the scan reads everything that ships: code, skills, the
+    README and `after-install.md`.
+  - The limits are 400 files, 10 MB, and 1 MB for one file. The release script stops at 300 files and 8 MB.
+- Before merging, export the release files of your branch, scan them with a separate Hermes checkout, and make sure
+  the verdict is still `safe` with no high or critical findings:
+
+  ```bash
+  python scripts/publish_release.py --export /private/tmp/bighelp-release --source HEAD
+  ```
 
   ```python
   from pathlib import Path
   from tools.plugin_guard import scan_plugin, should_allow_plugin_install
-  result = scan_plugin(Path("/path/to/clean/export"), source="https://github.com/promptclickrun/bighelp-plugin")
+  result = scan_plugin(Path("/private/tmp/bighelp-release"), source="https://github.com/promptclickrun/bighelp-plugin")
   print(result.verdict, should_allow_plugin_install(result, force=False))
   ```
 
