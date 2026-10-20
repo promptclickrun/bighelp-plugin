@@ -6,4 +6,4 @@
 
 <!-- Tests you ran, and against which Hermes version. -->
 
-Please don't change the version in `plugin.yaml` or `PLUGIN_VERSION`. Merged changes are released together, and the release bumps the version.
+Please don't change the version in `plugin.yaml` or `loopdy_plugin/version.py`. Merged changes are released together, and the release bumps the version.

@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-from loopdy_plugin.link_contracts import (
+from loopdy_plugin.device_tool_contract import (
     DEVICE_TOOL_OPERATIONS,
     device_tool_request,
     device_tool_result,
-    device_tool_status,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,27 +49,14 @@ class LocationContractTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 _request(arguments)
 
-    def test_phone_status_may_enable_location(self):
-        status = device_tool_status(
-            device_id="phone-1", host_id="host-1", authorization_epoch=7,
-            enabled=["health", "calendar", "reminders", "location"], available=True, sent_at=100,
-        )
-        self.assertEqual(status["enabled"], ["health", "calendar", "reminders", "location"])
-        with self.assertRaises(ValueError):
-            device_tool_status(
-                device_id="phone-1", host_id="host-1", authorization_epoch=7,
-                enabled=["location", "location"], available=True, sent_at=100,
-            )
-
-
 class LocationToolSchemaTests(unittest.TestCase):
-    def _register(self, bridge=None):
+    def _register(self):
         from loopdy_plugin.device_tools import register
 
         context = SimpleNamespace(tools={}, schemas={})
         context.register_tool = lambda *, name, handler, schema, **kwargs: (
             context.tools.update({name: handler}) or context.schemas.update({name: schema}))
-        register(context, bridge=bridge)
+        register(context)
         return context
 
     def test_tool_schema_has_one_current_operation(self):
@@ -86,73 +70,12 @@ class LocationToolSchemaTests(unittest.TestCase):
         self.assertIn("approximate", description)
         self.assertIn("foreground", description)
 
-    def test_handler_sends_location_current_with_official_coordinates(self):
-        from loopdy_plugin.device_tools import DeviceToolBridge
-
-        bridge = DeviceToolBridge()
-        bridge.execute = AsyncMock(return_value={"status": "completed", "payload": PAYLOAD})
-        context = self._register(bridge)
-        execution = SimpleNamespace(
-            source="loopdy_link", owner_id="phone-1", scope_id="default",
-            authorization_epoch=7, attributes={"host_id": "host-1"},
-        )
-        result = asyncio.run(context.tools["iphone_location"](
-            {"operation": "current"}, tool_execution_context=execution,
-            session_id="session-1", turn_id="turn-1", tool_call_id="call-1",
-        ))
-        self.assertEqual(json.loads(result)["payload"], PAYLOAD)
-        request = bridge.execute.await_args.kwargs
-        self.assertEqual(request["operation"], "location.current")
-        self.assertEqual(request["arguments"], {})
-        for payload in ({"operation": "list"}, {}, {"operation": "current", "precise": True}):
-            with self.subTest(payload=payload), self.assertRaises(ValueError):
-                asyncio.run(context.tools["iphone_location"](
-                    payload, tool_execution_context=execution,
-                    session_id="session-1", turn_id="turn-1", tool_call_id="call-2",
-                ))
-
     def test_manifest_and_agent_guidance_name_the_tool(self):
         from loopdy_plugin.agent_guide import CHAT_BRIEF
 
         self.assertIn("  - iphone_location\n", (ROOT / "plugin.yaml").read_text(encoding="utf-8"))
         self.assertIn("iphone_location", CHAT_BRIEF)
         self.assertIn("iphone_location", (ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8"))
-
-
-class LocationLinkBridgeTests(unittest.TestCase):
-    def test_location_is_never_kept_for_a_retry(self):
-        from loopdy_plugin.device_tools import DeviceToolBridge
-
-        bridge = None
-
-        class Client:
-            connected = True
-            peer_capabilities = {"directed-frames-v1"}
-            config = SimpleNamespace(device_id="host-1")
-
-            async def send_payload(self, request, **_kwargs):
-                bridge.accept_result(
-                    device_tool_result(request=request, status="completed", payload=PAYLOAD, sent_at=101),
-                    sender_device_id="phone-1", sender_epoch=7, target_device_id="host-1",
-                )
-
-        bridge = DeviceToolBridge(Client(), clock=lambda: 100)
-        self.assertTrue(bridge.accept_status(
-            device_tool_status(device_id="phone-1", host_id="host-1", authorization_epoch=7,
-                               enabled=["location"], available=True, sent_at=100),
-            sender_device_id="phone-1", sender_epoch=7, target_device_id="host-1",
-        ))
-        context = SimpleNamespace(
-            source="loopdy_link", owner_id="phone-1", scope_id="default",
-            authorization_epoch=7, attributes={"host_id": "host-1"},
-        )
-        result = asyncio.run(bridge.execute(
-            context=context, device_id="phone-1", host_id="host-1", authorization_epoch=7,
-            session_id="session-1", agent_id="default", turn_id="turn-1", tool_call_id="call-1",
-            operation="location.current", arguments={},
-        ))
-        self.assertEqual(result["payload"], PAYLOAD)
-        self.assertFalse(bridge._outcomes)
 
 
 class LocationNativeChannelTests(unittest.IsolatedAsyncioTestCase):

@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from .relay_crypto import (
+from .notification_crypto import (
     b64url_encode,
     canonical_json_bytes,
     key_id,

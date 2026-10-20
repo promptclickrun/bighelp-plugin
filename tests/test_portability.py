@@ -19,7 +19,7 @@ class PortabilityTests(unittest.TestCase):
         manifest = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["kind"], "platform")
-        from loopdy_plugin.link_contracts import PLUGIN_VERSION
+        from loopdy_plugin.version import PLUGIN_VERSION
         self.assertEqual(manifest["version"], PLUGIN_VERSION)
         self.assertEqual(set(manifest["platforms"]), {"linux", "macos", "windows"})
 
@@ -34,7 +34,7 @@ class PortabilityTests(unittest.TestCase):
 
         self.assertEqual(dashboard["version"], manifest["version"])
 
-    def test_link_runtime_coordinates_never_depend_on_posix_path_syntax(self) -> None:
+    def test_data_path_never_depends_on_posix_path_syntax(self) -> None:
         from loopdy_plugin import adapter
 
         windows_home = PureWindowsPath("C:/Users/fixture/.hermes")

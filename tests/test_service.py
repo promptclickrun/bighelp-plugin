@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import threading
 import time
@@ -8,16 +7,13 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest import mock
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from loopdy_plugin.events import build_event
-from loopdy_plugin.provider import DeliveryError, DeliveryReceipt, LiveActivityState, ProviderReceipt
+from loopdy_plugin.provider import DeliveryError, DeliveryReceipt, ProviderReceipt
 from loopdy_plugin.providers.apns import ApnsPushProvider
-from loopdy_plugin.relay_client import RelayConfig, RelayOutcomeUnknown, RelayPushProvider
-from loopdy_plugin.relay_crypto import b64url_encode, key_id, public_key_bytes
 from loopdy_plugin.service import BighelpService, _session_reference
 from loopdy_plugin.store import BighelpStore
 
@@ -117,53 +113,12 @@ class ServiceTests(unittest.TestCase):
             }
         )
 
-    def _relay_registration_body(
-        self,
-        *,
-        device_id: str = "relay-phone",
-        revision: int = 10,
-        issued: int = 1_700_000_000,
-        lease_expires: int = 1_702_592_000,
-        recipient_private_key: ec.EllipticCurvePrivateKey | None = None,
-        push_token: str = "ab" * 32,
-        environment: str = "production",
-        topic: str = "com.example.loopdy",
-        label: str = "iPhone",
-        groups: list[str] | None = None,
-        idempotency_key: str = "00000000-0000-5000-8000-000000000010",
-    ) -> dict[str, object]:
-        private_key = recipient_private_key or ec.derive_private_key(19, ec.SECP256R1())
-        public_key = public_key_bytes(private_key.public_key())
-        return {
-            "version": 1,
-            "device_id": device_id,
-            "revision": revision,
-            "issued": issued,
-            "lease_expires": lease_expires,
-            "provider": "relay",
-            "recipient_public_key": b64url_encode(public_key),
-            "recipient_key_id": key_id(public_key),
-            "push_token": push_token,
-            "environment": environment,
-            "topic": topic,
-            "label": label,
-            "groups": list(groups or []),
-            "idempotency_key": idempotency_key,
-        }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def test_live_activity_session_reference_is_stable(self) -> None:
+        # Direct APNs Live Activities carry this reference, never the session ID itself.
+        self.assertEqual(_session_reference("stored-session-fixture-01"),
+                         "VJ6yfCEFzMkgglVVb7GaAIxVUgz0j1F5hnZloWmJ7ik")
+        self.assertNotEqual(_session_reference("live-session-fixture-01"),
+                            _session_reference("stored-session-fixture-01"))
 
     def test_proactive_channel_message_reaches_all_eligible_devices(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,4 +1,4 @@
-"""Retired Cloudflare state is migration input, never a delivery contract."""
+"""Old hosts' relay state is removed at startup, never used to deliver."""
 import argparse
 import contextlib
 import io
@@ -38,9 +38,9 @@ class RelayRetirementTests(unittest.TestCase):
             db.execute("INSERT INTO provider_receipts VALUES('old-receipt','old-event','legacy','relay','pending',1,NULL,'')")
 
     def assert_retired(self):
-        self.assertIsNone(self.store.load_relay_config())
         self.assertNotEqual(self.store.provider_mode(), 'relay')
         with sqlite3.connect(self.path) as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM metadata WHERE key='relay_config_v1'").fetchone())
             for table in ('relay_live_activities', 'pending_relay_operations', 'pending_relay_live_activity_updates'):
                 self.assertEqual(db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
             for table in ('devices', 'event_deliveries', 'provider_receipts'):
@@ -59,10 +59,11 @@ class RelayRetirementTests(unittest.TestCase):
         self.assertNotIn('relay', service._providers)
         self.assertFalse(self.store.retire_legacy_relay())
 
-    def test_removal_also_cleans_state_reintroduced_after_startup(self):
-        service, relay = self.service()
+    def test_the_next_start_cleans_state_written_after_startup(self):
+        _service, relay = self.service()
+        # An older plugin copy, such as one in another profile, may still write relay rows.
         self.seed_legacy_rows()
-        service.remove_relay_configuration()
+        self.service()
         self.assert_retired()
         self.assertEqual(relay.mock_calls, [])
 
@@ -72,17 +73,14 @@ class RelayRetirementTests(unittest.TestCase):
         self.assertTrue(self.store.retire_legacy_relay())
         self.assert_retired()
 
-    def test_all_service_relay_entry_points_reject_without_mutation_or_send(self):
+    def test_relay_devices_are_refused_and_the_relay_entry_points_are_gone(self):
         service, relay = self.service()
         before = self.path.read_bytes()
-        calls = [lambda: service.configure_relay(None),
-                 lambda: service.adopt_link_relay_device(None, sender_device_id='legacy'),
-                 lambda: service.register_device(device_id='legacy', endpoint_id='obsolete', provider='relay')]
-        calls += [lambda operation=operation: service.relay_operation(operation, {}) for operation in
-                  ('register_device', 'acknowledge_sender_keys', 'revoke_device', 'register_live_activity', 'revoke_live_activity', 'revoke_tenant', 'delete_tenant')]
-        for call in calls:
-            with self.assertRaisesRegex(ValueError, 'retired|managed or direct'):
-                call()
+        with self.assertRaisesRegex(ValueError, 'retired|managed or direct'):
+            service.register_device(device_id='legacy', endpoint_id='obsolete', provider='relay')
+        for name in ('configure_relay', 'remove_relay_configuration', 'adopt_link_relay_device', 'relay_operation',
+                     'reconcile_relay_operations'):
+            self.assertFalse(hasattr(service, name), name)
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(relay.mock_calls, [])
         self.assert_retired()

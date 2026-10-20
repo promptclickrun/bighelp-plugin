@@ -33,7 +33,6 @@ PROCESS_FEATURES = (
     "native-team-v1",
     "native-my-templates-v1",
 )
-WIKI_FEATURES = ("native-wiki-v1", "native-wiki-disconnect-v1")
 
 
 class Session(SimpleNamespace):
@@ -71,7 +70,6 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.files = module("loopdy_plugin.workspace_artifacts", CAPABILITY=PROCESS_FEATURES[12],
                             RECENT_CAPABILITY=PROCESS_FEATURES[13], HERMES_HOME_CAPABILITY=PROCESS_FEATURES[14],
                             AGENTS_CAPABILITY=PROCESS_FEATURES[15], available=Mock(return_value=True))
-        self.wiki = module("loopdy_plugin.wiki_contract", available_wiki_operations=Mock(return_value=True))
         self.restart = module("loopdy_plugin.host_restart", CAPABILITY=PROCESS_FEATURES[16],
                               available=Mock(return_value=True), release_locks_left_by_restart=Mock())
         self.usage = module("loopdy_plugin.provider_usage", CAPABILITY=PROCESS_FEATURES[17],
@@ -99,7 +97,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[32],
                                    available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
-                   self.templates, self.files, self.wiki, self.restart, self.usage, self.sign_in, self.workflows,
+                   self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
                    self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.team,
                    self.my_templates, module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
@@ -132,7 +130,6 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.assertEqual(context.features, PROCESS_FEATURES)
         self.assertEqual(context.serving_profile_id, "research")
         self.device.available.assert_called_with("research")
-        self.wiki.available_wiki_operations.assert_not_called()
 
     def test_unavailable_capabilities_are_omitted_and_each_is_warned(self):
         self.profiles.profile_exists = None
@@ -233,23 +230,12 @@ class NativeStartupLoggingTests(unittest.TestCase):
                 self.assertEqual((error.exception.status, error.exception.code),
                                  (503, "native_context_unavailable"))
 
-    def test_wiki_is_named_as_request_dependent_and_preserves_api_order(self):
+    def test_a_signed_in_person_sees_the_same_features_and_no_wiki(self):
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
         self.assertEqual(self.logged_features(logs.records), PROCESS_FEATURES)
-        self.wiki.available_wiki_operations.assert_not_called()
-        notes = " ".join(record.getMessage() for record in logs.records
-                         if "request-dependent" in record.getMessage())
-        for feature in WIKI_FEATURES:
-            self.assertIn(feature, notes)
-        self.assertEqual(native_context.native_context(self.request(principal=True)).features,
-                         PROCESS_FEATURES[:10] + WIKI_FEATURES + PROCESS_FEATURES[10:])
-        self.wiki.available_wiki_operations.return_value = False
+        self.assertFalse(any("wiki" in record.getMessage() for record in logs.records))
         self.assertEqual(native_context.native_context(self.request(principal=True)).features, PROCESS_FEATURES)
-        self.profiles.profile_exists = None
-        self.wiki.available_wiki_operations.reset_mock()
-        native_context.native_context(self.request(principal=True))
-        self.wiki.available_wiki_operations.assert_not_called()
 
     def test_startup_is_logged_once_without_reprobing_and_api_stays_live(self):
         with self.assertLogs(LOG, level="INFO") as logs:
@@ -321,15 +307,13 @@ class NativeStartupLoggingTests(unittest.TestCase):
             "loopdy_plugin.managed_notifications": module(
                 "loopdy_plugin.managed_notifications", get_managed_notifications=lambda: managed),
             "hermes_cli.plugins": module("hermes_cli.plugins", VALID_HOOKS=set()),
-            "loopdy_plugin.direct_runtime": module("loopdy_plugin.direct_runtime", DirectSettings=Mock()),
         }))
-        for name in ("production_manager", "DeviceToolBridge", "register_tools", "register_device_tools",
+        for name in ("production_manager", "register_tools", "register_device_tools",
                      "BighelpApprovalTransport", "profile_display_name", "_home_target"):
             self.stack.enter_context(patch.object(registration, name))
-        self.stack.enter_context(patch.object(registration, "_device_tools_supported", return_value=False))
         ctx = Mock(profile_name="research", state=None)
         with patch.object(native_context.logger, "info") as info:
-            registration.register(ctx, service=SimpleNamespace(store=object()), activity_broker=Mock())
+            registration.register(ctx, service=SimpleNamespace(store=object()))
         self.room.register_room_activity.assert_called_once_with(ctx)
         self.device.register_middleware.assert_called_once_with(ctx)
         info.assert_not_called()

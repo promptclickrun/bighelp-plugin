@@ -16,7 +16,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from loopdy_plugin.managed_notifications import ManagedNotifications
-from loopdy_plugin.relay_crypto import b64url_decode
+from loopdy_plugin.notification_crypto import b64url_decode
 from loopdy_plugin.sealed_alerts import avatar_aad
 
 if __package__:

@@ -39,10 +39,10 @@ from loopdy_plugin.generative_ui import (  # noqa: E402
     GenerativeUIError,
     validate_submission_values,
 )
-from loopdy_plugin.link_contracts import PLUGIN_VERSION  # noqa: E402
+from loopdy_plugin.version import PLUGIN_VERSION  # noqa: E402
 from loopdy_plugin.provider import DeliveryError  # noqa: E402
 from loopdy_plugin.targets import validate_target  # noqa: E402
-from loopdy_plugin.workspace_control import HermesWorkspaceBackend  # noqa: E402
+from loopdy_plugin.completion_events import enrich_completion_events  # noqa: E402
 from loopdy_plugin.workspace_git import (  # noqa: E402
     WorkspaceGitError,
     WorkspaceGitService,
@@ -50,7 +50,6 @@ from loopdy_plugin.workspace_git import (  # noqa: E402
 from loopdy_plugin.workspace_files_api import router as workspace_files_router  # noqa: E402
 from loopdy_plugin.native_api import router as native_router  # noqa: E402
 from loopdy_plugin.room_activity_api import router as room_activity_router  # noqa: E402
-from loopdy_plugin.native_wiki_api import router as native_wiki_router  # noqa: E402
 from loopdy_plugin.workflow_api import router as native_workflows_router  # noqa: E402
 from loopdy_plugin.native_project_git import router as native_project_git_router  # noqa: E402
 from loopdy_plugin.agent_templates import (  # noqa: E402
@@ -63,7 +62,6 @@ router = APIRouter()
 router.include_router(workspace_files_router)
 router.include_router(native_router)
 router.include_router(room_activity_router, prefix="/native")
-router.include_router(native_wiki_router)
 router.include_router(native_workflows_router)
 router.include_router(native_project_git_router)
 router.include_router(agent_templates_router)
@@ -528,9 +526,7 @@ def list_events(
     store = _active_service().store
     _clean_event_projection(store)
     rows = store.list_events(limit=limit, offset=offset)
-    events = asyncio.run(
-        HermesWorkspaceBackend(service=_active_service()).enrich_completion_events(rows)
-    )
+    events = asyncio.run(enrich_completion_events(rows))
     return {
         "events": events,
         "next_offset": offset + len(rows) if len(rows) == limit else None,
@@ -553,9 +549,7 @@ def get_event(event_id: str) -> dict[str, Any]:
     event = service.store.get_event(event_id)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-    enriched = asyncio.run(
-        HermesWorkspaceBackend(service=service).enrich_completion_events([event])
-    )
+    enriched = asyncio.run(enrich_completion_events([event]))
     if not enriched:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     return enriched[0]

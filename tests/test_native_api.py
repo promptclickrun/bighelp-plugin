@@ -73,11 +73,10 @@ class NativeAPITests(unittest.TestCase):
             self.assertNotIn("native-wiki-v1", response.json()["features"])
             self.assertNotIn("dashboard-fixture-token", response.text)
 
-    def test_native_voice_status_uses_verified_hermes_identity_without_link(self):
+    def test_native_voice_status_uses_verified_hermes_identity(self):
         payload = {"agentId": "default", "sessionId": "stored-fixture", "provider": "codex_subscription"}
         path = PREFIX + "/voice/status"
-        with patch("loopdy_plugin.adapter.load_runtime_config", side_effect=AssertionError("Cloud chat accessed")):
-            result = self.client.post(path, headers=self.headers(), json=payload)
+        result = self.client.post(path, headers=self.headers(), json=payload)
         self.assertEqual(result.status_code, 200, result.text)
         self.assertTrue(result.json()["available"])
         self.assertEqual(self.client.post(path, json=payload).status_code, 401)
@@ -129,10 +128,7 @@ class NativeAPITests(unittest.TestCase):
         self.assertEqual(set(value), {"schemaVersion", "pluginVersion", "runtimeId",
                                      "servingProfileId", "principal", "features"})
         self.assertEqual(value["principal"], {"provider": "native-fixture", "userId": "alice", "displayName": "Alice"})
-        from loopdy_plugin.wiki_contract import available_wiki_operations
         expected = ["native-context-v1", "serving-profile-v1", "native-card-templates-v1", "native-voice-v1"]
-        if available_wiki_operations():
-            expected.extend(("native-wiki-v1", "native-wiki-disconnect-v1"))
         from loopdy_plugin.native_project_git import supported
         if supported():
             expected.append("native-project-git-read-v1")

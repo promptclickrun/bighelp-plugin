@@ -38,7 +38,7 @@ from . import live_alerts
 from . import quiet_hours
 from .card_previews import reply_preview
 from .reactions import REACTION_SCHEMA
-from .relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
+from .notification_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes, public_key_from_x963, sign_p1363
 from .sealed_alerts import seal_alert, seal_avatar
 from .session_state import open_profile_store
 from .workflow_runner import in_workflow_stage

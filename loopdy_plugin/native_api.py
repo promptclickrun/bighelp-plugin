@@ -17,7 +17,6 @@ from starlette.requests import ClientDisconnect
 
 from .native_context import NativeAPIError, NativeContext, PROFILE_ID, log_native_feature_startup, native_context
 from .store import CardTemplateConflict, CardTemplateLimit
-from .workspace_control import card_template_projection
 
 
 logger = logging.getLogger(__name__)
@@ -251,8 +250,15 @@ async def context(request: Request) -> Response:
     return _response(owner.payload(), owner)
 
 
+_TEMPLATE_SUMMARY_KEYS = (
+    "id", "version", "name", "summary", "author", "license", "minimum_card_version", "sha256",
+)
+
+
 def _summary(template: dict) -> dict:
-    return _TemplateSummary.model_validate(card_template_projection(template)).model_dump()
+    if not isinstance(template, dict) or any(key not in template for key in _TEMPLATE_SUMMARY_KEYS):
+        raise ValueError("Card template projection is invalid")
+    return _TemplateSummary.model_validate({key: template[key] for key in _TEMPLATE_SUMMARY_KEYS}).model_dump()
 
 
 def _templates(request: Request, owner: NativeContext, body: _Body, operation: str) -> dict:

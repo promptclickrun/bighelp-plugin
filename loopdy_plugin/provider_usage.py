@@ -580,7 +580,7 @@ def _codex_report(result: dict[str, Any], source: _Source, report_id: str, name:
 
 def codex_app_server(cli: str) -> dict[str, Any]:
     """``account/rateLimits/read`` from the Codex CLI's documented app server; it refreshes its own login."""
-    from .link_contracts import PLUGIN_VERSION
+    from .version import PLUGIN_VERSION
     try:
         with Rpc([cli, "app-server"], framed=False) as rpc:
             rpc.call(0, "initialize", {"clientInfo": {"name": "bighelp", "title": "bighelp", "version": PLUGIN_VERSION}})

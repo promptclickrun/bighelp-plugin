@@ -211,7 +211,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             operation_id,
             restart_state,
             (
-                "The gateway restart was requested. Waiting for the updated runtime and Link response."
+                "The gateway restart was requested. Waiting for the updated runtime."
                 if restart_state == "awaiting_activation"
                 else "The restart result is ambiguous. Observing activation without issuing another restart."
             ),

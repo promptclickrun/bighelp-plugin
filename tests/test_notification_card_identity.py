@@ -7,14 +7,14 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from gateway.config import PlatformConfig
 from gateway.platform_registry import PlatformEntry, platform_registry
 from loopdy_plugin.adapter import BighelpAdapter, _channel_event, standalone_send
 from loopdy_plugin.generative_ui import render_v2_envelope
 from loopdy_plugin.loopdy_cards import render_card
+from loopdy_plugin.service import BighelpService
 from loopdy_plugin.store import BighelpStore
 
 
@@ -28,41 +28,25 @@ class NotificationCardIdentityTests(unittest.TestCase):
         self.card = render_card(self.payload, now=self.now)
         self.raw = json.dumps(self.card)
 
-    def test_timeout_then_metadata_free_fallback_keeps_one_persisted_card(self):
+    def test_failed_send_then_metadata_free_fallback_keeps_one_persisted_card(self):
         async def exercise(path, card):
             raw = json.dumps(card)
-            class TimeoutLink:
-                connected = True
-
-                async def send_payload(self, payload):
-                    raise TimeoutError("synthetic acknowledgement timeout")
-
-            store = BighelpStore(path)
-            service = SimpleNamespace(store=store)
-            with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None):
-                first = BighelpAdapter(PlatformConfig(enabled=True), service=service,
-                                      workspace_controller=SimpleNamespace())
-            first.link_client = TimeoutLink()
+            # No phone is registered, so the real service records the card and reports a failure.
+            service = BighelpService(BighelpStore(path))
+            self.addCleanup(service.close)
+            first = BighelpAdapter(PlatformConfig(enabled=True), service=service)
             result = await first.send("all", raw,
                                       metadata={"job_id": "fixture-brief", "profile": "default"})
             self.assertFalse(result.success)
-            first_id = store.list_events()[0]["event_id"]
+            first_id = service.store.list_events()[0]["event_id"]
             # The real standalone path drops scheduler metadata and reconstructs
             # the adapter. Reopen storage to prove identity survives that boundary.
-            reopened = BighelpStore(path)
-            with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None):
-                fallback = BighelpAdapter(PlatformConfig(enabled=True),
-                    service=SimpleNamespace(store=reopened), workspace_controller=SimpleNamespace())
-            fallback.link_client = TimeoutLink()
-            with (
-                patch("loopdy_plugin.adapter._active_profile_id", return_value="default"),
-                patch.object(fallback, "connect", new=AsyncMock(return_value=True)),
-                patch.object(fallback, "disconnect", new=AsyncMock()),
-            ):
-                result = await standalone_send(PlatformConfig(enabled=True), "all", raw,
-                    service=service, adapter_factory=lambda *args, **kwargs: fallback)
+            reopened = BighelpService(BighelpStore(path))
+            self.addCleanup(reopened.close)
+            with patch("loopdy_plugin.adapter._active_profile_id", return_value="default"):
+                result = await standalone_send(PlatformConfig(enabled=True), "all", raw, service=reopened)
             self.assertIn("error", result)
-            rows = reopened.list_events()
+            rows = reopened.store.list_events()
             self.assertEqual(len(rows), 1, "fallback must not create a second Inbox card")
             self.assertEqual(rows[0]["event_id"], first_id)
             self.assertEqual(rows[0]["job_id"], "fixture-brief")

@@ -1,4 +1,4 @@
-"""No-send regressions through Hermes delivery and Loopdy's real adapter."""
+"""No-send regressions through Hermes delivery and bighelp's real adapter."""
 from __future__ import annotations
 
 import asyncio
@@ -8,17 +8,13 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.delivery import DeliveryRouter, DeliveryTarget
 from gateway.platform_registry import PlatformEntry, platform_registry
 from loopdy_plugin.adapter import BighelpAdapter
-from loopdy_plugin.link_contracts import WorkspaceRequest, workspace_result
-from loopdy_plugin.link_crypto import AccountCipher
 from loopdy_plugin.loopdy_cards import render_card
 from loopdy_plugin.store import BighelpStore
-from loopdy_plugin.workspace_control import HermesWorkspaceBackend
 
 
 class CronCardTransportTests(unittest.TestCase):
@@ -37,9 +33,7 @@ class CronCardTransportTests(unittest.TestCase):
             return {"success": True, "message_id": event.event_id}
 
         self.service = SimpleNamespace(store=self.store, deliver=deliver)
-        with patch("loopdy_plugin.adapter.load_runtime_config", return_value=None):
-            self.adapter = BighelpAdapter(PlatformConfig(enabled=True), service=self.service,
-                                         workspace_controller=SimpleNamespace())
+        self.adapter = BighelpAdapter(PlatformConfig(enabled=True), service=self.service)
         self.router = DeliveryRouter(GatewayConfig(), {Platform("loopdy"): self.adapter})
         self.router.output_dir = Path(self.folder.name)
 
@@ -49,7 +43,7 @@ class CronCardTransportTests(unittest.TestCase):
             job_id="fixture-brief", metadata={"job_id": "fixture-brief", "profile": "default"}))
         self.assertTrue(result["loopdy:all"]["success"], result)
 
-    def test_large_card_survives_scheduler_persistence_and_encrypted_dashboard(self):
+    def test_large_card_survives_scheduler_persistence(self):
         now = datetime.now(timezone.utc)
         fixture = Path(__file__).resolve().parents[1] / "fixtures/loopdy_card_v1/static-metrics.json"
         payload = json.loads(fixture.read_text())
@@ -70,16 +64,11 @@ class CronCardTransportTests(unittest.TestCase):
                 self.send(content)
                 self.assertEqual(self.events[-1].detail.get("generative_ui"), card)
         self.assertEqual(len(self.events), 2)
-        backend = HermesWorkspaceBackend(service=self.service)
-        for options in ({}, {"schemaVersion": 2}):
-            payload = asyncio.run(backend.dashboard_load(options))
-            result = workspace_result(request=WorkspaceRequest(request_id="fixture-request",
-                operation="dashboard.load", payload=options, sent_at=int(now.timestamp())),
-                status="completed", payload=payload, sent_at=int(now.timestamp()))
-            cipher = AccountCipher(bytes(range(32)))
-            decoded = cipher.open(cipher.seal(result))
-            self.assertTrue(all(e["detail"]["generative_ui"] == card
-                                for e in decoded["payload"]["events"]))
+        # The wrapped and bare finals are one card, so the saved history keeps it once.
+        saved = self.store.list_events()
+        self.assertEqual([event["event_id"] for event in saved], [self.events[0].event_id])
+        self.assertEqual(self.events[1].event_id, self.events[0].event_id)
+        self.assertEqual(saved[0]["detail"]["generative_ui"], card)
 
     def test_registered_standalone_route_preserves_a_complete_card(self):
         from test_registration import _Context
@@ -87,8 +76,7 @@ class CronCardTransportTests(unittest.TestCase):
         from tools.send_message_tool import _send_to_platform
 
         context = _Context()
-        with patch("loopdy_plugin.registration.load_runtime_config", return_value=None):
-            register(context, service=self.service)
+        register(context, service=self.service)
 
         async def capture(_config, chat_id, message, **_kwargs):
             result = await self.adapter.send(chat_id, message)

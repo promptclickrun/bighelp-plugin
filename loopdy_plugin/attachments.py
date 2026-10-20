@@ -13,13 +13,12 @@ from typing import Any, Iterable
 
 from gateway.platforms.base import BasePlatformAdapter
 
-from .link_contracts import MAX_AGENT_ATTACHMENT_BYTES
-
 
 MAX_ITEMS = 200
 MAX_TEXT_BYTES = 100_000
 MAX_ATTACHMENTS_PER_ITEM = 20
-MAX_ARTIFACT_BYTES = MAX_AGENT_ATTACHMENT_BYTES
+# Files agents send are cached up to this size each.
+MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 MAX_FILENAME_BYTES = 240
 MAX_CACHE_BYTES_PER_PROFILE = 250 * 1024 * 1024
 MAX_CACHE_ITEMS_PER_PROFILE = 500

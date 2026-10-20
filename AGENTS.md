@@ -7,7 +7,7 @@ Hermes, and the traps that have already cost us time. Read it before you change 
 ## What this plugin is
 
 It runs inside a user's own Hermes host and adds what the app needs on top of stock Hermes: agent boards
-(Feed/Ideas/Goals), native cards, iPhone tools, live voice, files and wikis, provider usage, secure input, templates
+(Feed/Ideas/Goals), native cards, iPhone tools, live voice, files, provider usage, secure input, templates
 and optional end-to-end encrypted notifications. The README lists every feature and links its doc in `docs/`.
 
 Hermes stays in charge of agents, chats, tools, approvals and scheduled tasks. The plugin adds to Hermes through its
@@ -21,10 +21,11 @@ Many features span both repos. The app's side of each route lives in the app rep
 
 - **Releases are batched, and the maintainer starts them.**
   - Pull requests don't change the version. Merged changes collect on `main`, which must stay releasable.
-  - When the maintainer decides to ship, a release PR bumps `plugin.yaml`, `PLUGIN_VERSION` and
-    `dashboard/manifest.json` and lists everything since the last release. Its title leads with the version. Its
-    description becomes the release notes, and the app shows the first 1,500 characters on its update screen, so
-    open with a short summary in plain words for people who run hosts. Credit outside contributors.
+  - When the maintainer decides to ship, a release PR bumps `plugin.yaml`, `PLUGIN_VERSION` in
+    `loopdy_plugin/version.py` and `dashboard/manifest.json` and lists everything since the last release. Its
+    title leads with the version. Its description becomes the release notes, and the app shows the first 1,500
+    characters on its update screen, so open with a short summary in plain words for people who run hosts. Credit
+    outside contributors.
   - After it merges, the maintainer runs the Release workflow (`gh workflow run release.yml`). It publishes the
     version from the release PR's merge; anything merged later waits for the next release.
   - A release holds only the files in `release-files.txt`. The workflow copies them from the release PR's merge
@@ -72,10 +73,13 @@ Many features span both repos. The app's side of each route lives in the app rep
 | `loopdy_plugin/tools.py`, `generative_ui.py`, `loopdy_cards.py` | Agent tools and native cards (`bighelp_render_*`) |
 | `loopdy_plugin/agent_guide.py`, `skills/bighelp/` | What agents are told about bighelp: the chat brief and the `bighelp` skill |
 | `loopdy_plugin/agent_board.py`, `provider_usage.py`, `secure_input.py`, `agent_templates.py`, `reactions.py` | Feature modules |
-| `loopdy_plugin/live_voice_*.py`, `native_voice.py`, `voice_*.py` | Live and turn-based voice |
-| `loopdy_plugin/managed_notifications*.py`, `sealed_alerts.py` | Notifications and Live Activities |
+| `loopdy_plugin/live_voice_*.py`, `native_voice.py` | Live voice |
+| `loopdy_plugin/managed_notifications*.py`, `sealed_alerts.py`, `notification_crypto.py` | Notifications and Live Activities |
 | `loopdy_plugin/plugin_update*.py`, `host_restart.py` | Self-update and the in-place restart |
-| `loopdy_plugin/link_*`, `relay_*`, `direct_*`, `provider.py` | Legacy pairing and relay code, kept only for compatibility |
+| `loopdy_plugin/store.py` | The local store for card templates, form answers, approvals and events (`get_service()` in `adapter.py`) |
+| `loopdy_plugin/adapter.py`, `service.py`, `provider.py`, `providers/` | The `loopdy` gateway platform and the legacy push provider, kept only for older setups |
+| `loopdy_plugin/legacy_cleanup.py` | Removes settings that retired features left on hosts |
+| `loopdy_plugin/version.py` | `PLUGIN_VERSION` |
 | `dashboard/` | Dashboard plugin manifest and `plugin_api.py` routes |
 | `skills/` | Read-only guidance for agents (`skill_view("loopdy:<name>")`) |
 | `spec/`, `fixtures/contracts/` | Card schemas and test vectors shared with the app |
@@ -130,9 +134,9 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
    - Add unit tests for the module itself.
 4. **Docs:** add `docs/<FEATURE>.md` with the full route contract, and a row in the README feature table.
 5. **Version:** leave it alone. The next release PR bumps `plugin.yaml`, `PLUGIN_VERSION` in
-   `loopdy_plugin/link_contracts.py` and `dashboard/manifest.json` together (the Hermes dashboard shows the
-   last one). `tests/test_portability.py` checks that they match, and the Release workflow refuses to publish if
-   they don't.
+   `loopdy_plugin/version.py` and `dashboard/manifest.json` together (the Hermes dashboard shows the last one).
+   `tests/test_portability.py` checks that they match, and the Release workflow refuses to publish if they
+   don't.
 6. **After the release:** the app offers the new version to hosts. The app adds its side of the route in its own
    release.
 
@@ -224,10 +228,14 @@ hermes plugins doctor . --ci
 - `fixtures/contracts/sealed-alert-v2-vector.json` must match the app's copy byte for byte.
 - The envelope limit is 2,300 bytes, so an alert fits in one push.
 - Live Activity updates carry only a phase, a fixed label and counts, never message text.
-- Changes to the notification contract roll out in order: the relay service, then the app, then the plugin. Coordinate
-  with the maintainer.
-- The legacy Link, relay, direct APNs and paired-transport code stays only for compatibility. Don't extend it or
-  document it for new hosts.
+- Changes to the notification contract roll out in order: the notification service, then the app, then the plugin.
+  Coordinate with the maintainer.
+- Link, its Direct transport, the relay and the wiki routes are gone. The legacy push provider (`service.py`,
+  `providers/`) and the `loopdy` gateway platform stay only for hosts that set them up with
+  `hermes bighelp configure-apns`. Do not extend them or document them for new hosts.
+- Old hosts can still have Link keys in `.env`, a `direct` plugin setting, a `platforms.loopdy` block and files
+  from Link, Direct or the wiki. The plugin must start cleanly with all of them.
+  `tests/test_old_host_startup.py` checks this.
 
 ## Git and pull requests
 

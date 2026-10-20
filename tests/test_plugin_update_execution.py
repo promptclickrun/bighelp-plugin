@@ -112,24 +112,23 @@ class PluginUpdateExecutionTests(unittest.TestCase):
             self.manager.record_runtime_loaded()
             self.assertEqual(self.manager.status(self.operation_id, self.device)["phase"], "timed_out")
 
-    def test_completion_requires_fresh_revision_and_authenticated_owner_response(self):
+    def test_completion_requires_a_fresh_runtime_on_the_target_revision(self):
         revision = "a" * 40
         with patch.object(api, "LOADED_REVISION", revision), patch.object(api, "RUNTIME_ID", "runtime_old"):
             self.manager.record_runtime_loaded()
             self.begin()
             self.manager._worker_transition(self.operation_id, "awaiting_activation", "Waiting", target_revision=revision)
-            self.manager.record_link_response(self.device, self.operation_id)
+            # The runtime that started the update is not proof that the new bytes loaded.
             self.assertNotEqual(self.manager.status(self.operation_id, self.device)["phase"], "complete")
-        with patch.object(api, "LOADED_REVISION", "b" * 40), patch.object(api, "RUNTIME_ID", "runtime_wrong"):
+        with patch.object(api, "LOADED_REVISION", "b" * 40), patch.object(api, "RUNTIME_ID", "runtime_wrong"), \
+                patch.object(api, "_metadata_revision", return_value=revision):
             self.manager.record_runtime_loaded()
-            self.manager.record_link_response(self.device, self.operation_id)
             self.assertNotEqual(self.manager.status(self.operation_id, self.device)["phase"], "complete")
         with patch.object(api, "LOADED_REVISION", revision), patch.object(api, "RUNTIME_ID", "runtime_fresh"):
             self.manager.record_runtime_loaded()
-            self.manager.record_link_response("other_device", self.operation_id)
-            self.assertNotEqual(self.manager.status(self.operation_id, self.device)["phase"], "complete")
-            self.manager.record_link_response(self.device, self.operation_id)
-            self.assertEqual(self.manager.status(self.operation_id, self.device)["phase"], "complete")
+            status = self.manager.status(self.operation_id, self.device)
+            self.assertEqual(status["phase"], "complete")
+            self.assertNotIn("Link", status["message"])
 
     def test_launcher_preserves_virtual_environment_interpreter(self):
         interpreter = self.root / "venv" / "bin" / "python"
@@ -191,7 +190,7 @@ class PluginUpdateExecutionTests(unittest.TestCase):
             with self.assertRaises(worker.UpdateBlocked):
                 worker._run_operation(self.manager, self.operation_id)
 
-    def test_cli_restart_can_confirm_through_an_authenticated_link_response(self):
+    def test_cli_restart_completes_when_the_gateway_loads_the_update(self):
         revision = "a" * 40
         cli_device = api.local_cli_device_id("default")
         with patch.object(api, "LOADED_REVISION", revision), patch.object(api, "RUNTIME_ID", "runtime_old"):
@@ -200,30 +199,12 @@ class PluginUpdateExecutionTests(unittest.TestCase):
         self.manager._worker_transition(self.operation_id, "awaiting_activation", "Waiting", target_revision=revision)
         with patch.object(api, "LOADED_REVISION", revision), patch.object(api, "RUNTIME_ID", "runtime_fresh"):
             self.manager.record_runtime_loaded()
-            self.manager.record_link_response(self.device, self.operation_id)
             self.assertEqual(self.manager.status(self.operation_id)["phase"], "complete")
 
     def test_restart_timeout_is_observation_only(self):
         with patch.object(worker.subprocess, "run", side_effect=subprocess.TimeoutExpired(["hermes"], 1)) as runner:
             self.assertEqual(worker._restart_gateway(self.manager), "reconnecting")
             self.assertEqual(runner.call_count, 1)
-
-    def test_workspace_rejects_forged_owner_and_requires_consent(self):
-        import asyncio
-        from loopdy_plugin.workspace_control import HermesWorkspaceBackend, WorkspaceController
-        from loopdy_plugin.link_contracts import WorkspaceRequest
-        backend = HermesWorkspaceBackend(service=object(), plugin_update_manager=self.manager, connection_id_getter=lambda: self.device)
-        async def check():
-            with self.assertRaises(Exception):
-                await backend.plugin_update_start({"operation_id": self.operation_id, "confirm_restart": False})
-            with self.assertRaises(Exception):
-                await backend.plugin_update_start({"operation_id": self.operation_id, "confirm_restart": True, "device_id": "forged"})
-            result = await backend.plugin_update_start({"operation_id": self.operation_id, "confirm_restart": True})
-            self.assertEqual(result["operation_id"], self.operation_id)
-            with self.assertRaises(ValueError):
-                self.manager.status(self.operation_id, "forged")
-        asyncio.run(check())
-
 
 if __name__ == "__main__":
     unittest.main()

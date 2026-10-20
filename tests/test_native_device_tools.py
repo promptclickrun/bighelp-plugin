@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from starlette.datastructures import Headers, QueryParams
 
-from loopdy_plugin.link_contracts import device_tool_result
+from loopdy_plugin.device_tool_contract import device_tool_result
 from loopdy_plugin.native_context import NativeContext
 from loopdy_plugin.native_device_tools import (
     NativeDeviceToolError,
@@ -372,7 +372,7 @@ class MiddlewareTests(unittest.IsolatedAsyncioTestCase):
                 callbacks.append((kind, callback))
 
         hub = NativeDeviceToolHub(profile_session_validator=lambda _profile, _session: True)
-        self.assertTrue(register_middleware(Context(), hub=hub, fallback_to_link=True))
+        self.assertTrue(register_middleware(Context(), hub=hub))
         captured: list = []
 
         def downstream(payload=None):
