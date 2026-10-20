@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from .link_contracts import device_tool_request, parse_device_tool_result
+from .device_tool_contract import device_tool_request, parse_device_tool_result
 
 
 logger = logging.getLogger("hermes.plugins.bighelp")
@@ -553,7 +553,6 @@ def register_middleware(
     ctx: Any,
     *,
     hub: NativeDeviceToolHub | None = None,
-    fallback_to_link: bool = False,
 ) -> bool:
     """Register native tool execution on Hermes' public middleware surface.
 
@@ -561,11 +560,7 @@ def register_middleware(
     callback therefore resolves the native hub coroutine through Hermes'
     supported ``model_tools._run_async`` bridge before returning a JSON tool
     result.  An absent native lease remains a truthful phone-unavailable
-    result; the legacy Link bridge is registered separately when supported.
-
-    ``fallback_to_link`` is retained for compatibility with older callers, but
-    is intentionally ignored because native phone calls must never cross into
-    a different transport when their lease is absent.
+    result.
 
     Hermes capability probes may expose middleware registration without the
     host-owned ``on_unload`` lifecycle.  Those probes can inspect the callback,

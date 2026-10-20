@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-from loopdy_plugin.link_contracts import (
+from loopdy_plugin.device_tool_contract import (
     DEVICE_TOOL_OPERATIONS,
     DEVICE_TOOL_READ_OPERATIONS,
     device_tool_request,
     device_tool_result,
-    device_tool_status,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,28 +64,14 @@ class AppearanceContractTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 _request("appearance.get", arguments)
 
-    def test_phone_status_may_enable_appearance(self):
-        enabled = ["health", "calendar", "reminders", "location", "appearance"]
-        status = device_tool_status(
-            device_id="phone-1", host_id="host-1", authorization_epoch=7,
-            enabled=enabled, available=True, sent_at=100,
-        )
-        self.assertEqual(status["enabled"], enabled)
-        with self.assertRaises(ValueError):
-            device_tool_status(
-                device_id="phone-1", host_id="host-1", authorization_epoch=7,
-                enabled=["appearance", "appearance"], available=True, sent_at=100,
-            )
-
-
 class AppearanceToolSchemaTests(unittest.TestCase):
-    def _register(self, bridge=None):
+    def _register(self):
         from loopdy_plugin.device_tools import register
 
         context = SimpleNamespace(tools={}, schemas={})
         context.register_tool = lambda *, name, handler, schema, **kwargs: (
             context.tools.update({name: handler}) or context.schemas.update({name: schema}))
-        register(context, bridge=bridge)
+        register(context)
         return context
 
     def test_tool_schema_is_strict_and_bounded(self):
@@ -110,35 +93,6 @@ class AppearanceToolSchemaTests(unittest.TestCase):
         description = schema["description"]
         for words in ("dark", "#rrggbb", "Device access", "open"):
             self.assertIn(words, description)
-
-    def test_handler_sends_appearance_operations_with_official_coordinates(self):
-        from loopdy_plugin.device_tools import DeviceToolBridge
-
-        bridge = DeviceToolBridge()
-        bridge.execute = AsyncMock(return_value={"status": "completed", "payload": APPLIED})
-        context = self._register(bridge)
-        execution = SimpleNamespace(
-            source="loopdy_link", owner_id="phone-1", scope_id="default",
-            authorization_epoch=7, attributes={"host_id": "host-1"},
-        )
-
-        def call(payload, call_id):
-            return asyncio.run(context.tools["iphone_appearance"](
-                payload, tool_execution_context=execution,
-                session_id="session-1", turn_id="turn-1", tool_call_id=call_id,
-            ))
-
-        self.assertEqual(json.loads(call({"operation": "set", "mode": "dark", "color": "rose"}, "call-1"))["payload"],
-                         APPLIED)
-        request = bridge.execute.await_args.kwargs
-        self.assertEqual(request["operation"], "appearance.set")
-        self.assertEqual(request["arguments"], {"mode": "dark", "color": "rose"})
-        call({"operation": "get"}, "call-2")
-        self.assertEqual(bridge.execute.await_args.kwargs["operation"], "appearance.get")
-        self.assertEqual(bridge.execute.await_args.kwargs["arguments"], {})
-        for payload in ({"operation": "list"}, {}, {"operation": "get", "mode": "dark"}):
-            with self.subTest(payload=payload), self.assertRaises(ValueError):
-                call(payload, "call-3")
 
     def test_manifest_and_agent_guidance_name_the_tool(self):
         from loopdy_plugin.agent_guide import CHAT_BRIEF

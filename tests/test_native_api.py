@@ -73,11 +73,10 @@ class NativeAPITests(unittest.TestCase):
             self.assertNotIn("native-wiki-v1", response.json()["features"])
             self.assertNotIn("dashboard-fixture-token", response.text)
 
-    def test_native_voice_status_uses_verified_hermes_identity_without_link(self):
+    def test_native_voice_status_uses_verified_hermes_identity(self):
         payload = {"agentId": "default", "sessionId": "stored-fixture", "provider": "codex_subscription"}
         path = PREFIX + "/voice/status"
-        with patch("loopdy_plugin.adapter.load_runtime_config", side_effect=AssertionError("Cloud chat accessed")):
-            result = self.client.post(path, headers=self.headers(), json=payload)
+        result = self.client.post(path, headers=self.headers(), json=payload)
         self.assertEqual(result.status_code, 200, result.text)
         self.assertTrue(result.json()["available"])
         self.assertEqual(self.client.post(path, json=payload).status_code, 401)

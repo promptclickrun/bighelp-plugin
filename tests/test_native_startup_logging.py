@@ -321,15 +321,13 @@ class NativeStartupLoggingTests(unittest.TestCase):
             "loopdy_plugin.managed_notifications": module(
                 "loopdy_plugin.managed_notifications", get_managed_notifications=lambda: managed),
             "hermes_cli.plugins": module("hermes_cli.plugins", VALID_HOOKS=set()),
-            "loopdy_plugin.direct_runtime": module("loopdy_plugin.direct_runtime", DirectSettings=Mock()),
         }))
-        for name in ("production_manager", "DeviceToolBridge", "register_tools", "register_device_tools",
+        for name in ("production_manager", "register_tools", "register_device_tools",
                      "BighelpApprovalTransport", "profile_display_name", "_home_target"):
             self.stack.enter_context(patch.object(registration, name))
-        self.stack.enter_context(patch.object(registration, "_device_tools_supported", return_value=False))
         ctx = Mock(profile_name="research", state=None)
         with patch.object(native_context.logger, "info") as info:
-            registration.register(ctx, service=SimpleNamespace(store=object()), activity_broker=Mock())
+            registration.register(ctx, service=SimpleNamespace(store=object()))
         self.room.register_room_activity.assert_called_once_with(ctx)
         self.device.register_middleware.assert_called_once_with(ctx)
         info.assert_not_called()

@@ -243,7 +243,6 @@ class PluginUpdateManager:
                 "updated_at": now,
                 "worker_launch_recorded": True,
                 "restart_requested_at": 0,
-                "link_response_runtime_id": "",
             }
             state["operations"][operation_id] = operation
             state["latest_operation_id"] = operation_id
@@ -301,26 +300,6 @@ class PluginUpdateManager:
                 "observed_at": int(time.time()),
             }
             self._write_state(state)
-
-    def record_link_response(
-        self, device_id: str, operation_id: str | None = None
-    ) -> None:
-        """Bind an authenticated update response to this loaded runtime."""
-        device_id = _device_id(device_id)
-        if operation_id is not None:
-            operation_id = _operation_id(operation_id)
-        with _FileLock(self.state_lock_path):
-            state = self._read_state()
-            selected = operation_id or str(state.get("latest_operation_id") or "")
-            operation = state["operations"].get(selected) if selected else None
-            if operation is None or operation.get("device_id") not in {device_id, local_cli_device_id(self.profile)}:
-                return
-            runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
-            if runtime.get("runtime_id") == RUNTIME_ID and runtime.get("revision") == LOADED_REVISION:
-                operation["link_response_runtime_id"] = RUNTIME_ID
-                operation["updated_at"] = int(time.time())
-                self._reconcile_completion(state, operation)
-                self._write_state(state)
 
     # Worker-facing journal methods. They remain private to the copied worker.
     def _worker_operation(self, operation_id: str) -> dict[str, Any]:
@@ -465,10 +444,9 @@ class PluginUpdateManager:
             _REVISION.fullmatch(target)
             and runtime.get("revision") == target
             and fresh
-            and operation.get("link_response_runtime_id") == runtime_id
         ):
             operation["phase"] = "complete"
-            operation["message"] = "The updated bighelp plugin is active and Link responded."
+            operation["message"] = "The updated bighelp plugin is active."
             operation["updated_at"] = int(time.time())
             return True
         active = str(runtime.get("revision") or "")

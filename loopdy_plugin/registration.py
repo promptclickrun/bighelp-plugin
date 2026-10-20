@@ -8,14 +8,10 @@ import json
 import logging
 import os
 import sqlite3
-import sys
-import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
-
-from hermes_constants import get_hermes_home
 
 from .adapter import (
     BighelpAdapter,
@@ -26,24 +22,14 @@ from .adapter import (
     profile_display_name,
     release_service,
     standalone_send,
-    tool_execution_context_type,
     validate_config,
 )
-from .device_tools import DeviceToolBridge, register as register_device_tools
+from .device_tools import register as register_device_tools
 from .approval import BighelpApprovalTransport
-from .activity_bridge import (
-    LinkActivityBroker,
-    external_turn_id,
-    finish_failed_turn_activity,
-    publish_hook_activity,
-)
 from .events import BighelpEvent
 from .hooks import normalize_hook
+from .legacy_cleanup import remove_retired_link_keys
 from .workflow_runner import in_workflow_stage
-from .generative_ui import extract_rendered_envelope
-from .link_client import LINK_ENV_KEYS, load_runtime_config
-from .link_contracts import generative_ui_event, notification_event
-from .link_identity import pre_llm_context_from_state
 from .naming import CLI_COMMAND, LEGACY_CLI_COMMAND, register_legacy_toolset_alias
 from .plugin_update import (
     PluginUpdateManager,
@@ -65,71 +51,33 @@ NOTIFICATION_HOOKS = (
     "kanban_task_completed",
     "kanban_task_blocked",
 )
-DIRECT_OBSERVER_HOOKS = ("post_api_request", "on_session_reset")
 HOOKS = (
     "pre_llm_call",
     "post_llm_call",
     "post_tool_call",
     "pre_approval_request",
     "post_approval_response",
-    *DIRECT_OBSERVER_HOOKS,
     *NOTIFICATION_HOOKS,
 )
 logger = logging.getLogger("hermes.plugins.bighelp")
 
 
-def _device_tools_supported() -> bool:
-    """Advertise phone tools only when Hermes carries verified tool context."""
-    return tool_execution_context_type() is not None
-
-
-def register(
-    ctx: Any,
-    *,
-    service: Any | None = None,
-    activity_broker: LinkActivityBroker | Any | None = None,
-    direct_session_opener: Any | None = None,
-    presentation_observer: Any | None = None,
-    voice_dispatch: Any | None = None,
-) -> None:
+def register(ctx: Any, *, service: Any | None = None) -> None:
     active_service = service or get_service()
-    broker = activity_broker or LinkActivityBroker()
-    attach_duration_store = getattr(broker, "attach_duration_store", None)
-    if callable(attach_duration_store):
-        attach_duration_store(getattr(active_service, "store", None))
     profile = str(getattr(ctx, "profile_name", "default") or "default")
-    identity_state = getattr(ctx, "state", None)
     update_manager = production_manager(profile)
-    device_tool_bridge = DeviceToolBridge()
-    from .direct_runtime import DirectSettings
-    def direct_settings_getter():
-        getter = getattr(ctx, "get_config", None)
-        values = getter("direct", {}) if callable(getter) else {}
-        return DirectSettings.from_mapping(values)
+    # Hosts paired with the retired Link still carry its keys in .env. Nothing reads them now.
+    remove_retired_link_keys()
 
     def adapter_factory(config):
-        return BighelpAdapter(
-            config, service=active_service, link_state=identity_state,
-            activity_broker=broker, plugin_update_manager=update_manager,
-            device_tool_bridge=device_tool_bridge,
-            direct_settings_getter=direct_settings_getter,
-            direct_session_opener=direct_session_opener,
-            presentation_observer=presentation_observer, voice_dispatch=voice_dispatch)
+        return BighelpAdapter(config, service=active_service, plugin_update_manager=update_manager)
 
     register_tools(ctx, store=active_service.store, profile=profile)
-    # Hermes 0.21.2 removed the optional ToolExecutionContext carried by
-    # MessageEvent. When the public execution-middleware surface is present,
-    # bighelp's native phone channel owns the tool call and receives Hermes'
-    # authentic hook IDs. Older hosts retain their verified Link path through a
-    # separate legacy registration.
-    legacy_device_tools = _device_tools_supported()
+    # The phone runs iPhone tools over the native channel, through Hermes' public
+    # execution middleware. Hosts without that middleware have no way to reach a phone.
     from .native_device_tools import register_middleware as register_native_device_tools
-    native_device_tools = register_native_device_tools(ctx)
-    if legacy_device_tools or native_device_tools:
-        register_device_tools(
-            ctx,
-            bridge=device_tool_bridge if legacy_device_tools else None,
-        )
+    if register_native_device_tools(ctx):
+        register_device_tools(ctx)
     from .agent_guide import register as register_agent_guide
     register_agent_guide(ctx)
     # Feed, Ideas, Goals, Activity and Approvals history for the bighelp app.
@@ -172,19 +120,16 @@ def register(
         is_connected=is_connected,
         required_env=[],
         install_hint=(
-            "Run `hermes loopdy link pair` and approve the code in bighelp."
+            "Only for the legacy push setup: run `hermes bighelp configure-apns`. "
+            "The bighelp app does not need this platform."
         ),
         env_enablement_fn=env_enablement,
         cron_deliver_env_var="LOOPDY_HOME_TARGET",
-        standalone_sender_fn=partial(
-            standalone_send,
-            service=active_service,
-            link_state=identity_state,
-        ),
+        standalone_sender_fn=partial(standalone_send, service=active_service),
         parse_target_ref_fn=parse_target,
         validate_target_ref_fn=validate_target,
-        # Match the native assistant-text bound, leaving complete 64 KiB card
-        # envelopes intact. The adapter splits ordinary Inbox text more tightly.
+        # Leave complete 64 KiB card envelopes intact. The adapter splits
+        # ordinary text more tightly.
         max_message_length=100_000,
         emoji="L",
         pii_safe=True,
@@ -202,33 +147,16 @@ def register(
 
     ctx.register_hook(
         "pre_llm_call",
-        partial(
-            _pre_llm_call,
-            service=active_service,
-            profile=profile,
-            identity_state=identity_state,
-            activity_broker=broker,
-        ),
+        partial(_pre_llm_call, service=active_service, profile=profile),
     )
     ctx.register_hook(
         "post_llm_call",
-        partial(
-            _post_llm_call,
-            service=active_service,
-            profile=profile,
-            activity_broker=broker,
-        ),
+        partial(_post_llm_call, service=active_service, profile=profile),
     )
     ctx.register_hook(
         "post_tool_call",
-        partial(_post_tool_call, service=active_service, activity_broker=broker),
+        partial(_post_tool_call, service=active_service),
     )
-    record_api_usage = getattr(broker, "record_api_usage", None)
-    if callable(record_api_usage):
-        ctx.register_hook("post_api_request", record_api_usage)
-    reset_api_usage = getattr(broker, "reset_api_usage", None)
-    if callable(reset_api_usage):
-        ctx.register_hook("on_session_reset", reset_api_usage)
     for hook_name in NOTIFICATION_HOOKS:
         _register_notification_observer(
             ctx, hook_name,
@@ -238,7 +166,6 @@ def register(
                 service=active_service,
                 profile=profile,
                 profile_getter=lambda: ctx.profile_name,
-                activity_broker=broker,
             ),
         )
 
@@ -246,9 +173,7 @@ def register(
         handle_cli,
         service=active_service,
         profile=profile,
-        identity_state=identity_state,
         plugin_update_manager=update_manager,
-        plugin_context=ctx,
     )
     ctx.register_cli_command(
         name=CLI_COMMAND,
@@ -265,7 +190,7 @@ def register(
         setup_fn=setup_cli,
         handler_fn=cli_handler,
     )
-    # Independent, public native observers. The optional Link adapter is not
+    # Independent, public native observers. The platform adapter is not
     # constructed to enable these notifications, and no core hook is patched.
     try:
         from .managed_notifications import get_managed_notifications
@@ -333,75 +258,18 @@ def _register_notification_observer(ctx: Any, hook: str, callback: Any) -> None:
     register_middleware("tool_request", observe_tool_request)
 
 
-def _pre_llm_call(
-    *,
-    service: Any,
-    profile: str,
-    identity_state: Any | None = None,
-    activity_broker: LinkActivityBroker | Any,
-    **payload: Any,
-):
-    publish_hook_activity(
-        "pre_llm_call",
-        broker=activity_broker,
-        profile=profile,
-        payload=payload,
-    )
+def _pre_llm_call(*, service: Any, profile: str, **payload: Any) -> None:
     _queue_live_activity_update(
         service,
         session_id=str(payload.get("session_id") or ""),
         profile=str(payload.get("profile_name") or profile),
         phase="thinking",
     )
-    if str(payload.get("platform") or "").strip().lower() != "loopdy":
-        return None
-    sections: list[str] = []
-    if identity_state is not None:
-        identity = pre_llm_context_from_state(
-            identity_state,
-            platform="loopdy",
-            sender_id=str(payload.get("sender_id") or ""),
-        )
-        if isinstance(identity, dict) and isinstance(identity.get("context"), str):
-            sections.append(identity["context"])
-    sections.append(
-        "[bighelp native presentation]\n"
-        "When structured presentation is clearer than prose, call exactly one matching "
-        "direct renderer such as bighelp_render_weather_forecast, "
-        "bighelp_render_stock_quote, bighelp_render_chart, bighelp_render_dashboard, or "
-        "bighelp_render_form. Those typed v2 renderers remain preferred for their existing "
-        "polished use cases. For a new static layout that does not match a typed renderer, "
-        "use bighelp_render_card with embedded values and an empty data_sources array. "
-        "Live bighelp Card data refresh is unavailable in this release. "
-        "In interactive chat, a renderer tool call alone does not display a card: include the returned "
-        "display_markdown exactly once in the assistant answer so it survives history and exports. "
-        "For scheduler-owned bighelp Inbox delivery, instead return only the raw JSON object from the "
-        "wrapper's card field. "
-        "For current weather or forecast requests, use "
-        "bighelp_render_weather_forecast after obtaining the data when a card is useful; "
-        "if Hermes has progressively disclosed the renderer, use the official "
-        "tool_search, tool_describe, and tool_call bridge to load and invoke that exact "
-        "renderer. Do not stop at prose when the native card is relevant, and do not "
-        "invent a replacement renderer."
-    )
-    return {"context": "\n\n".join(sections)}
 
 
-def _post_llm_call(
-    *,
-    service: Any,
-    profile: str,
-    activity_broker: LinkActivityBroker | Any,
-    **payload: Any,
-) -> None:
+def _post_llm_call(*, service: Any, profile: str, **payload: Any) -> None:
     if in_workflow_stage():
         return
-    publish_hook_activity(
-        "post_llm_call",
-        broker=activity_broker,
-        profile=profile,
-        payload=payload,
-    )
     # A finished turn cannot clear session-wide attention: a newer turn may
     # already be waiting. Explicit clarify/approval resolution owns cleanup.
     _queue_live_activity_update(
@@ -413,19 +281,7 @@ def _post_llm_call(
     )
 
 
-def _post_tool_call(
-    *,
-    service: Any,
-    activity_broker: LinkActivityBroker | Any,
-    **payload: Any,
-) -> None:
-    publish_hook_activity(
-        "post_tool_call",
-        broker=activity_broker,
-        profile=str(payload.get("profile_name") or "default"),
-        payload=payload,
-    )
-    _publish_generative_ui_result(activity_broker, payload)
+def _post_tool_call(*, service: Any, **payload: Any) -> None:
     if str(payload.get("tool_name") or "").strip() != "clarify":
         return
     service.store.dismiss_attention_for_session(
@@ -433,56 +289,11 @@ def _post_tool_call(
     )
 
 
-def _publish_generative_ui_result(
-    broker: LinkActivityBroker | Any,
-    payload: dict[str, Any],
-) -> None:
-    tool_name = str(payload.get("tool_name") or "").strip()
-    if not tool_name.startswith("bighelp_render_"):
-        return
-    if str(payload.get("status") or "").strip().lower() not in {
-        "ok", "success", "succeeded", "completed",
-    }:
-        return
-    session_id = str(payload.get("session_id") or "").strip()
-    turn_id = str(payload.get("turn_id") or "").strip()
-    tool_call_id = str(payload.get("tool_call_id") or "").strip()
-    link_session_id = (
-        broker.resolved_session_id(session_id, turn_id)
-        if session_id and turn_id
-        else None
-    )
-    if not link_session_id or not tool_call_id:
-        return
-    try:
-        card = extract_rendered_envelope(payload.get("result"))
-        profile = str(payload.get("profile_name") or "default").strip() or "default"
-        digest = hashlib.sha256(
-            f"{link_session_id}\x1f{turn_id}\x1f{tool_call_id}".encode("utf-8")
-        ).hexdigest()[:32]
-        event = generative_ui_event(
-            event_id=f"card_{digest}",
-            session_id=link_session_id,
-            turn_id=external_turn_id(link_session_id, turn_id),
-            tool_call_id=tool_call_id,
-            agent_id=str(payload.get("agent_id") or profile),
-            agent_name=profile_display_name(profile),
-            card=card,
-            occurred_at=int(time.time()),
-        )
-    except (TypeError, ValueError):
-        logger.warning("Hermes renderer result was invalid")
-        return
-    if not broker.publish(event):
-        logger.debug("bighelp Link generative UI has no attached socket")
-
-
 def _deliver_hook(
     hook_name: str,
     *,
     service: Any,
     profile: str,
-    activity_broker: LinkActivityBroker | Any,
     profile_getter: Any | None = None,
     **payload: Any,
 ) -> None:
@@ -505,32 +316,12 @@ def _deliver_hook(
                 },
             )
         if event.type == "session.completed":
-            # Home history only: persist before requesting an encrypted refresh.
-            # There is no push delivery and no sessionId on this invalidation:
-            # finishing one turn must not terminate a newer turn's Live Activity.
-            if service.store.record_event(event, target=_home_target()):
-                activity_broker.publish(notification_event(
-                    event_id=event.event_id,
-                    event_type=event.type,
-                    agent_id=event.profile,
-                    agent_name=event.detail["agent_name"],
-                    session_id="",
-                    title="Completed work updated",
-                    body="Open Home to view completed work.",
-                    sent_at=int(time.time()),
-                ))
+            # Home history only: there is no push delivery and no sessionId, so
+            # finishing one turn never ends a newer turn's Live Activity.
+            service.store.record_event(event, target=_home_target())
         else:
             service.enqueue(event, target=_home_target())
     _live_activity_from_hook(hook_name, service=service, profile=profile, payload=payload)
-    if hook_name == "on_session_end":
-        finish_failed_turn_activity(broker=activity_broker, payload=payload)
-    else:
-        publish_hook_activity(
-            hook_name,
-            broker=activity_broker,
-            profile=profile,
-            payload=payload,
-        )
 
 
 def _with_subagent_start_metadata(
@@ -603,20 +394,10 @@ def _queue_live_activity_update(service: Any, **update: Any) -> None:
 
 def setup_cli(parser: Any) -> None:
     actions = parser.add_subparsers(dest="bighelp_action", required=True)
-    from .wiki_cli import setup_wiki_cli
-    setup_wiki_cli(actions)
     from .catalog_submissions import setup_cli as setup_catalog_cli
     setup_catalog_cli(actions)
 
     actions.add_parser("status", help="Show provider health and registered devices")
-    direct = actions.add_parser("direct", help="Configure the private loopback transport (no activation)")
-    direct_actions = direct.add_subparsers(dest="bighelp_direct_action", required=True)
-    direct_actions.add_parser("status", help="Show direct settings, not a live health probe")
-    direct_config = direct_actions.add_parser("configure", help="Save HTTPS origin and fixed loopback port")
-    direct_config.add_argument("--origin", required=True)
-    direct_config.add_argument("--port", type=int, required=True)
-    direct_config.add_argument("--enabled", action="store_true")
-    direct_actions.add_parser("disable", help="Retire direct authorization without restarting Hermes")
 
     files = actions.add_parser(
         "files",
@@ -694,69 +475,21 @@ def setup_cli(parser: Any) -> None:
     test = actions.add_parser("test", help="Send an opaque test wakeup")
     test.add_argument("--target", default=_home_target())
 
-    link = actions.add_parser("link", help="Inspect retained legacy bighelp Link settings")
-    link_actions = link.add_subparsers(dest="bighelp_link_action", required=True)
-    pair = link_actions.add_parser("pair", help="Explain the replacement native connection")
-    pair.add_argument("--base-url", default="https://link.loopdy.app")
-    pair.add_argument("--timeout", type=int, default=600)
-    link_actions.add_parser("status", help="Show redacted bighelp Link status")
-    unpair = link_actions.add_parser("unpair", help="Remove this host pairing")
-    unpair.add_argument("--yes", action="store_true", help="Confirm removal")
-
 
 def handle_cli(
     args: Any,
     *,
     service: Any,
     profile: str,
-    identity_state: Any | None = None,
     plugin_update_manager: PluginUpdateManager | None = None,
-    plugin_context: Any | None = None,
 ) -> None:
     action = str(getattr(args, "bighelp_action", "") or "")
-    if action == "direct":
-        from .direct_runtime import DirectSettings
-        import secrets
-        get_config = getattr(plugin_context, "get_config", None)
-        set_config = getattr(plugin_context, "set_config", None)
-        if not callable(get_config) or not callable(set_config):
-            raise ValueError("This Hermes host does not expose plugin settings")
-        direct_action = str(getattr(args, "bighelp_direct_action", ""))
-        if direct_action == "status":
-            settings = DirectSettings.from_mapping(get_config("direct", {}))
-            _print_json({**settings.as_mapping(), "activation": "not_probed",
-                         "detail": "Settings only; no listener, Tailscale or gateway was started."})
-            return
-        if direct_action == "configure":
-            settings = DirectSettings.from_mapping({"enabled": bool(args.enabled),
-                "origin": args.origin, "port": args.port})
-        elif direct_action == "disable":
-            settings = DirectSettings()
-        else:
-            raise ValueError("Unknown direct command")
-        # One atomic namespace update, plus a durable fence visible to already
-        # loaded runtimes even when this SDK caches its config object.
-        if identity_state is not None:
-            identity_state.set("direct.configuration_revision", secrets.token_urlsafe(18))
-        set_config("direct", settings.as_mapping())
-        _print_json({**settings.as_mapping(), "activation": "pending_adapter_connect"})
-        return
-    if action == "wiki":
-        from .wiki_cli import handle_wiki_cli
-        from .wiki_transport import production_factory
-        handle_wiki_cli(args, transport=production_factory(
-            host_home=get_hermes_home(), config_getter=load_runtime_config,
-        ))
-        return
     if action == "files":
         _handle_files_cli(args)
         return
     if action == "catalog":
         from .catalog_submissions import handle_cli as handle_catalog_cli
         handle_catalog_cli(args)
-        return
-    if action == "link":
-        _handle_link_cli(args, identity_state=identity_state)
         return
     if action in {"update", "update-status"}:
         manager = plugin_update_manager or production_manager(profile)
@@ -928,83 +661,6 @@ def _handle_files_cli(args: Any) -> None:
         )
         raise SystemExit(1) from None
     _print_json(result)
-
-
-def _handle_link_cli(args: Any, *, identity_state: Any | None = None) -> None:
-    from hermes_cli.config import remove_env_value, save_env_value
-
-    action = str(getattr(args, "bighelp_link_action", "") or "")
-    if action == "pair":
-        _print_json({"state": "retired", "chat_transport": "native",
-            "detail": "Connect the app to the authenticated Hermes host address. Cloud pairing is no longer used for chat."})
-        return
-    if action == "status":
-        try:
-            config = load_runtime_config()
-            value = _link_status_value(config, identity_state)
-        except ValueError as exc:
-            value = {
-                "configured": False,
-                "state": "configuration_invalid",
-                "detail": str(exc),
-            }
-        _print_json(value)
-        return
-    if action == "unpair":
-        if not bool(getattr(args, "yes", False)):
-            raise ValueError("Pass --yes to confirm bighelp Link unpairing")
-        removed = 0
-        for key in LINK_ENV_KEYS:
-            removed += int(bool(remove_env_value(key)))
-        if identity_state is not None:
-            identity_state.set("link.runtime_status", None)
-            import secrets
-            identity_state.set("direct.configuration_revision", secrets.token_urlsafe(18))
-        _print_json({"configured": False, "state": "unpaired", "removed": removed})
-        return
-    raise ValueError("Unknown bighelp Link command")
-
-
-def _link_status_value(config: Any | None, identity_state: Any | None) -> dict[str, Any]:
-    if config is None:
-        return {"configured": False, "state": "unpaired"}
-    value: dict[str, Any] = {
-        "configured": True,
-        "state": "restart_required_or_connecting",
-        "base_url": config.base_url,
-        "device_id": config.device_id,
-        "authorization_epoch": config.authorization_epoch,
-    }
-    if identity_state is None:
-        return value
-    runtime = identity_state.get("link.runtime_status")
-    if not isinstance(runtime, dict):
-        return value
-    if (
-        runtime.get("base_url") != config.base_url
-        or runtime.get("device_id") != config.device_id
-        or runtime.get("authorization_epoch") != config.authorization_epoch
-    ):
-        return value
-    state = runtime.get("state")
-    if state not in {
-        "connected",
-        "connecting",
-        "reconnecting",
-        "disconnected",
-        "superseded",
-        "unready",
-        "configuration_error",
-    }:
-        return value
-    value["state"] = state
-    for key in ("observed_at", "last_connected_at", "reconnect_attempt"):
-        if isinstance(runtime.get(key), int):
-            value[key] = runtime[key]
-    detail = str(runtime.get("detail") or "").strip()
-    if detail:
-        value["detail"] = detail[:160]
-    return value
 
 
 def _home_target() -> str:

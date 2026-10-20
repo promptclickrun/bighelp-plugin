@@ -11,13 +11,6 @@ description: >
   approvals.
 author: bighelp contributors
 config_schema:
-  direct:
-    type: dict
-    default: {enabled: false, origin: "", port: 0}
-    description: >
-      Retained legacy paired-transport preferences. The production plugin does
-      not start this listener. Connect the app to the authenticated Hermes
-      Tailscale address instead; no cloud pairing or public URL is required.
   templates_allow_create_agent:
     type: bool
     default: false
@@ -34,12 +27,6 @@ optional_env:
   - LOOPDY_APNS_TOPIC
   - LOOPDY_APNS_ENVIRONMENT
   - LOOPDY_APNS_KEY_PATH
-  - LOOPDY_LINK_BASE_URL
-  - LOOPDY_LINK_DEVICE_ID
-  - LOOPDY_LINK_AUTHORIZATION_EPOCH
-  - LOOPDY_LINK_SIGNING_PRIVATE_KEY
-  - LOOPDY_LINK_AGREEMENT_PRIVATE_KEY
-  - LOOPDY_LINK_ACCOUNT_KEY
   - BIGHELP_MARKETPLACE_TRUSTED_ED25519_KEYS
 provides_hooks:
   # Only baseline hooks belong here: older Hermes validates these names before use.

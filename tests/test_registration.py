@@ -8,7 +8,6 @@ import json
 import stat
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -131,399 +130,7 @@ class _Service:
         return True
 
 
-class _ActivityBroker:
-    def __init__(self):
-        self.active = {}
-        self.bindings = {}
-        self.payloads = []
-
-    def bind_link_session(self, session_id, link_session_id):
-        self.bindings[session_id] = link_session_id
-
-    def bound_link_session(self, session_id):
-        return self.bindings.get(session_id)
-
-    def activate(self, session_id, turn_id, *, link_session_id):
-        self.active[(session_id, turn_id)] = link_session_id
-
-    def is_active(self, session_id, turn_id):
-        return (session_id, turn_id) in self.active
-
-    def resolved_session_id(self, session_id, turn_id):
-        return self.active.get((session_id, turn_id))
-
-    def publish(self, payload):
-        self.payloads.append(payload)
-        return True
-
-    def deactivate(self, session_id, turn_id):
-        self.active.pop((session_id, turn_id), None)
-
-
 class RegistrationTests(unittest.TestCase):
-    def test_registered_todo_hook_projects_current_and_legacy_tool_snapshots(self) -> None:
-        from loopdy_plugin.activity_bridge import LinkActivityBroker
-        from loopdy_plugin.registration import register
-
-        class CapturingBroker(LinkActivityBroker):
-            def __init__(self):
-                super().__init__()
-                self.payloads = []
-
-            def publish(self, payload):
-                self.payloads.append(payload)
-                return True
-
-        for tool_name in ("todo_list", "todo"):
-            with self.subTest(tool_name=tool_name):
-                broker = CapturingBroker()
-                context = _Context()
-                register(context, service=_Service(), activity_broker=broker)
-                broker.bind_link_session("stored-todo-session", "visible-todo-session")
-                for revision, status in enumerate(("pending", "in_progress", "completed"), 1):
-                    snapshot = {
-                        "todos": [{"id": "task-1", "content": "Verify task rail", "status": status}],
-                        "revision": revision,
-                    }
-                    payload = {
-                        "session_id": "stored-todo-session",
-                        "turn_id": "stored-todo-session:turn:todo01",
-                        "tool_call_id": f"todo-call-{revision}",
-                        # Hermes unwraps deferred tool_call before invoking hooks.
-                        "tool_name": tool_name,
-                        "args": {"todos": snapshot["todos"], "merge": True},
-                        "status": "ok",
-                        "result": json.dumps(snapshot) if revision % 2 else snapshot,
-                    }
-                    context.hooks["post_tool_call"](**payload)
-                    context.hooks["post_tool_call"](**payload)
-                events = [item for item in broker.payloads if item["type"] == "session.todos"]
-                self.assertEqual([event["revision"] for event in events], [1, 2, 3])
-                self.assertEqual(
-                    [event["todos"][0]["status"] for event in events],
-                    ["pending", "in_progress", "completed"],
-                )
-                self.assertTrue(all(event["sessionId"] == "visible-todo-session" for event in events))
-
-    def test_registered_todo_hook_rejects_failed_unbound_and_unrelated_results(self) -> None:
-        from loopdy_plugin.activity_bridge import LinkActivityBroker
-        from loopdy_plugin.registration import register
-
-        class CapturingBroker(LinkActivityBroker):
-            def __init__(self):
-                super().__init__()
-                self.payloads = []
-
-            def publish(self, payload):
-                self.payloads.append(payload)
-                return True
-
-        broker = CapturingBroker()
-        context = _Context()
-        register(context, service=_Service(), activity_broker=broker)
-        broker.bind_link_session("stored-todo-session", "visible-todo-session")
-        snapshot = {"todos": [{"id": "task-1", "content": "Keep private", "status": "pending"}], "revision": 1}
-        base = {
-            "session_id": "stored-todo-session",
-            "turn_id": "stored-todo-session:turn:todo01",
-            "tool_call_id": "todo-call-1",
-            "tool_name": "todo_list",
-            "status": "ok",
-            "result": snapshot,
-        }
-        for change in (
-            {"status": "failed"},
-            {"status": "cancelled"},
-            {"session_id": "unbound-session"},
-            {"tool_name": "terminal"},
-            {"tool_name": "tool_call", "args": {"name": "unrelated_tool"}},
-            {"result": "not json"},
-            {"result": {"todos": snapshot["todos"], "revision": True}},
-            {"result": {"todos": [{"id": "task-1", "status": "invalid"}], "revision": 1}},
-        ):
-            with self.subTest(change=change):
-                context.hooks["post_tool_call"](**(base | change))
-        self.assertFalse(any(item["type"] == "session.todos" for item in broker.payloads))
-
-    def test_registered_api_hook_projects_usage_without_notification(self):
-        from loopdy_plugin.registration import register
-        from loopdy_plugin.activity_bridge import LinkActivityBroker
-
-        context, service, broker = _Context(), _Service(), LinkActivityBroker()
-        register(context, service=service, activity_broker=broker)
-        broker.bind_link_session("hermes-usage", "link-usage")
-        context.hooks["post_api_request"](
-            session_id="hermes-usage", model="model-usage", api_request_id="request-usage",
-            usage={"prompt_tokens":100,"output_tokens":5,"cache_read_tokens":75,"total_tokens":105},
-        )
-        self.assertEqual(broker.usage_snapshot("hermes-usage", "model-usage")["cachedTokens"], 75)
-        self.assertEqual(service.events, [])
-        context.hooks["on_session_reset"](session_id="hermes-usage")
-        self.assertIsNone(broker.usage_snapshot("hermes-usage", "model-usage"))
-
-    def test_loopdy_native_presentation_context_matches_static_card_contract(self) -> None:
-        from loopdy_plugin.registration import register
-
-        service = _Service()
-        context = _Context()
-        register(context, service=service)
-
-        result = context.hooks["pre_llm_call"](
-            platform="loopdy",
-            session_id="static-card-contract",
-            sender_id="sender",
-        )
-
-        self.assertIsNotNone(result)
-        prompt = result["context"]
-        self.assertIn("embedded values and an empty data_sources array", prompt)
-        self.assertIn("Live bighelp Card data refresh is unavailable", prompt)
-        self.assertNotIn("public-GET live-data", prompt)
-
-    def test_link_chat_hooks_publish_safe_exact_activity_lifecycle(self) -> None:
-        from loopdy_plugin.registration import register
-
-        service = _Service()
-        context = _Context()
-        broker = _ActivityBroker()
-        register(context, service=service, activity_broker=broker)
-        coordinates = {
-            "session_id": "session_coordinate_0001",
-            "task_id": "session_coordinate_0001",
-            "turn_id": (
-                "session_coordinate_0001:session_coordinate_0001:abc12345"
-            ),
-        }
-        broker.bind_link_session(
-            coordinates["session_id"], "link_chat_coordinate_0001"
-        )
-
-        context.hooks["pre_llm_call"](
-            **coordinates,
-            platform="loopdy",
-            model="claude-sonnet",
-            user_message="private user request",
-        )
-        context.hooks["pre_tool_call"](
-            **coordinates,
-            tool_name="web_search",
-            tool_call_id="call_weather_fixture_01",
-            args={"query": "private search", "api_token": "do-not-leak"},
-        )
-        context.hooks["post_tool_call"](
-            **coordinates,
-            tool_name="web_search",
-            tool_call_id="call_weather_fixture_01",
-            args={"query": "private search", "api_token": "do-not-leak"},
-            result="private tool output",
-            status="ok",
-            duration_ms=420,
-        )
-        context.hooks["subagent_start"](
-            parent_session_id=coordinates["session_id"],
-            parent_turn_id=coordinates["turn_id"],
-            child_session_id="child_session_coordinate_01",
-            child_subagent_id="child_subagent_coordinate_1",
-            child_role="researcher",
-            child_goal="Compare provider documentation",
-        )
-        context.hooks["subagent_stop"](
-            parent_session_id=coordinates["session_id"],
-            parent_turn_id=coordinates["turn_id"],
-            child_session_id="child_session_coordinate_01",
-            child_role="researcher",
-            child_summary="Provider comparison completed",
-            child_status="completed",
-            duration_ms=840,
-        )
-        context.hooks["post_llm_call"](
-            **coordinates,
-            platform="loopdy",
-            assistant_response="private final response",
-        )
-
-        self.assertEqual(
-            [(item["kind"], item["lifecycle"]) for item in broker.payloads],
-            [
-                ("reasoning", "running"),
-                ("tool", "running"),
-                ("tool", "succeeded"),
-                ("subagent", "running"),
-                ("subagent", "succeeded"),
-                ("reasoning", "succeeded"),
-            ],
-        )
-        self.assertEqual(
-            {item["sessionId"] for item in broker.payloads},
-            {"link_chat_coordinate_0001"},
-        )
-        self.assertEqual(len({item["turnId"] for item in broker.payloads}), 1)
-        self.assertTrue(broker.payloads[0]["turnId"].startswith("turn_"))
-        self.assertNotIn(":", broker.payloads[0]["turnId"])
-        tool_events = [item for item in broker.payloads if item["kind"] == "tool"]
-        self.assertEqual(
-            {item["eventId"] for item in tool_events},
-            {tool_events[0]["eventId"]},
-        )
-        self.assertEqual(
-            {item["toolCallId"] for item in tool_events},
-            {"call_weather_fixture_01"},
-        )
-        self.assertEqual(
-            {item["toolName"] for item in tool_events},
-            {"web_search"},
-        )
-        self.assertEqual(
-            tool_events[0]["arguments"],
-            '{"api_token":"do-not-leak","query":"private search"}',
-        )
-        self.assertEqual(tool_events[1]["arguments"], tool_events[0]["arguments"])
-        self.assertEqual(tool_events[1]["result"], "private tool output")
-        self.assertNotIn("private final response", repr(broker.payloads))
-        self.assertFalse(broker.active)
-
-    def test_successful_renderer_tool_publishes_native_card_for_active_link_turn(self) -> None:
-        from loopdy_plugin.registration import register
-
-        broker = _ActivityBroker()
-        context = _Context()
-        register(context, service=_Service(), activity_broker=broker)
-        coordinates = {
-            "session_id": "session_coordinate_0003",
-            "task_id": "session_coordinate_0003",
-            "turn_id": (
-                "session_coordinate_0003:session_coordinate_0003:def67890"
-            ),
-        }
-        broker.bind_link_session(
-            coordinates["session_id"], "link_chat_coordinate_0003"
-        )
-        context.hooks["pre_llm_call"](
-            **coordinates,
-            platform="loopdy",
-            profile_name="personal",
-        )
-        context.hooks["post_tool_call"](
-            **coordinates,
-            profile_name="personal",
-            tool_name="bighelp_render_summary",
-            tool_call_id="call_render_fixture_0001",
-            status="ok",
-            result=json.dumps(
-                {
-                    "schema": "loopdy.generative_ui",
-                    "version": 1,
-                    "component": "summary",
-                    "title": "Weather ready",
-                    "body": "Clear skies through this afternoon.",
-                }
-            ),
-        )
-
-        cards = [item for item in broker.payloads if item["type"] == "generative.ui"]
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["sessionId"], "link_chat_coordinate_0003")
-        self.assertTrue(cards[0]["turnId"].startswith("turn_"))
-        self.assertNotIn(":", cards[0]["turnId"])
-        self.assertEqual(cards[0]["toolCallId"], "call_render_fixture_0001")
-        self.assertEqual(cards[0]["card"]["component"], "summary")
-
-    def test_successful_loopdy_card_renderer_publishes_native_card_live(self) -> None:
-        from loopdy_plugin.loopdy_cards import render_card
-        from loopdy_plugin.registration import register
-
-        broker = _ActivityBroker()
-        context = _Context()
-        register(context, service=_Service(), activity_broker=broker)
-        session_id = "session_coordinate_card_0001"
-        turn_id = "session_coordinate_card_0001:session_coordinate_card_0001:abc12345"
-        broker.bind_link_session(session_id, "link_chat_coordinate_card_0001")
-        context.hooks["pre_llm_call"](
-            session_id=session_id,
-            turn_id=turn_id,
-            platform="loopdy",
-            profile_name="personal",
-        )
-        source = json.loads(
-            (PLUGIN_ROOT / "fixtures/loopdy_card_v1/static-metrics.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        rendered = render_card(
-            source,
-            now=datetime(2026, 9, 3, tzinfo=timezone.utc),
-        )
-
-        context.hooks["post_tool_call"](
-            session_id=session_id,
-            turn_id=turn_id,
-            profile_name="personal",
-            tool_name="bighelp_render_card",
-            tool_call_id="call_render_card_fixture_0001",
-            status="ok",
-            result=json.dumps(rendered),
-        )
-
-        cards = [item for item in broker.payloads if item["type"] == "generative.ui"]
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["sessionId"], "link_chat_coordinate_card_0001")
-        self.assertEqual(cards[0]["card"]["schema"], "loopdy.card")
-        self.assertEqual(cards[0]["card"]["content_hash"], rendered["content_hash"])
-
-    def test_failed_or_unbound_renderer_tool_never_publishes_native_card(self) -> None:
-        from loopdy_plugin.registration import register
-
-        broker = _ActivityBroker()
-        context = _Context()
-        register(context, service=_Service(), activity_broker=broker)
-        payload = {
-            "session_id": "session_coordinate_0004",
-            "turn_id": "turn_coordinate_0004",
-            "profile_name": "personal",
-            "tool_name": "bighelp_render_summary",
-            "tool_call_id": "call_render_fixture_0002",
-            "result": json.dumps(
-                {
-                    "schema": "loopdy.generative_ui",
-                    "version": 1,
-                    "component": "summary",
-                    "title": "Private",
-                    "body": "Do not deliver this result.",
-                }
-            ),
-        }
-        context.hooks["post_tool_call"](**payload, status="ok")
-        context.hooks["pre_llm_call"](
-            session_id=payload["session_id"],
-            turn_id=payload["turn_id"],
-            platform="loopdy",
-        )
-        context.hooks["post_tool_call"](**payload, status="failed")
-
-        self.assertFalse(any(item["type"] == "generative.ui" for item in broker.payloads))
-
-    def test_non_link_session_never_publishes_link_activity(self) -> None:
-        from loopdy_plugin.registration import register
-
-        broker = _ActivityBroker()
-        context = _Context()
-        register(context, service=_Service(), activity_broker=broker)
-
-        context.hooks["pre_llm_call"](
-            session_id="session_coordinate_0002",
-            turn_id="turn_coordinate_0002",
-            platform="imsg",
-        )
-        context.hooks["pre_tool_call"](
-            session_id="session_coordinate_0002",
-            turn_id="turn_coordinate_0002",
-            tool_name="terminal",
-            tool_call_id="call_terminal_fixture_01",
-            args={"command": "echo private"},
-        )
-
-        self.assertEqual(broker.payloads, [])
-
     def test_clarify_tool_cleanup_does_not_allow_session_end_to_clear_newer_attention(self) -> None:
         from loopdy_plugin.registration import register
 
@@ -746,201 +353,6 @@ class RegistrationTests(unittest.TestCase):
                 else:
                     self.assertEqual(status["notifications"], {"available": True, "active_grants": 2})
 
-    def test_loopdy_link_pairing_commands_are_registered(self) -> None:
-        from loopdy_plugin.registration import setup_cli
-
-        parser = argparse.ArgumentParser()
-        setup_cli(parser)
-        pair = parser.parse_args(
-            ["link", "pair", "--base-url", "https://link.loopdy.example"]
-        )
-        unpair = parser.parse_args(["link", "unpair", "--yes"])
-        status = parser.parse_args(["link", "status"])
-        self.assertEqual(pair.bighelp_link_action, "pair")
-        self.assertEqual(unpair.bighelp_link_action, "unpair")
-        self.assertEqual(status.bighelp_link_action, "status")
-
-    def test_retired_link_pairing_never_pairs_or_activates_gateway(self) -> None:
-        from loopdy_plugin import registration
-        from loopdy_plugin.registration import _handle_link_cli
-
-        # The dead gateway-activation hook and the pairing flow were removed entirely: pairing is
-        # retired and nothing in the plugin may restart the gateway on its own.
-        self.assertFalse(hasattr(registration, "_request_gateway_activation"))
-        self.assertFalse(hasattr(registration, "pair_host"))
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            _handle_link_cli(
-                SimpleNamespace(
-                    bighelp_link_action="pair",
-                    timeout=600,
-                    base_url="https://link.loopdy.example",
-                ),
-                identity_state=_Context().state,
-            )
-
-        result = json.loads(output.getvalue())
-        self.assertEqual(result["state"], "retired")
-        self.assertEqual(result["chat_transport"], "native")
-
-    def test_link_unpair_removes_every_key_pairing_saved(self) -> None:
-        from loopdy_plugin.registration import _handle_link_cli
-
-        removed: list[str] = []
-        with (
-            patch("hermes_cli.config.remove_env_value", side_effect=lambda key: removed.append(key) or True),
-            contextlib.redirect_stdout(io.StringIO()) as output,
-        ):
-            _handle_link_cli(SimpleNamespace(bighelp_link_action="unpair", yes=True), identity_state=None)
-
-        self.assertEqual(sorted(removed), sorted((
-            "LOOPDY_LINK_BASE_URL", "LOOPDY_LINK_DEVICE_ID", "LOOPDY_LINK_AUTHORIZATION_EPOCH",
-            "LOOPDY_LINK_SIGNING_PRIVATE_KEY", "LOOPDY_LINK_AGREEMENT_PRIVATE_KEY", "LOOPDY_LINK_ACCOUNT_KEY")))
-        self.assertEqual(json.loads(output.getvalue())["removed"], 6)
-
-    def test_loopdy_link_status_reads_the_matching_persisted_gateway_state(self) -> None:
-        from loopdy_plugin.registration import _handle_link_cli
-
-        config = SimpleNamespace(
-            base_url="https://link.loopdy.example",
-            device_id="host-device-fixture",
-            authorization_epoch=3,
-        )
-        state = _Context().state
-        state.set(
-            "link.runtime_status",
-            {
-                "state": "connected",
-                "observed_at": 1_788_000_123,
-                "last_connected_at": 1_788_000_123,
-                "base_url": config.base_url,
-                "device_id": config.device_id,
-                "authorization_epoch": config.authorization_epoch,
-                "reconnect_attempt": 0,
-                "detail": "",
-            },
-        )
-        output = io.StringIO()
-
-        with (
-            patch("loopdy_plugin.registration.load_runtime_config", return_value=config),
-            contextlib.redirect_stdout(output),
-        ):
-            _handle_link_cli(
-                SimpleNamespace(bighelp_link_action="status"),
-                identity_state=state,
-            )
-
-        status = json.loads(output.getvalue())
-        self.assertEqual(status["state"], "connected")
-        self.assertEqual(status["observed_at"], 1_788_000_123)
-        self.assertEqual(status["last_connected_at"], 1_788_000_123)
-        self.assertNotIn("detail", status)
-
-    def test_loopdy_link_status_does_not_trust_a_different_pairing(self) -> None:
-        from loopdy_plugin.registration import _handle_link_cli
-
-        config = SimpleNamespace(
-            base_url="https://link.loopdy.example",
-            device_id="host-device-current",
-            authorization_epoch=4,
-        )
-        state = _Context().state
-        state.set(
-            "link.runtime_status",
-            {
-                "state": "connected",
-                "observed_at": 1_788_000_123,
-                "last_connected_at": 1_788_000_123,
-                "base_url": config.base_url,
-                "device_id": "host-device-previous",
-                "authorization_epoch": 3,
-                "reconnect_attempt": 0,
-                "detail": "",
-            },
-        )
-        output = io.StringIO()
-
-        with (
-            patch("loopdy_plugin.registration.load_runtime_config", return_value=config),
-            contextlib.redirect_stdout(output),
-        ):
-            _handle_link_cli(
-                SimpleNamespace(bighelp_link_action="status"),
-                identity_state=state,
-            )
-
-        status = json.loads(output.getvalue())
-        self.assertEqual(status["state"], "restart_required_or_connecting")
-        self.assertNotIn("observed_at", status)
-
-    def test_loopdy_link_status_surfaces_unready_enrollment(self) -> None:
-        from loopdy_plugin.registration import _handle_link_cli
-
-        config = SimpleNamespace(
-            base_url="https://link.loopdy.example",
-            device_id="host-device-current",
-            authorization_epoch=4,
-        )
-        state = _Context().state
-        state.set(
-            "link.runtime_status",
-            {
-                "state": "unready",
-                "observed_at": 1_788_000_123,
-                "last_connected_at": 1_788_000_100,
-                "base_url": config.base_url,
-                "device_id": config.device_id,
-                "authorization_epoch": config.authorization_epoch,
-                "reconnect_attempt": 1,
-                "detail": "ValueError: sender-key acknowledgement is invalid",
-            },
-        )
-        output = io.StringIO()
-
-        with (
-            patch("loopdy_plugin.registration.load_runtime_config", return_value=config),
-            contextlib.redirect_stdout(output),
-        ):
-            _handle_link_cli(
-                SimpleNamespace(bighelp_link_action="status"),
-                identity_state=state,
-            )
-
-        status = json.loads(output.getvalue())
-        self.assertEqual(status["state"], "unready")
-        self.assertEqual(status["detail"], "ValueError: sender-key acknowledgement is invalid")
-
-    def test_pre_llm_hook_injects_only_registered_loopdy_identity_context(self) -> None:
-        from loopdy_plugin.link_identity import LinkIdentityRegistry
-        from loopdy_plugin.registration import register
-
-        context = _Context()
-        service = _Service()
-        registry = LinkIdentityRegistry(context.state, account_key=b"k" * 32)
-        sender = registry.remember(
-            sender_device_id="mobile-device-1",
-            actor_id="actor-1",
-            actor_name="Alex",
-            device_name="Kitchen iPad",
-        )
-        register(context, service=service)
-
-        result = context.hooks["pre_llm_call"](
-            platform="loopdy", sender_id=sender, session_id="session-1"
-        )
-        cron = context.hooks["pre_llm_call"](
-            platform="cron", sender_id=sender, session_id="session-2"
-        )
-
-        self.assertIn("Alex", result["context"])
-        self.assertIn("bighelp_render_weather_forecast", result["context"])
-        self.assertIn("structured presentation", result["context"])
-        self.assertIn("tool_search", result["context"])
-        self.assertIn("Do not stop at prose", result["context"])
-        self.assertIsNone(cron)
-
     def test_retired_marketplace_tool_and_skill_are_not_registered(self) -> None:
         # The bighelp Marketplace is gone: its service has no draft routes and the app has no Marketplace,
         # so an agent that called the tool always failed.
@@ -974,7 +386,8 @@ class RegistrationTests(unittest.TestCase):
         module.register(context, service=service)
 
         self.assertEqual(context.platform["name"], "loopdy")
-        self.assertIn("hermes loopdy link pair", context.platform["install_hint"])
+        self.assertIn("hermes bighelp configure-apns", context.platform["install_hint"])
+        self.assertNotIn("link", context.platform["install_hint"].lower())
         self.assertEqual(context.platform["cron_deliver_env_var"], "LOOPDY_HOME_TARGET")
         from loopdy_plugin.loopdy_cards import MAX_DOCUMENT_BYTES
         self.assertGreater(context.platform["max_message_length"], MAX_DOCUMENT_BYTES)
@@ -1000,8 +413,6 @@ class RegistrationTests(unittest.TestCase):
                 "post_tool_call",
                 "pre_llm_call",
                 "post_llm_call",
-                "post_api_request",
-                "on_session_reset",
                 "on_session_end",
                 "subagent_start",
                 "subagent_stop",
@@ -1100,6 +511,40 @@ class RegistrationTests(unittest.TestCase):
         self.assertNotIn("tool_name", update)
 
 
+
+    def test_retired_link_direct_and_wiki_commands_are_gone(self) -> None:
+        from loopdy_plugin import registration
+        from loopdy_plugin.registration import setup_cli
+
+        parser = argparse.ArgumentParser()
+        setup_cli(parser)
+        for command in (["link", "status"], ["link", "unpair", "--yes"], ["direct", "status"], ["wiki", "roots"]):
+            with self.subTest(command=command), contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                parser.parse_args(command)
+        self.assertEqual(parser.parse_args(["update-status"]).bighelp_action, "update-status")
+        self.assertFalse(hasattr(registration, "_handle_link_cli"))
+
+    def test_registration_removes_only_the_retired_link_keys(self) -> None:
+        from loopdy_plugin.registration import register
+
+        removed: list[str] = []
+        with (
+            patch.dict("os.environ", {"LOOPDY_LINK_DEVICE_ID": "host-fixture", "LOOPDY_HOME_TARGET": "all"}),
+            patch("hermes_cli.config.remove_env_value", side_effect=lambda key: removed.append(key) or True),
+        ):
+            register(_Context(), service=_Service())
+        self.assertEqual(removed, ["LOOPDY_LINK_DEVICE_ID"])
+
+    def test_pre_llm_hook_adds_no_context_for_any_platform(self) -> None:
+        from loopdy_plugin.registration import register
+
+        context, service = _Context(), _Service()
+        register(context, service=service)
+        for platform in ("loopdy", "tui", ""):
+            with self.subTest(platform=platform):
+                self.assertIsNone(context.hooks["pre_llm_call"](
+                    session_id="session-1", turn_id="turn-1", platform=platform, sender_id="phone-1"))
 
     def test_relay_cli_has_no_secret_value_arguments_or_public_enrollment_command(self) -> None:
         from loopdy_plugin.registration import setup_cli

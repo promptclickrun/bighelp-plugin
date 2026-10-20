@@ -76,32 +76,6 @@ class GeneratedMediaTests(unittest.TestCase):
                 self.assertEqual(result["state"], "ready")
                 self.assertEqual(result["attachments"][0]["fileName"], name)
 
-    def test_live_hook_coordinate_resolves_when_link_and_stored_sessions_differ(self):
-        from loopdy_plugin.activity_bridge import LinkActivityBroker, publish_hook_activity
-
-        class Broker(LinkActivityBroker):
-            def __init__(self):
-                super().__init__()
-                self.payloads = []
-
-            def publish(self, payload):
-                self.payloads.append(payload)
-                return True
-
-        broker = Broker()
-        internal_turn = "session_a:turn:live"
-        broker.activate("session_a", internal_turn, link_session_id="link_session_a")
-        image = self.root / "live.png"
-        image.write_bytes(b"\\x89PNG\\r\\n\\x1a\\nfixture")
-        result = json.dumps({"success": True, "image": str(image)})
-        publish_hook_activity("post_tool_call", broker=broker, profile="default", payload={
-            "session_id": "session_a", "turn_id": internal_turn, "tool_name": "image_generate",
-            "tool_call_id": "call_a", "args": {}, "status": "ok", "result": result,
-        }, occurred_at=1_788_000_031)
-        emitted = broker.payloads[-1]
-        rows = self.rows([("call_a", "image_generate", result)])
-        self.assertEqual(self.resolve(rows, turn=emitted["turnId"])["state"], "ready")
-
     def test_workspace_resolves_exact_recent_call_in_long_history(self):
         import asyncio
         from loopdy_plugin.workspace_control import HermesWorkspaceBackend
