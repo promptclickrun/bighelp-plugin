@@ -155,6 +155,14 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema, TEMPLATE_SCHEMAS[tool_name])
                 self.assertIn("tool_search", description)
                 continue
+            if tool_name in ("bighelp_catalog_login", "bighelp_submit_catalog_template"):
+                from loopdy_plugin import catalog_submissions
+                expected = (catalog_submissions.LOGIN_PARAMETERS if tool_name.endswith("login")
+                            else catalog_submissions.SUBMIT_PARAMETERS)
+                self.assertEqual(renderer_schema["parameters"], expected)
+                self.assertRegex(description, "Only (start a sign-in|when the user asked)")
+                self.assertIn("tool_search", description)
+                continue
             self.assertIn("direct callable native bighelp renderer", description)
             self.assertIn("visible in the current tool list", description)
             self.assertIn("tool_search", description)

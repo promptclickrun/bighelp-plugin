@@ -91,6 +91,8 @@ provides_tools:
   - bighelp_templates_fill
   - bighelp_templates_create_agent
   - bighelp_workflows
+  - bighelp_catalog_login
+  - bighelp_submit_catalog_template
 platforms:
   - linux
   - macos
