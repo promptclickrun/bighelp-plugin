@@ -1,0 +1,14 @@
+{
+  "name": "loopdy",
+  "label": "bighelp",
+  "description": "The bighelp app's routes on this Hermes host: native features, notifications and approvals.",
+  "icon": "MessageSquare",
+  "version": "3.22.0",
+  "tab": {
+    "path": "/bighelp",
+    "position": "end",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

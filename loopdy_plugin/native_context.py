@@ -1,0 +1,394 @@
+"""Safe native HTTP identity; never a phone or model-turn authority."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+import logging
+import re
+import time
+import unicodedata
+import uuid
+
+from fastapi import Request
+
+from .version import PLUGIN_VERSION
+
+
+logger = logging.getLogger("hermes.plugins.bighelp")
+RUNTIME_ID = uuid.uuid4().hex
+PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
+_startup_advertisement_logged = False
+
+
+class NativeAPIError(Exception):
+    def __init__(self, status: int, code: str, message: str):
+        self.status, self.code, self.message = status, code, message
+        super().__init__(message)
+
+
+def _identity_text(value: object, maximum: int) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("Invalid identity")
+    if len(value.encode("utf-8")) > maximum or any(
+        unicodedata.category(character).startswith("C") for character in value
+    ):
+        raise ValueError("Invalid identity")
+    return value
+
+
+@dataclass(frozen=True)
+class NativeContext:
+    provider: str | None
+    user_id: str | None
+    display_name: str | None
+    serving_profile_id: str | None
+    features: tuple[str, ...]
+    runtime_id: str
+    # (feature, fixed reason code) for features this computer can't offer and the app can explain.
+    unavailable: tuple[tuple[str, str], ...] = ()
+
+    def payload(self) -> dict:
+        return {
+            "schemaVersion": 1,
+            "pluginVersion": PLUGIN_VERSION,
+            "runtimeId": self.runtime_id,
+            "servingProfileId": self.serving_profile_id,
+            "principal": {
+                "provider": self.provider,
+                "userId": self.user_id,
+                "displayName": self.display_name,
+            } if self.provider is not None else None,
+            "features": list(self.features),
+            **({"unavailable": dict(self.unavailable)} if self.unavailable else {}),
+        }
+
+    @property
+    def etag(self) -> str:
+        encoded = json.dumps(self.payload(), ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"), allow_nan=False).encode("utf-8")
+        return '"sha256:' + hashlib.sha256(encoded).hexdigest() + '"'
+
+
+def log_native_feature_startup(profile: str | None = None) -> None:
+    """Log the context API's inventory once from its own router lifespan.
+
+    The host may load registration and HTTP code in different namespaces;
+    only the API namespace can describe what HTTP clients will actually see.
+    The registration profile is diagnostic only: the API's verified process
+    profile, not a caller-supplied fallback, determines device availability.
+    """
+    global _startup_advertisement_logged
+    if _startup_advertisement_logged:
+        return
+    _startup_advertisement_logged = True
+    skipped: list[tuple[str, str]] = []
+    try:
+        serving_profile, advertised = _native_features(skipped=skipped)
+    except NativeAPIError as exc:
+        logger.warning(
+            "bighelp native startup inventory unavailable: %s; "
+            "the context API cannot advertise features.", exc.code)
+        return
+    except Exception as exc:
+        # Diagnostics must not turn a failing capability probe into a plugin
+        # registration failure. The request path retains its original errors.
+        logger.warning(
+            "bighelp native startup inventory unavailable: capability probe "
+            "failed (%s); no advertisement claimed.", type(exc).__name__)
+        return
+    if profile is not None and profile != serving_profile:
+        logger.warning(
+            "bighelp registration profile %r differs from verified serving "
+            "profile %r; startup inventory uses the serving profile.",
+            profile, serving_profile)
+    for feature, reason in skipped:
+        logger.warning("bighelp native feature %r NOT advertised: %s", feature, reason)
+    logger.info(
+        "bighelp native features advertised at startup: %s",
+        ", ".join(advertised))
+
+
+def native_context(request: Request) -> NativeContext:
+    try:
+        from hermes_cli.dashboard_auth.base import Session
+    except ImportError:
+        raise NativeAPIError(401, "native_identity_required",
+                             "A verified native interactive session is required.") from None
+    session = getattr(request.state, "session", None)
+    # Hermes authenticates EVERY mounted /api/plugins/* request before invoking
+    # this router, either by dashboard session token or its provider middleware.
+    # A dashboard-wide grant has no person identity; do not fabricate a Session.
+    dashboard_mode = (getattr(request.app.state, "auth_required", None) is False
+                      and not getattr(request.state, "token_authenticated", False)
+                      and request.url.path.startswith("/api/plugins/loopdy/native/"))
+    if dashboard_mode and session is None:
+        provider = user_id = display_name = None
+    else:
+        if not isinstance(session, Session):
+            raise NativeAPIError(401, "native_identity_required",
+                                 "A verified Hermes session is required.")
+        try:
+            provider = _identity_text(session.provider, 128)
+            user_id = _identity_text(session.user_id, 512)
+            display_name = None if session.display_name in ("", None) else _identity_text(session.display_name, 200)
+            if type(session.expires_at) is not int or session.expires_at <= time.time():
+                raise ValueError("Expired identity")
+        except (ValueError, UnicodeError):
+            raise NativeAPIError(401, "native_identity_invalid",
+                                 "The Hermes identity is invalid or expired.") from None
+
+    unavailable: dict[str, str] = {}
+    profile, features = _native_features(unavailable=unavailable)
+    return NativeContext(provider, user_id, display_name, profile, features, RUNTIME_ID,
+                         tuple(sorted(unavailable.items())))
+
+
+def _native_features(
+    *, skipped: list[tuple[str, str]] | None = None,
+    unavailable: dict[str, str] | None = None,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Single source for API predicates/order and optional startup diagnostics."""
+    def skip(feature: str, reason: str) -> None:
+        if skipped is not None:
+            skipped.append((feature, reason))
+
+    profile = None
+    features = ["native-context-v1"]
+    try:
+        from hermes_constants import get_process_hermes_home, profile_name_for_home
+    except ImportError:
+        # Older hosts cannot prove process profile; never infer "default".
+        skip("serving-profile-v1", "process profile helpers are unimportable.")
+    else:
+        profile = profile_name_for_home(get_process_hermes_home())
+        if profile is not None:
+            if not isinstance(profile, str) or PROFILE_ID.fullmatch(profile) is None:
+                raise NativeAPIError(503, "native_context_unavailable",
+                                     "The serving profile could not be verified.")
+            features.append("serving-profile-v1")
+        else:
+            skip("serving-profile-v1", "the process home has no verified serving profile.")
+    try:
+        from hermes_cli.profiles import profile_exists
+        from hermes_constants import (
+            get_process_hermes_home, set_hermes_home_override, reset_hermes_home_override,
+        )
+    except ImportError:
+        # The routes fail closed when their public profile helpers are absent.
+        skip("native-card-templates-v1", "public profile helpers are unimportable.")
+        skip("native-voice-v1", "public profile helpers are unimportable.")
+    else:
+        if all(callable(function) for function in (
+            profile_exists, get_process_hermes_home,
+            set_hermes_home_override, reset_hermes_home_override,
+        )):
+            features.extend(("native-card-templates-v1", "native-voice-v1"))
+        else:
+            skip("native-card-templates-v1", "one or more public profile helpers are not callable.")
+            skip("native-voice-v1", "one or more public profile helpers are not callable.")
+    try:
+        from .native_device_tools import (
+            CAPABILITY as device_tools_capability,
+            LOCATION_CAPABILITY as device_location_capability,
+            APPEARANCE_CAPABILITY as device_appearance_capability,
+            available as device_tools_available,
+        )
+        if profile is not None and device_tools_available(profile):
+            features.extend((device_tools_capability, device_location_capability, device_appearance_capability))
+        else:
+            reason = ("no unique lifecycle-owned middleware registration matches the "
+                      "verified serving profile (missing profile/registration, "
+                      "namespace/profile mismatch, or stale generations). "
+                      "Restart `hermes serve` and check the middleware registration warnings.")
+            skip(device_tools_capability, reason)
+            skip(device_location_capability, reason)
+            skip(device_appearance_capability, reason)
+    except ImportError:
+        skip("native-device-tools-v1", "native device-tool support is unimportable.")
+        skip("native-device-location-v1", "native device-tool support is unimportable.")
+        skip("native-device-appearance-v1", "native device-tool support is unimportable.")
+    from .room_activity import CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, activity_hub
+    if activity_hub().available:
+        features.extend((CAPABILITY, TYPING_CAPABILITY))
+    else:
+        skip(CAPABILITY, "the room activity hub is unavailable after registration.")
+        skip(TYPING_CAPABILITY, "the room activity hub is unavailable after registration.")
+    if activity_hub().peer_typing_available:
+        features.append(PEER_TYPING_CAPABILITY)
+    else:
+        skip(PEER_TYPING_CAPABILITY, "Hermes has no agent stream hook here.")
+    from .native_project_git import CAPABILITY as project_git_capability, supported as project_git_supported
+    if project_git_supported():
+        features.append(project_git_capability)
+    else:
+        skip(project_git_capability, "the host does not support native project Git reads.")
+    try:
+        from .agent_templates import CAPABILITY as agent_templates_capability
+        from .agent_templates import available as agent_templates_available
+        if agent_templates_available():
+            features.append(agent_templates_capability)
+        else:
+            skip(agent_templates_capability, "agent template availability checks failed.")
+    except ImportError:
+        skip("native-agent-templates-v1", "agent template support is unimportable.")
+    try:
+        from .workspace_artifacts import CAPABILITY as workspace_files_capability
+        from .workspace_artifacts import RECENT_CAPABILITY as workspace_recent_capability
+        from .workspace_artifacts import HERMES_HOME_CAPABILITY as workspace_home_capability
+        from .workspace_artifacts import AGENTS_CAPABILITY as workspace_agents_capability
+        from .workspace_artifacts import available as workspace_files_available
+        if workspace_files_available():
+            features.extend((workspace_files_capability, workspace_recent_capability, workspace_home_capability,
+                             workspace_agents_capability))
+        else:
+            skip(workspace_files_capability, "workspace file availability checks failed.")
+            skip(workspace_recent_capability, "workspace file availability checks failed.")
+            skip(workspace_home_capability, "workspace file availability checks failed.")
+            skip(workspace_agents_capability, "workspace file availability checks failed.")
+    except ImportError:
+        skip("native-workspace-files-v1", "workspace file support is unimportable.")
+        skip("native-workspace-recent-v1", "workspace file support is unimportable.")
+        skip("native-workspace-hermes-home-v1", "workspace file support is unimportable.")
+        skip("native-workspace-files-agents-v1", "workspace file support is unimportable.")
+    try:
+        from .agent_board import CAPABILITY as board_capability
+        from .agent_board import FEEDBACK_CAPABILITY as board_feedback_capability
+        from .agent_board import GOAL_CATEGORIES_CAPABILITY as board_categories_capability
+        from .agent_board import ANSWERS_CAPABILITY as board_answers_capability
+        from .agent_board import available as board_available
+        if board_available():
+            features.extend((board_capability, board_feedback_capability, board_categories_capability,
+                             board_answers_capability))
+        else:
+            skip(board_capability, "public profile helpers are unimportable.")
+            skip(board_feedback_capability, "public profile helpers are unimportable.")
+            skip(board_categories_capability, "public profile helpers are unimportable.")
+            skip(board_answers_capability, "public profile helpers are unimportable.")
+    except ImportError:
+        skip("native-agent-board-v1", "agent board support is unimportable.")
+        skip("native-agent-board-feedback-v1", "agent board support is unimportable.")
+        skip("native-agent-board-goal-categories-v1", "agent board support is unimportable.")
+        skip("native-agent-board-answers-v1", "agent board support is unimportable.")
+    try:
+        from .native_attachments import CAPABILITY as attachments_capability
+        from .native_attachments import MEDIA_CAPABILITY as media_capability
+        from .native_attachments import available as attachments_available
+        if profile is not None and attachments_available():
+            features.extend((attachments_capability, media_capability))
+        else:
+            skip(attachments_capability, "gateway media policy or profile helpers are unavailable.")
+            skip(media_capability, "gateway media policy or profile helpers are unavailable.")
+    except ImportError:
+        skip("native-agent-attachments-v1", "native attachment support is unimportable.")
+        skip("native-agent-media-v1", "native attachment support is unimportable.")
+    # Files on Feed posts ride the attachment routes, so they need both.
+    if "native-agent-board-v1" in features and "native-agent-attachments-v1" in features:
+        features.append("native-agent-board-files-v1")
+    else:
+        skip("native-agent-board-files-v1", "the agent board or native attachments are unavailable.")
+    from .host_restart import CAPABILITY as restart_capability, available as restart_available
+    if restart_available():
+        features.append(restart_capability)
+    else:
+        skip(restart_capability, "in-place restart needs a POSIX host.")
+    from .people import CAPABILITY as people_capability, available as people_available
+    if people_available():
+        features.append(people_capability)
+    else:
+        skip(people_capability, "public profile helpers are unimportable.")
+    from .provider_usage import CAPABILITY as usage_capability, available as usage_available
+    if usage_available():
+        features.append(usage_capability)
+    else:
+        skip(usage_capability, "public profile helpers are unimportable.")
+    from .usage_activity import CAPABILITY as activity_capability, available as activity_available
+    if activity_available():
+        features.append(activity_capability)
+    else:
+        skip(activity_capability, "public profile helpers are unimportable.")
+    from .provider_sign_in import CAPABILITY as sign_in_capability, available as sign_in_available
+    if sign_in_available():
+        features.append(sign_in_capability)
+    else:
+        skip(sign_in_capability, "sign-ins need a POSIX terminal and public profile helpers.")
+    try:
+        from .workflow_api import (CAPABILITY as workflows_capability, EDIT_CAPABILITY as workflows_edit_capability,
+                                   TRIGGER_CAPABILITY as workflows_trigger_capability,
+                                   PARALLEL_CAPABILITY as workflows_parallel_capability,
+                                   DELIVERY_CAPABILITY as workflows_delivery_capability,
+                                   OUTCOMES_CAPABILITY as workflows_outcomes_capability,
+                                   CODE_CAPABILITY as workflows_code_capability,
+                                   probe as workflows_probe, triggers_available, code_available)
+        reason = workflows_probe()
+        if reason is None:
+            features.extend((workflows_capability, workflows_edit_capability, workflows_parallel_capability,
+                             workflows_delivery_capability, workflows_outcomes_capability))
+            if triggers_available():
+                features.append(workflows_trigger_capability)
+            else:
+                skip(workflows_trigger_capability, "this Hermes has no cron jobs.")
+            if code_available():
+                features.append(workflows_code_capability)
+            else:
+                skip(workflows_code_capability, "git isn't installed on this computer.")
+        else:
+            why = {
+                "not_posix": "workflows need a POSIX host.",
+                "chat_runner_missing": "this Hermes has no `chat -q` runner.",
+                "profile_helpers_missing": "public profile helpers are unimportable.",
+            }.get(reason, "the workflow store can't be opened.")
+            skip(workflows_capability, why)
+            skip(workflows_edit_capability, why)
+            skip(workflows_parallel_capability, why)
+            skip(workflows_delivery_capability, why)
+            skip(workflows_outcomes_capability, why)
+            skip(workflows_trigger_capability, why)
+            skip(workflows_code_capability, why)
+            if unavailable is not None:
+                # A fixed code, so the app can say what to do (update Hermes, for example).
+                unavailable[workflows_capability] = reason
+    except ImportError:
+        skip("native-workflows-v1", "workflow support is unimportable.")
+        skip("native-workflows-edit-v1", "workflow support is unimportable.")
+        skip("native-workflows-parallel-v1", "workflow support is unimportable.")
+        skip("native-workflows-delivery-v1", "workflow support is unimportable.")
+        skip("native-workflows-outcomes-v1", "workflow support is unimportable.")
+        skip("native-workflows-trigger-v1", "workflow support is unimportable.")
+        skip("native-workflows-code-v1", "workflow support is unimportable.")
+    from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
+    if live_alerts_available():
+        features.append(live_alerts_capability)
+    else:
+        skip(live_alerts_capability, "the notification journal needs a POSIX host and Hermes' home helpers.")
+    from .quiet_hours import CAPABILITY as quiet_capability, available as quiet_available
+    if quiet_available():
+        features.append(quiet_capability)
+    else:
+        skip(quiet_capability, "notifications need a POSIX host that can read time zones.")
+    from .composio import CAPABILITY as composio_capability, available as composio_available
+    if composio_available():
+        features.append(composio_capability)
+    else:
+        skip(composio_capability, "Hermes' MCP config helpers are unimportable.")
+    from .agent_talk import CAPABILITY as agent_talk_capability, available as agent_talk_available
+    if agent_talk_available():
+        features.append(agent_talk_capability)
+    else:
+        skip(agent_talk_capability, "public profile helpers are unimportable.")
+    from .chat_activity import CAPABILITY as chat_activity_capability, available as chat_activity_available
+    if chat_activity_available():
+        features.append(chat_activity_capability)
+    else:
+        skip(chat_activity_capability, "Hermes' chat leases are unreadable here.")
+    from .team import CAPABILITY as team_capability, available as team_available
+    if team_available():
+        features.append(team_capability)
+    else:
+        skip(team_capability, "Hermes' profile and config helpers are unimportable.")
+    from .my_templates import CAPABILITY as my_templates_capability, available as my_templates_available
+    if my_templates_available():
+        features.append(my_templates_capability)
+    else:
+        skip(my_templates_capability, "saved templates need a POSIX host and Hermes' home helpers.")
+    return profile, tuple(features)
