@@ -95,14 +95,30 @@ class PluginUpdateExecutionTests(unittest.TestCase):
         self.begin()
         self.manager._worker_transition(self.operation_id, "timed_out", "Waiting", target_revision=target, restart_requested_at=1)
         with patch.object(api, "_metadata_revision", return_value=other):
-            # Same lifecycle that started the operation: still ambiguous, still held.
-            self.assertEqual(self.manager.status(self.operation_id, self.device)["phase"], "timed_out")
             with patch.object(api, "LOADED_REVISION", other), patch.object(api, "RUNTIME_ID", "runtime_later"):
                 self.manager.record_runtime_loaded()
             status = self.manager.status(self.operation_id, self.device)
             self.assertEqual(status["phase"], "failed")
             self.assertIn("Superseded", status["message"])
             self.assertEqual(self.manager.start("update_second_0123456789", self.device, True)["phase"], "accepted")
+
+    def test_timeout_on_a_host_that_installed_other_bytes_is_superseded_without_a_runtime_report(self):
+        # Hosts without the old push gateway never report a runtime. When the installation holds other
+        # bytes (the app installed a newer release), the target can never activate: release the host.
+        target, other = "a" * 40, "c" * 40
+        self.begin()
+        self.manager._worker_transition(self.operation_id, "timed_out", "Waiting", target_revision=target, restart_requested_at=1)
+        with patch.object(api, "_metadata_revision", return_value=other):
+            status = self.manager.status(self.operation_id, self.device)
+            self.assertEqual(status["phase"], "failed")
+            self.assertIn("Superseded", status["message"])
+            self.assertEqual(self.manager.start("update_second_0123456789", self.device, True)["phase"], "accepted")
+
+    def test_timeout_with_an_unknown_installation_stays_held(self):
+        self.begin()
+        self.manager._worker_transition(self.operation_id, "timed_out", "Waiting", target_revision="a" * 40, restart_requested_at=1)
+        with patch.object(api, "_metadata_revision", return_value=""):
+            self.assertEqual(self.manager.status(self.operation_id, self.device)["phase"], "timed_out")
 
     def test_timeout_is_held_while_the_target_is_still_installed(self):
         target = "a" * 40

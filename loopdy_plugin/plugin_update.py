@@ -439,22 +439,20 @@ class PluginUpdateManager:
             operation["message"] = "The updated bighelp plugin is active."
             operation["updated_at"] = int(time.time())
             return True
-        active = str(runtime.get("revision") or "")
         installed = _metadata_revision(self.plugin_root)
         if (
             _REVISION.fullmatch(target)
-            and fresh
-            and _REVISION.fullmatch(active)
-            and active != target
             and _REVISION.fullmatch(installed)
             and installed != target
         ):
-            # A gateway lifecycle newer than this operation is running other
-            # bytes, and the installation is positively known to hold other
-            # bytes too, so this target can never activate and no restart is in
-            # flight. Without this, the non-terminal phase would refuse every
-            # later update on this host forever. An unknown installation stays
-            # held: absence of evidence is not supersession.
+            # These phases come after the install. The installation is now
+            # positively known to hold other bytes (for example the app
+            # installed a newer release), so no restart can ever activate this
+            # target. Hosts without the old push gateway may never report a
+            # runtime, so this can't wait for one. Without it, the non-terminal
+            # phase would refuse every later update on this host forever. An
+            # unknown installation stays held: absence of evidence is not
+            # supersession.
             operation["phase"] = "failed"
             operation["message"] = _bounded_message(
                 "Superseded: the gateway restarted onto a different installed revision. "
