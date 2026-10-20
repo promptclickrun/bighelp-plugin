@@ -75,6 +75,10 @@ hermes bighelp update --restart  # …and restart the gateway once
 hermes bighelp update-status     # check the last update
 ```
 
+An update finishes when the restarted Hermes serves the app with the new release. If another install replaced it
+first (for example from the bighelp app), `update-status` says that the update was superseded. You can then start a
+new update.
+
 `hermes bighelp update` installs only [GitHub Releases](https://github.com/promptclickrun/bighelp-plugin/releases).
 The maintainer releases merged changes together from time to time (`.github/workflows/release.yml`). Thus a merge
 alone does not get to hosts.

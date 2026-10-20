@@ -251,6 +251,22 @@ class NativeAPITests(unittest.TestCase):
         with patch("hermes_constants.profile_name_for_home", return_value="../private"):
             self.assertEqual(self.context().status_code, 503)
 
+    def test_the_first_context_records_the_serving_runtime_once(self):
+        # A plugin update started with `hermes bighelp update` completes when the restarted server loads
+        # the new bytes; the first app request in a process is that proof, on hosts with no push gateway.
+        recorded = []
+
+        class Manager:
+            def record_runtime_loaded(self):
+                recorded.append(True)
+
+        with patch.object(native_api, "_runtime_recorded", False), \
+                patch("loopdy_plugin.plugin_update.production_manager", return_value=Manager()) as factory:
+            self.assertEqual(self.context().status_code, 200)
+            self.assertEqual(self.context().status_code, 200)
+        self.assertEqual(recorded, [True])
+        self.assertEqual(factory.call_args.args[0], self.context().json()["servingProfileId"])
+
     def test_context_takes_no_body_or_selected_profile_query(self):
         for path in ("/context?profile=research", "/context?actor=alice"):
             self.assertEqual(self.client.get(PREFIX + path, headers=self.headers()).status_code, 422)
