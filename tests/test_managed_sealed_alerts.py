@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from loopdy_plugin.managed_notifications import ManagedNotificationError
-from loopdy_plugin.relay_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes
+from loopdy_plugin.notification_crypto import b64url_decode, b64url_encode, canonical_json_bytes, key_id, public_key_bytes
 from loopdy_plugin.sealed_alerts import MAX_ENVELOPE_BYTES, avatar_aad, seal_alert
 from test_managed_notifications import ManagedNotificationTests, open_sealed
 

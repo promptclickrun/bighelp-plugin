@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from loopdy_plugin import quiet_hours
 from loopdy_plugin.managed_notifications import ManagedNotifications, ManagedNotificationError
-from loopdy_plugin.relay_crypto import b64url_encode, public_key_bytes
+from loopdy_plugin.notification_crypto import b64url_encode, public_key_bytes
 
 
 def at(text: str) -> float:

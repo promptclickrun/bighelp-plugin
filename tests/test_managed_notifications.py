@@ -17,8 +17,18 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from loopdy_plugin.managed_notifications import ManagedNotifications, ManagedNotificationError, host_request_transcript, session_reference
-from loopdy_plugin.relay_crypto import b64url_encode, b64url_decode, key_id, public_key_bytes, public_key_from_x963, verify_p1363
+from loopdy_plugin.notification_crypto import b64url_encode, b64url_decode, key_id, public_key_bytes, public_key_from_x963
 from loopdy_plugin.sealed_alerts import alert_aad, signature_input
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+
+def verify_p1363(public_key, signature, value):
+    """Check a raw 64-byte P-256 signature, as the notification service does."""
+    if len(signature) != 64:
+        raise InvalidSignature("P1363 signature must be 64 bytes")
+    der = encode_dss_signature(int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big"))
+    public_key.verify(der, bytes(value), ec.ECDSA(hashes.SHA256()))
 
 
 def open_sealed(envelope: dict, recipient: ec.EllipticCurvePrivateKey, sender_public: bytes) -> dict:

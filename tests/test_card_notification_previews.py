@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loopdy_plugin.managed_notifications import ManagedNotifications, session_reference
-from loopdy_plugin.relay_crypto import b64url_decode
+from loopdy_plugin.notification_crypto import b64url_decode
 from loopdy_plugin.store import BighelpStore
 from loopdy_plugin.tools import register as register_tools
 from test_managed_notifications import ManagedNotificationTests, open_sealed

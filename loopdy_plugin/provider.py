@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Protocol
 
-from .relay_crypto import b64url_decode
+from .notification_crypto import b64url_decode
 
 
 ProviderMode = Literal["managed", "direct", "relay"]

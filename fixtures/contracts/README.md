@@ -1,11 +1,8 @@
-# Relay contract fixtures
+# Contract fixtures
 
-These deterministic version-1 relay vectors are vendored from the canonical
-bighelp contract fixtures so the installable Hermes plugin and its tests remain
-self-contained. Keep byte-for-byte parity with:
+These test vectors are shared with the bighelp app. They hold made-up
+coordinates and keys only, never production credentials.
 
-- `packages/contracts/fixtures/relay-v1-vector.json`
-- `packages/contracts/fixtures/relay-session-coordinate-v1.json`
-
-The vectors contain synthetic test coordinates and keys only. They are not
-production credentials.
+- `sealed-alert-v2-vector.json`: one sealed notification. It must match the
+  app's copy byte for byte.
+- `workflows-v1/`: requests and answers for the workflow routes.

@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from loopdy_plugin import live_alerts
 from loopdy_plugin.managed_notifications import ManagedNotifications, session_reference
-from loopdy_plugin.relay_crypto import b64url_decode, b64url_encode, key_id, public_key_bytes
+from loopdy_plugin.notification_crypto import b64url_decode, b64url_encode, key_id, public_key_bytes
 from test_managed_notifications import open_sealed
 
 
