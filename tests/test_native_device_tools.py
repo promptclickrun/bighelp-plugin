@@ -207,6 +207,74 @@ class NativeDeviceToolHubTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NativeDeviceToolError) as error:
             self.hub.connect(self.owner, second)
         self.assertEqual(error.exception.code, "channel_ambiguous")
+        # The phone that was there first keeps its channel.
+        self.assertEqual(self.hub.poll(self.owner, {"channelId": first["channelId"], "after": 0})["next"], 0)
+
+    async def test_the_same_phone_reconnecting_replaces_its_own_stale_channel(self) -> None:
+        # The app was closed, or its close never arrived, and the chat opens again on the same
+        # phone well inside the old channel's lease.
+        stale = channel_fields()
+        self.hub.connect(self.owner, stale)
+        waiting = asyncio.create_task(self.hub.execute(
+            profile="default", session_id="stored-session", turn_id="turn-stale",
+            tool_call_id="call-stale", operation="reminders.list", arguments={},
+        ))
+        await asyncio.sleep(0)
+        self.clock.advance(5)
+        fresh = channel_fields(device_id=stale["deviceId"])
+        self.assertEqual(self.hub.connect(self.owner, fresh), {"channelId": fresh["channelId"], "connected": True})
+        # A call waiting on the old channel fails as it does when that channel closes.
+        self.assertEqual((await waiting)["code"], "phone_unavailable")
+        for operation in (
+            lambda: self.hub.poll(self.owner, {"channelId": stale["channelId"], "after": 0}),
+            lambda: self.hub.close(self.owner, {"channelId": stale["channelId"]}),
+        ):
+            with self.assertRaises(NativeDeviceToolError) as error:
+                operation()
+            self.assertEqual(error.exception.code, "phone_unavailable")
+        with self.assertRaises(NativeDeviceToolError) as reused:
+            self.hub.connect(self.owner, stale)
+        self.assertEqual(reused.exception.code, "channel_id_consumed")
+        # New calls go to the new channel only.
+        self.assertEqual(self.hub.native_channel_count("default", "stored-session"), 1)
+        task = asyncio.create_task(self.hub.execute(
+            profile="default", session_id="stored-session", turn_id="turn-fresh",
+            tool_call_id="call-fresh", operation="reminders.list", arguments={},
+        ))
+        await asyncio.sleep(0)
+        request = self.hub.poll(self.owner, fresh, after=0)["requests"][0]["request"]
+        self.hub.accept_result(self.owner, fresh, device_tool_result(
+            request=request, status="completed", payload={"items": []}, sent_at=self.clock.value,
+        ))
+        self.assertEqual((await task)["status"], "completed")
+
+    def test_the_same_phone_replaces_its_channel_across_runtime_and_stored_ids(self) -> None:
+        from loopdy_plugin import native_device_tools
+
+        stale = channel_fields(session_id="runtime-session")
+        fresh = channel_fields(device_id=stale["deviceId"], session_id="stored-session")
+        with patch.object(native_device_tools, "_live_sessions_snapshot", return_value={
+            "runtime-session": {"session_key": "stored-session"},
+        }):
+            self.hub.connect(self.owner, stale)
+            self.hub.connect(self.owner, fresh)
+            self.assertEqual(self.hub.native_channel_count("default", "stored-session"), 1)
+        self.assertNotIn(stale["channelId"], self.hub.channels)
+
+    def test_only_the_same_person_and_host_scope_can_replace_a_phones_channel(self) -> None:
+        held = channel_fields()
+        self.hub.connect(self.owner, held)
+        for owner, changes in (
+            (Owner(user_id="other-user"), {}),
+            (Owner(provider="other-provider"), {}),
+            (self.owner, {"hostId": "other-host"}),
+        ):
+            with self.subTest(owner=owner, changes=changes):
+                claim = {**channel_fields(device_id=held["deviceId"]), **changes}
+                with self.assertRaises(NativeDeviceToolError) as error:
+                    self.hub.connect(owner, claim)
+                self.assertEqual(error.exception.code, "channel_ambiguous")
+        self.assertEqual(self.hub.poll(self.owner, {"channelId": held["channelId"], "after": 0})["next"], 0)
 
     def test_channel_owner_is_fenced_for_poll_result_and_close(self) -> None:
         fields = channel_fields()

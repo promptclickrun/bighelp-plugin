@@ -110,6 +110,12 @@ Hermes' own session, turn and tool-call IDs. Nothing is taken from the model's a
 to use. With no open channel, the tool fails with `phone_unavailable`. A call the phone doesn't answer in time fails
 rather than being retried.
 
+One chat has one phone. A `connect` for a chat that another phone holds fails with `channel_ambiguous`: the plugin
+never picks a phone by which one came last. The same phone opening the chat again (the same signed-in person,
+`deviceId` and `hostId`) replaces its own earlier channel, for example after the app closed before its `close`
+arrived. A call that waits on the old channel fails with `phone_unavailable`, as it does when that channel closes,
+and the old channel's `close` answers `phone_unavailable` too.
+
 The plugin advertises `native-device-tools-v1` only when the Hermes host supports tool execution middleware.
 `native-device-location-v1` comes with it and tells the app that `location` may be in the channel's `enabled`
 list; older plugins reject it, so the app leaves Location out for them and asks you to update the plugin.
