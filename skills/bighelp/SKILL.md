@@ -160,8 +160,6 @@ back in bighelp's Appearance. Don't make a theme file for this.
 
 ## Template Catalog
 
-The tools in this section are in the `bighelp_templates` toolset.
-
 When the user wants a template or a new kind of agent, look in bighelp's
 Template Catalog: `bighelp_templates_search`, then `bighelp_templates_get`.
 Fill an agent template with them using `bighelp_templates_fill`: ask for each
