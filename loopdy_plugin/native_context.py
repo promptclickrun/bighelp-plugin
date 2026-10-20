@@ -75,7 +75,6 @@ def log_native_feature_startup(profile: str | None = None) -> None:
 
     The host may load registration and HTTP code in different namespaces;
     only the API namespace can describe what HTTP clients will actually see.
-    Wiki features require a request principal and are explicitly excluded.
     The registration profile is diagnostic only: the API's verified process
     profile, not a caller-supplied fallback, determines device availability.
     """
@@ -83,13 +82,9 @@ def log_native_feature_startup(profile: str | None = None) -> None:
     if _startup_advertisement_logged:
         return
     _startup_advertisement_logged = True
-    logger.info(
-        "bighelp request-dependent features excluded from the startup inventory: "
-        "native-wiki-v1, native-wiki-disconnect-v1 (require a verified request "
-        "principal, profile helpers, and available wiki operations).")
     skipped: list[tuple[str, str]] = []
     try:
-        serving_profile, advertised = _native_features(None, skipped=skipped)
+        serving_profile, advertised = _native_features(skipped=skipped)
     except NativeAPIError as exc:
         logger.warning(
             "bighelp native startup inventory unavailable: %s; "
@@ -144,13 +139,13 @@ def native_context(request: Request) -> NativeContext:
                                  "The Hermes identity is invalid or expired.") from None
 
     unavailable: dict[str, str] = {}
-    profile, features = _native_features(provider, unavailable=unavailable)
+    profile, features = _native_features(unavailable=unavailable)
     return NativeContext(provider, user_id, display_name, profile, features, RUNTIME_ID,
                          tuple(sorted(unavailable.items())))
 
 
 def _native_features(
-    provider: str | None, *, skipped: list[tuple[str, str]] | None = None,
+    *, skipped: list[tuple[str, str]] | None = None,
     unavailable: dict[str, str] | None = None,
 ) -> tuple[str | None, tuple[str, ...]]:
     """Single source for API predicates/order and optional startup diagnostics."""
@@ -223,9 +218,6 @@ def _native_features(
         features.append(PEER_TYPING_CAPABILITY)
     else:
         skip(PEER_TYPING_CAPABILITY, "Hermes has no agent stream hook here.")
-    from .wiki_contract import available_wiki_operations
-    if provider is not None and "native-card-templates-v1" in features and available_wiki_operations():
-        features.extend(("native-wiki-v1", "native-wiki-disconnect-v1"))
     from .native_project_git import CAPABILITY as project_git_capability, supported as project_git_supported
     if project_git_supported():
         features.append(project_git_capability)

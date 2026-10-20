@@ -50,7 +50,6 @@ from loopdy_plugin.workspace_git import (  # noqa: E402
 from loopdy_plugin.workspace_files_api import router as workspace_files_router  # noqa: E402
 from loopdy_plugin.native_api import router as native_router  # noqa: E402
 from loopdy_plugin.room_activity_api import router as room_activity_router  # noqa: E402
-from loopdy_plugin.native_wiki_api import router as native_wiki_router  # noqa: E402
 from loopdy_plugin.workflow_api import router as native_workflows_router  # noqa: E402
 from loopdy_plugin.native_project_git import router as native_project_git_router  # noqa: E402
 from loopdy_plugin.agent_templates import (  # noqa: E402
@@ -63,7 +62,6 @@ router = APIRouter()
 router.include_router(workspace_files_router)
 router.include_router(native_router)
 router.include_router(room_activity_router, prefix="/native")
-router.include_router(native_wiki_router)
 router.include_router(native_workflows_router)
 router.include_router(native_project_git_router)
 router.include_router(agent_templates_router)
