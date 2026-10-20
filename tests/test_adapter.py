@@ -42,15 +42,6 @@ class _EventStore:
         self.records[event_id]["status"] = "sent"
         return True
 
-    def mark_event_prompted(self, event_id):
-        self.records[event_id]["status"] = "prompted"
-        return True
-
-    def mark_event_pending(self, event_id, delivery_id):
-        self.records[event_id]["status"] = "pending"
-        self.records[event_id]["delivery_id"] = delivery_id
-        return True
-
     def mark_event_failed(self, event_id, failure):
         self.failed.append((event_id, failure))
         self.records[event_id]["status"] = "failed"
