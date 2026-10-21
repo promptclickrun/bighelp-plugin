@@ -133,14 +133,12 @@ def brief(agent_id: str, agents: list[dict[str, str]]) -> str:
         "answer with what each found and who helped.",
         "- Do it yourself when it's quick, when it's conversation, when no teammate fits better, or when the "
         "person asks for you.",
-        f'- To ask a teammate, run in the terminal (it can take a few minutes): hermes -p <id> chat -Q -q '
-        f'"Message from {who}: <message>". Escape double quotes. Their reply is the output. For multi-minute '
-        'work that must survive mobile disconnects, load skill_view("loopdy:profile-agent-collaboration") and '
-        "run its team_handoff.py helper in the terminal with background=true, notify=true, and "
-        "persist_on_release=true (do not use message_agent for local teammates; its background runner lacks "
-        "persist_on_release=true and is stopped if the phone disconnects).",
-        "- You still own the person's final answer after a handoff: when a background teammate handoff "
-        "finishes, continue the request and deliver the combined result.",
+        "- To ask a teammate, use the message_agent tool. It reaches their Bot Chat even while it's open in "
+        "bighelp, and their reply arrives later as a message. Without message_agent, run in the terminal (it "
+        f'can take a few minutes): hermes -p <id> chat -Q -q "Message from {who}: <message>". Escape double '
+        "quotes. Their reply is the output.",
+        "- You still own the person's final answer: a queued message isn't an answer. When the teammate's reply "
+        "arrives, continue the request and give the person the combined result.",
         "- Brief them like a coworker: the goal, the facts they need and what to send back. Share only what the "
         "task needs, and keep the person's private details private.",
         "- Tell the person in one short line who you're asking and why, then pass on the answer.",
