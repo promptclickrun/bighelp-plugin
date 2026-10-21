@@ -152,6 +152,23 @@ class TeamTests(unittest.TestCase):
         self.assertIn("- Sage (@sage): Research.", self.hermes.hint("nova"))
         self.assertIn("## Your team", self.hermes.hint("sage"))
 
+    def test_a_plugin_update_that_rewords_the_brief_reaches_every_agent(self):
+        """Same roster, new brief wording (a plugin update): the next due bighelp turn saves the new words."""
+        self.team.set_enabled(True)
+        old = self.hermes.hint("nova")
+        team_patch = patch.object(team, "team", return_value=self.team)
+        team_patch.start()
+        self.addCleanup(team_patch.stop)
+        reworded = lambda agent_id, agents: team_brief(agent_id, agents).replace("## Your team", "## Your team (v2)")
+        team_brief = team.brief
+        with patch.object(team, "brief", side_effect=reworded):
+            self.clock[0] += team.REFRESH_SECONDS + 1
+            team._pre_llm_call(platform="bighelp", session_id="s1")
+        for profile in ("default", "havok", "nova"):
+            self.assertIn("## Your team (v2)", self.hermes.hint(profile))
+            self.assertEqual(self.hermes.hint(profile).count("## Your team"), 1, "The old words are replaced")
+        self.assertNotEqual(old, self.hermes.hint("nova"))
+
     def test_off_by_default_and_a_failed_write_is_reported(self):
         status = self.team.status()
         self.assertFalse(status["enabled"])

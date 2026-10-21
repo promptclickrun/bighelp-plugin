@@ -44,9 +44,9 @@ Hermes' own config helpers and lock, the same way the dashboard saves config.
 - Text that was already in `platform_hints.bighelp` stays; the brief is added
   after it, and turning Teamwork off removes only the brief.
 - The roster stays current: each bighelp chat on the default agent checks at
-  most every 10 minutes whether agents were added, renamed or removed, and
-  saves new briefs only when something changed. The app's Settings also
-  refreshes it.
+  most every 10 minutes whether agents were added, renamed or removed, or
+  whether a plugin update changed the brief's words, and saves new briefs only
+  when something changed. The app's Settings also refreshes it.
 - A chat keeps the instructions it started with. So a bighelp chat on the
   default agent that started before Teamwork (or before the roster changed)
   gets the current brief once, through the plugin's `pre_llm_call` context:
