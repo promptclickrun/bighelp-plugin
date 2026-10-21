@@ -580,6 +580,11 @@ def _process_env(hermes_home: Path, *, git: bool = False) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "PYTHONUTF8": "1",
     }
+    # Set by the launcher (plugin_update._hermes_worker_settings): without them `python -m hermes_cli.main`
+    # can't import Hermes on a bundled interpreter, or stalls on a dependency sync the host turned off.
+    for key in ("PYTHONPATH", "HERMES_DISABLE_LAZY_INSTALLS"):
+        if os.environ.get(key):
+            env[key] = os.environ[key]
     if git:
         env.update(
             {
