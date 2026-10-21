@@ -35,6 +35,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from . import live_alerts
+from . import notification_channels
 from . import quiet_hours
 from . import scheduled_links
 from .card_previews import reply_preview
@@ -302,6 +303,8 @@ class ManagedNotifications:
         self._send_on_queue = send_on_queue if send_on_queue is not None else (
             _send_in_background if transport is _https_request else None)
         self.session_opener = session_opener
+        # An agent's scheduled jobs, for where a run delivers (notification_channels.py).
+        self.cron_jobs: Callable[[str], list[dict[str, Any]]] = notification_channels.read_cron_jobs
         self.preference_policy: Callable | None = None
         # Live hook state. A fresh process starts empty; get_managed_notifications
         # passes the process-wide store so every import of this module shares it.
@@ -349,6 +352,7 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS workflow_alerts(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, needs_you INTEGER NOT NULL, succeeded INTEGER NOT NULL, failed INTEGER NOT NULL, cancelled INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS workflow_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_seq INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS scheduled_links(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS channel_rules(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, rules TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS quiet_hours(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, time_zone TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
@@ -401,7 +405,8 @@ class ManagedNotifications:
             clarification_loaded = bool(self._clarification_profiles)
         return {"version": 1, "hostKeyId": self.key_id, "hostPublicKey": self.public_key,
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
-                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True, "scheduledLinks": True},
+                "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True, "scheduledLinks": True,
+                                                                "channels": True},
                 "richLiveActivitySupported": True, "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
@@ -561,32 +566,57 @@ class ManagedNotifications:
             db.execute("DELETE FROM avatar_keys WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM quiet_hours WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM scheduled_links WHERE grant_id=?", (grant_id,))
+            db.execute("DELETE FROM channel_rules WHERE grant_id=?", (grant_id,))
         return {"version": 1, "state": "removed", "grantId": grant_id}
 
     def preferences(self, grant_id: str):
         """This phone's alert preferences for the host. Peer chats start off; workflow alerts start on.
-        Scheduled links start off: a phone turns them on when it can open them (scheduled_links.py)."""
+        Scheduled links start off: a phone turns them on when it can open them (scheduled_links.py).
+        Every channel starts on (notification_channels.py)."""
         self._grant(grant_id)
         with self._db() as db:
             row = db.execute("SELECT peer_chats FROM preferences WHERE grant_id=?", (grant_id,)).fetchone()
             workflows = self._workflow_alerts(db, grant_id)
             links = db.execute("SELECT enabled FROM scheduled_links WHERE grant_id=?", (grant_id,)).fetchone()
+            rules = self._channel_rules(db, grant_id)
         return {"version": 1, "peerChats": bool(row and row["peer_chats"]), "workflows": workflows,
-                "scheduledLinks": bool(links and links["enabled"])}
+                "scheduledLinks": bool(links and links["enabled"]), "channels": rules.public()}
+
+    @staticmethod
+    def _channel_rules(db, grant_id: str) -> notification_channels.ChannelRules:
+        row = db.execute("SELECT rules FROM channel_rules WHERE grant_id=?", (grant_id,)).fetchone()
+        return notification_channels.ChannelRules.stored(row["rules"] if row else None)
+
+    def channels(self, grant_id: str):
+        """Channels this phone's agent has talked on or delivers to, for its Channels list."""
+        grant = self._grant(grant_id)
+        profile = _identifier(grant.get("profile"), _PROFILE)
+        found = notification_channels.profile_channels(profile, opener=self.session_opener, jobs=self.cron_jobs)
+        return {"version": 1, "profile": profile, "channels": found}
 
     @staticmethod
     def _workflow_alerts(db, grant_id: str) -> dict[str, bool]:
         row = db.execute("SELECT * FROM workflow_alerts WHERE grant_id=?", (grant_id,)).fetchone()
         return {kind: bool(row[column]) if row else True for kind, column in _WORKFLOW_COLUMNS.items()}
 
-    def set_preferences(self, grant_id: str, *, peer_chats: Any, workflows: Any = None, scheduled_links: Any = None):
+    def set_preferences(self, grant_id: str, *, peer_chats: Any, workflows: Any = None, scheduled_links: Any = None,
+                        channels: Any = None):
         self._grant(grant_id)
         if type(peer_chats) is not bool or (scheduled_links is not None and type(scheduled_links) is not bool):
             raise ManagedNotificationError("notification_preferences_invalid", 422)
         if workflows is not None and (not isinstance(workflows, dict) or set(workflows) != set(WORKFLOW_ALERT_KINDS)
                                       or any(type(value) is not bool for value in workflows.values())):
             raise ManagedNotificationError("notification_preferences_invalid", 422)
+        rules = None
+        if channels is not None:
+            try:
+                rules = notification_channels.ChannelRules.validated(channels)
+            except ValueError:
+                raise ManagedNotificationError("notification_preferences_invalid", 422) from None
         with self._db() as db:
+            if rules is not None:
+                db.execute("INSERT INTO channel_rules VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET rules=excluded.rules",
+                           (grant_id, rules.stored_json()))
             db.execute("INSERT INTO preferences VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET peer_chats=excluded.peer_chats",
                        (grant_id, int(peer_chats)))
             if workflows is not None:
@@ -1065,6 +1095,30 @@ class ManagedNotifications:
             logger.warning("Scheduled alert link unavailable; the alert names its run")
             return None
 
+    def _filters_channels(self, profile: str, now: int) -> bool:
+        """Whether any phone with this agent's alerts turned a channel off."""
+        with self._db() as db:
+            rows = db.execute("SELECT c.rules FROM channel_rules c JOIN grants g ON g.grant_id=c.grant_id "
+                              "WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?",
+                              (now, profile)).fetchall()
+        return any(not notification_channels.ChannelRules.stored(row["rules"]).is_default for row in rows)
+
+    def _alert_channels(self, profile: str, session_id: str, event_type: str) -> frozenset[str] | None:
+        """The channels an alert comes from: its session's source, or for a scheduled run, where the job
+        delivers. None when the session can't be read: the alert isn't filtered then."""
+        try:
+            row = self.session_opener(profile, lambda db: db.get_session(session_id), read_only=True)
+        except Exception:  # A gone or unreadable session still alerts, as before.
+            row = None
+        source = row.get("source") if isinstance(row, dict) and row.get("id") == session_id else None
+        cron = isinstance(source, str) and source.strip().lower() == "cron"
+        if event_type.startswith("scheduled.") or cron or (source is None and _CRON_SESSION.fullmatch(session_id)):
+            job = scheduled_links.job_of_run(profile, session_id)
+            return notification_channels.scheduled_channels(profile, job, failed=event_type == "scheduled.failed",
+                                                            jobs=self.cron_jobs)
+        channel = notification_channels.channel_of_source(source) if source is not None else None
+        return frozenset({channel}) if channel else None
+
     def _queue_event(self, profile: str, session_id: str, turn_id: str, event_type: str,
                      *, tool_call_id: str | None = None, event_key: str = "",
                      content_text: str, title: str | None = None, workflow_kind: str | None = None,
@@ -1088,12 +1142,17 @@ class ManagedNotifications:
         # Agents talking to each other alert only phones that asked for it (Peer chats).
         peer_chat = sender is not None or (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
                                            and self._is_peer_chat(profile, session_id))
+        # Where the alert comes from, worked out only when a phone here picks its channels. Workflows are
+        # bighelp's own and have their own switches.
+        filtering = workflow_kind is None and self._filters_channels(profile, now)
+        channels = self._alert_channels(profile, session_id, event_type) if filtering else None
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT g.* FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (now, profile)).fetchall()
             for row in rows:
                 grant = json.loads(row["public_json"])
                 if event_type not in grant["eventTypes"]: continue
+                if filtering and not self._channel_rules(db, grant["grantId"]).allows(channels): continue
                 if peer_chat and not db.execute("SELECT 1 FROM preferences WHERE grant_id=? AND peer_chats=1", (grant["grantId"],)).fetchone():
                     continue
                 if workflow_kind is not None:
