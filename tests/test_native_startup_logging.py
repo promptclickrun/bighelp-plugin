@@ -32,6 +32,7 @@ PROCESS_FEATURES = (
     "native-chat-activity-v1",
     "native-team-v1",
     "native-my-templates-v1",
+    "native-agent-plugin-links-v1",
 )
 
 
@@ -96,10 +97,12 @@ class NativeStartupLoggingTests(unittest.TestCase):
                            available=Mock(return_value=True), register=Mock())
         self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[32],
                                    available=Mock(return_value=True))
+        self.plugin_links = module("loopdy_plugin.plugin_links", CAPABILITY=PROCESS_FEATURES[33],
+                                   available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
                    self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.team,
-                   self.my_templates, module("hermes_cli.dashboard_auth.base", Session=Session)]
+                   self.my_templates, self.plugin_links, module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
         self.stack.enter_context(patch.object(native_context.time, "time", return_value=1000))
@@ -150,6 +153,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.chat_activity.available.return_value = False
         self.team.available.return_value = False
         self.my_templates.available.return_value = False
+        self.plugin_links.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
         expected = PROCESS_FEATURES[:2]

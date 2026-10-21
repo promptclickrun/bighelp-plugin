@@ -191,6 +191,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.my_templates import available as my_templates_available
         if my_templates_available():
             expected.append("native-my-templates-v1")
+        from loopdy_plugin.plugin_links import available as plugin_links_available
+        if plugin_links_available():
+            expected.append("native-agent-plugin-links-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
@@ -350,6 +353,26 @@ class NativeAPITests(unittest.TestCase):
         headers["If-Match"] = '"stale"'
         self.assertEqual(speaking({"agentId": "default", "sessionId": "s1", "personId": person},
                                   headers).status_code, 412)
+
+    def test_agents_share_the_default_agents_plugins(self):
+        from loopdy_plugin.plugin_links import available
+        if not available():
+            self.skipTest("shared plugins unavailable")
+
+        def share(payload, headers=None):
+            return self.client.post(PREFIX + "/agents/plugins/share",
+                                    headers=self.headers() if headers is None else headers, json=payload)
+
+        done = share({"agentId": "default"})
+        self.assertEqual(done.status_code, 200, done.text)
+        self.assertEqual(done.json(), {"linked": [], "kept": []}, "The default agent has nothing to share")
+        self.assertEqual(share({"agentId": "missing"}).status_code, 404)
+        for bad in ({"agentId": "../x"}, {"agentId": "default", "extra": 1}, {}):
+            with self.subTest(bad=bad):
+                self.assertEqual(share(bad).status_code, 422)
+        headers = self.headers()
+        headers["If-Match"] = '"stale"'
+        self.assertEqual(share({"agentId": "default"}, headers).status_code, 412)
 
     def test_agent_board_routes_list_update_media_and_logs(self):
         from loopdy_plugin.agent_board import store_for_profile

@@ -78,6 +78,22 @@ The plugin gives `bighelp` sessions Desktop's treatment for those automatic reas
 it. It also reopens bighelp chats that Hermes ended for those reasons before. Closing, archiving and
 deleting a chat do not change. On a Hermes without this lifecycle, nothing changes.
 
+### Agents keep working with the app closed
+
+`message_agent` runs the turn of the other agent in a background process and ends the turn that asked. The
+chat that asked is then idle while it waits for the reply. Hermes reclaimed an idle chat 20 seconds after
+the app's connection went. Closing its agent stopped the other agent's process (exit code `-15`,
+`completion_reason` `killed`), and the reply had no poller left to wake the chat. So agents could work
+together only while the app was open.
+
+Hermes' reaper already waits while a chat has live `delegate_task` subagents
+(`_session_has_active_delegations`). For a `bighelp` session, the plugin adds the chat's background jobs
+that report back when they end (`notify_on_complete`), such as a `message_agent` delivery. The chat keeps
+its runtime until they end and their reply is handled, then the reaper reclaims it as before. Other apps'
+sessions, and background jobs that do not report back, are unchanged. An unreadable process registry never
+keeps a chat. Hosts that set `dashboard.ws_orphan_reap_grace_s: 0` to work around this can remove that
+setting.
+
 ## Card templates
 
 Successful context GET returns `Cache-Control: no-store` and an `ETag` of the
