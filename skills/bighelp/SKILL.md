@@ -188,6 +188,7 @@ they approve; then submit.
 ## More
 
 - Color themes the app can import: `skill_view("loopdy:custom-theme-authoring")`.
+- Handing work to a local teammate agent reliably: `skill_view("loopdy:profile-agent-collaboration")`.
 
 ## Ground rules
 

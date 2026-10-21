@@ -105,6 +105,9 @@ class TeamTests(unittest.TestCase):
         self.assertIn("- Havok (@havok): Builds and fixes code.", text)
         self.assertNotIn("- Nova (@nova)", text, "Not its own teammate")
         self.assertIn('hermes -p <id> chat -Q -q "Message from Nova (@nova): <message>"', text)
+        self.assertIn('skill_view("loopdy:profile-agent-collaboration")', text)
+        self.assertIn("persist_on_release=true", text)
+        self.assertIn("do not use message_agent for local teammates", text)
         self.assertIn("Don't wait to be told", text, "Teammates are brought in without being asked")
         self.assertLess(len(text), 3_000)
         self.assertEqual(brief("nova", [agent for agent in agents if agent["id"] == "nova"]), "",
