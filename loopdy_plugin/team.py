@@ -184,6 +184,38 @@ class TeamStore:
                 raise
 
 
+# The plugin's block in an agent's hint, between these lines. Cloning an agent copies its config.yaml, so a new
+# agent starts with another agent's block ("You're Alfie…"); the markers let the plugin find and replace any
+# copy, not only the words it last wrote for that agent.
+BLOCK_START = "<!-- bighelp Teamwork: written by the bighelp plugin for this agent -->"
+BLOCK_END = "<!-- end bighelp Teamwork -->"
+# Bump when the stored form changes, so every agent is rewritten once.
+BLOCK_FORMAT = 2
+_MARKED_BLOCK = re.compile(r"\n*" + re.escape(BLOCK_START) + r".*?" + re.escape(BLOCK_END) + r"\n*", re.DOTALL)
+# Unmarked briefs from 3.24.x and earlier: the plugin's fixed first lines through its fixed last line.
+_LEGACY_BLOCK = re.compile(
+    r"\n*## Your team\nYou're [^\n]{1,200}? \(@[a-z0-9][a-z0-9_-]{0,63}\)(?:\. You don't work alone:|, one of several)"
+    r"[^\n]*\n.*?\n- The person sees these conversations in bighelp\."
+    r"(?: If they ask how you work with your team, explain this\.)?\n*",
+    re.DOTALL)
+
+
+def _marked(text: str) -> str:
+    return f"{BLOCK_START}\n{text}\n{BLOCK_END}" if text else ""
+
+
+def _unmarked(text: str) -> str:
+    """The brief without its markers (for the note an open chat gets)."""
+    return text.removeprefix(BLOCK_START + "\n").removesuffix("\n" + BLOCK_END)
+
+
+def _without_team_blocks(text: str) -> str:
+    """The hint with every plugin-written team block taken out, this agent's or a copied one."""
+    for pattern in (_MARKED_BLOCK, _LEGACY_BLOCK):
+        text = pattern.sub("\n\n", text)
+    return text.strip()
+
+
 @contextmanager
 def _profile(hermes: Any, profile: str) -> Iterator[None]:
     with hermes.write_scope(profile):
@@ -199,8 +231,8 @@ def _write_hint(hermes: Any, profile: str, previous: str, new: str) -> None:
         spec = hints.get(PLATFORM)
         spec = {"append": spec} if isinstance(spec, str) else dict(spec) if isinstance(spec, dict) else {}
         current = spec.get("append") if isinstance(spec.get("append"), str) else ""
-        base = current.replace(previous, "") if previous else current
-        text = "\n\n".join(part for part in (base.strip(), new) if part)
+        base = _without_team_blocks(current.replace(previous, "") if previous else current)
+        text = "\n\n".join(part for part in (base, new) if part)
         if text == current.strip():
             return
         if text:
@@ -219,7 +251,7 @@ def _signature(agents: list[dict[str, str]]) -> str:
     # The words too, not just the roster: a plugin update that rewords the brief must reach agents on the
     # next due turn, not wait for someone to open Teamwork in the app.
     briefs = [brief(agent["id"], agents) for agent in agents]
-    return hashlib.sha256(json.dumps([agents, briefs], sort_keys=True).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps([BLOCK_FORMAT, agents, briefs], sort_keys=True).encode("utf-8")).hexdigest()
 
 
 class Team:
@@ -287,10 +319,10 @@ class Team:
                 written.pop(profile)
         for agent in agents:
             profile = agent["id"]
-            new = brief(profile, agents) if state["enabled"] else ""
+            new = _marked(brief(profile, agents)) if state["enabled"] else ""
             previous = written.get(profile, "")
-            if new == previous:
-                continue
+            # No skip when `new == previous`: the remembered words don't prove the config holds only them (a
+            # deleted agent cloned anew under the same id). Saving is a no-op when nothing changes.
             try:
                 _write_hint(hermes, profile, previous, new)
             except Exception as error:
@@ -353,7 +385,7 @@ def open_chat_note(payload: dict) -> str | None:
     if payload.get("is_first_turn") or payload.get("parent_session_id") or not SESSION_ID.fullmatch(session_id):
         return None  # a new chat's instructions already have the current brief; helpers don't need it
     state = team().store.read()
-    text = state["written"].get(_active_profile()) if state["enabled"] else None
+    text = _unmarked(state["written"].get(_active_profile()) or "") if state["enabled"] else None
     if not text:
         return None
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
