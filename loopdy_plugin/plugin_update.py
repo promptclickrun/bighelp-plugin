@@ -610,8 +610,60 @@ def _clean_exec_command(command: list[str], *, hermes_home: Path) -> list[str]:
         f"HERMES_HOME={hermes_home}",
         "LANG=C.UTF-8",
         "PYTHONUTF8=1",
+        *_hermes_worker_settings(),
         *command,
     ]
+
+
+def _hermes_worker_settings() -> list[str]:
+    """What the scrubbed worker needs to run Hermes the way this process does.
+
+    The worker runs `python -m hermes_cli.main` for Plugin Doctor, the installer and the restart. A bundled
+    interpreter (Hermes' managed install) finds `hermes_cli` and its dependencies only in-process, through
+    Hermes' launcher, so without the path every one of those steps fails. A host that turned lazy dependency
+    installs off keeps them off; with them on, Plugin Doctor can stall on a dependency sync.
+    """
+    settings = []
+    import_path = _hermes_import_path()
+    if import_path:
+        settings.append("PYTHONPATH=" + os.pathsep.join(dict.fromkeys(import_path)))
+    lazy = os.environ.get("HERMES_DISABLE_LAZY_INSTALLS", "")
+    if lazy:
+        settings.append(f"HERMES_DISABLE_LAZY_INSTALLS={lazy}")
+    return settings
+
+
+def _hermes_import_root() -> str | None:
+    """Where `hermes_cli` lives in this process."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("hermes_cli")
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.origin:
+        return None
+    return str(Path(spec.origin).resolve().parent.parent)
+
+
+def _hermes_import_path() -> list[str]:
+    """The Hermes tree and its dependency folder, pinned with Hermes' own helper (as its cron workers are).
+    Empty when Hermes isn't importable here or is an installed package that needs no path."""
+    root = _hermes_import_root()
+    if not root:
+        return []
+    try:
+        from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
+        pinned = pin_hermes_tree_on_pythonpath({}, Path(root))
+        return [item for item in pinned.get("PYTHONPATH", "").split(os.pathsep) if item]
+    except Exception:
+        pass
+    try:
+        import sysconfig
+        if Path(sysconfig.get_paths()["purelib"]).resolve() == Path(root).resolve():
+            return []
+    except (KeyError, OSError):
+        pass
+    return [root]
 
 
 def _launcher_env() -> dict[str, str]:

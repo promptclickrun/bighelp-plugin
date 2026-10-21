@@ -236,6 +236,47 @@ class PluginUpdateExecutionTests(unittest.TestCase):
             self._started = manager.start(self.operation_id, self.device, False)
         return [], detached
 
+    def test_the_worker_gets_the_hermes_import_path_of_the_process_that_starts_it(self):
+        """A bundled interpreter finds `hermes_cli` only in-process (Hermes' launcher adds it). The scrubbed worker
+        runs `python -m hermes_cli.main` for Plugin Doctor, the installer and the restart, so it needs the path."""
+        with patch.object(api, "_hermes_import_path", return_value=["/fixture/hermes-agent", "/fixture/site-packages"]), \
+                patch.dict(os.environ, {"HERMES_DISABLE_LAZY_INSTALLS": "1", "SECRET_CANARY": "x"}):
+            command = api._clean_exec_command(["/fixture/python", "worker.py"], hermes_home=self.root)
+        self.assertEqual(command[1], "-i")
+        self.assertIn("PYTHONPATH=/fixture/hermes-agent" + os.pathsep + "/fixture/site-packages", command)
+        self.assertIn("HERMES_DISABLE_LAZY_INSTALLS=1", command, "A host that turned lazy installs off keeps them off")
+        self.assertFalse(any(item.startswith("SECRET_CANARY") for item in command))
+        self.assertLess(command.index("PYTHONUTF8=1"), command.index("/fixture/python"))
+        with patch.object(api, "_hermes_import_path", return_value=[]), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HERMES_DISABLE_LAZY_INSTALLS", None)
+            command = api._clean_exec_command(["/fixture/python"], hermes_home=self.root)
+        self.assertFalse(any(item.startswith(("PYTHONPATH=", "HERMES_DISABLE_LAZY_INSTALLS=")) for item in command),
+                         "An installed wheel needs no path")
+
+    def test_hermes_commands_from_the_worker_keep_that_path(self):
+        with patch.dict(os.environ, {"PYTHONPATH": "/fixture/hermes-agent", "HERMES_DISABLE_LAZY_INSTALLS": "1",
+                                     "SECRET_CANARY": "x"}):
+            env = worker._process_env(self.root)
+            git_env = worker._process_env(self.root, git=True)
+        self.assertEqual(env["PYTHONPATH"], "/fixture/hermes-agent")
+        self.assertEqual(env["HERMES_DISABLE_LAZY_INSTALLS"], "1")
+        self.assertNotIn("SECRET_CANARY", env)
+        self.assertEqual(git_env["GIT_TERMINAL_PROMPT"], "0")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PYTHONPATH", None)
+            os.environ.pop("HERMES_DISABLE_LAZY_INSTALLS", None)
+            self.assertNotIn("PYTHONPATH", worker._process_env(self.root))
+
+    def test_hermes_import_path_uses_hermes_own_pin(self):
+        root = str(self.root / "hermes-agent")
+        pin = type(sys)("cron.scheduler_worker_env")
+        pin.pin_hermes_tree_on_pythonpath = lambda env, tree: {"PYTHONPATH": f"{tree}{os.pathsep}/fixture/venv/site"}
+        with patch.object(api, "_hermes_import_root", return_value=root), \
+                patch.dict(sys.modules, {"cron.scheduler_worker_env": pin}):
+            self.assertEqual(api._hermes_import_path(), [root, "/fixture/venv/site"])
+        with patch.object(api, "_hermes_import_root", return_value=None):
+            self.assertEqual(api._hermes_import_path(), [])
+
     def test_production_manager_refuses_a_shared_other_profile_installation(self):
         import hermes_constants
         another_home = self.root / "other-profile"
