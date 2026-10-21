@@ -17,8 +17,13 @@ Each agent gets a short brief in its instructions for bighelp chats:
   that spans roles and ask those teammates at the same time; do it itself only
   when it's quick, conversation, nobody fits better, or the person asks for it
 - how to ask: `hermes -p <id> chat -Q -q "Message from <Name> (@<id>): <message>"`
-  in the terminal (or `message_agent` where Hermes offers it); the answer is
-  the command's output
+  in the terminal for a quick synchronous question, or for multi-minute work
+  `skill_view("loopdy:profile-agent-collaboration")` (`team_handoff.py` with
+  `background=true`, `notify=true`, and `persist_on_release=true` so the
+  teammate turn survives mobile disconnects; local handoffs avoid
+  `message_agent` because its background runner starts without
+  `persist_on_release=true`)
+- that the asking agent still owns the person's final answer after a handoff
 - to brief a teammate like a coworker, share only what the task needs, tell
   the person in one line who it's asking, answer once with who helped, answer
   teammates who ask it, and never pass a task back or around
