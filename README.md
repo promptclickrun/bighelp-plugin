@@ -211,6 +211,9 @@ Chat never needs them.
 - **Quiet Hours.** Each phone can set a daily window in its own time zone, for example 22:00 to 07:00. In that
   window, your host sends that phone no notifications, and it does not send them later. Replies stay in the chat.
   Live Activity updates continue.
+- **Channels.** Each phone picks the channels it gets notifications from: every channel (iMessage, Telegram, a
+  terminal and the rest), only bighelp, or a chosen few. Chats in bighelp always notify. A scheduled task follows
+  where it delivers.
 
 More detail: [Notifications](docs/NOTIFICATIONS.md).
 

@@ -40,11 +40,20 @@ class WorkflowAlertsBody(BaseModel):
     cancelled: StrictBool
 
 
+class ChannelRulesBody(BaseModel):
+    """Which channels alert this phone (notification_channels.py): a choice for each channel it has seen,
+    and ``other`` for the rest. bighelp itself always alerts."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    other: StrictBool
+    choices: dict[str, StrictBool] = Field(max_length=64)
+
+
 class PreferencesBody(VersionedBody):
     peerChats: StrictBool
     workflows: WorkflowAlertsBody | None = None
     # The phone opens a scheduled task's alert in the job's chat or on the job (scheduled_links.py).
     scheduledLinks: StrictBool | None = None
+    channels: ChannelRulesBody | None = None
 
 
 class WorkBody(VersionedBody):
@@ -119,9 +128,17 @@ def set_preferences(grant_id: str, body: PreferencesBody):
     """This phone's alert choices for the host: peer chats (agents talking to each other) start off,
     workflow alerts (needs you, succeeded, failed, cancelled) start on, scheduled links start off."""
     workflows = body.workflows.model_dump() if body.workflows is not None else None
+    channels = body.channels.model_dump() if body.channels is not None else None
     return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats,
                                                                       workflows=workflows,
-                                                                      scheduled_links=body.scheduledLinks))
+                                                                      scheduled_links=body.scheduledLinks,
+                                                                      channels=channels))
+
+
+@router.get("/enrollments/{grant_id}/channels")
+def channels(grant_id: str):
+    """The channels this phone's agent has talked on or delivers to, for Settings › Notifications › Channels."""
+    return _call(lambda: get_managed_notifications().channels(grant_id))
 
 
 @router.post("/enrollments/{grant_id}/work")
