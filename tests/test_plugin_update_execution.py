@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from loopdy_plugin import plugin_update as api
 from loopdy_plugin import yaml_compat
+_REAL_POPEN = subprocess.Popen
 with patch.dict(sys.modules, {"plugin_update": api}):
     worker = importlib.import_module("loopdy_plugin.plugin_update_worker")
 
@@ -163,6 +164,77 @@ class PluginUpdateExecutionTests(unittest.TestCase):
         self.assertIn(str(interpreter), commands[0])
         self.assertNotIn("KeepAlive", commands[0])
         self.assertIn("--service-label", commands[0])
+
+    def _launch_on_linux(self, *, systemd_run, user_manager, run_result=0):
+        """Launch the worker as Linux would; returns (commands given to systemd-run, detached Popen calls)."""
+        commands, detached = [], []
+        def capture(command, **kwargs):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, run_result)
+        def popen(command, **kwargs):
+            detached.append((command, kwargs))
+            return _REAL_POPEN([sys.executable, "-c", "pass"])
+        original_which = api.shutil.which
+        which = lambda name: (systemd_run if name == "systemd-run" else original_which(name))
+        with patch.object(api.platform, "system", return_value="Linux"), \
+                patch.object(api.shutil, "which", side_effect=which), \
+                patch.object(api, "_systemd_user_available", return_value=user_manager), \
+                patch.object(api.subprocess, "run", side_effect=capture), \
+                patch.object(api.subprocess, "Popen", side_effect=popen):
+            self.manager._launch_detached_worker(self.operation_id)
+        return commands, detached
+
+    def test_a_system_service_host_without_a_user_manager_runs_the_worker_detached(self):
+        """`hermes gateway install --system --run-as-user` hosts have no user bus: `systemd-run --user` can't work."""
+        commands, detached = self._launch_on_linux(systemd_run="/usr/bin/systemd-run", user_manager=False)
+        self.assertEqual(commands, [], "No systemd-run --user without a user manager")
+        self.assertEqual(len(detached), 1)
+        command, kwargs = detached[0]
+        self.assertTrue(kwargs["start_new_session"], "Its own session, so it outlives the process that started it")
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["close_fds"])
+        self.assertEqual(command[1], "-i", "The same clean environment as the managed launch")
+        self.assertIn(str(self.manager.data_root / "workers" / self.operation_id / "plugin_update_worker.py"), command)
+
+    def test_linux_without_systemd_run_runs_the_worker_detached(self):
+        commands, detached = self._launch_on_linux(systemd_run=None, user_manager=False)
+        self.assertEqual(commands, [])
+        self.assertEqual(len(detached), 1)
+
+    def test_a_user_manager_keeps_the_managed_systemd_launch(self):
+        commands, detached = self._launch_on_linux(systemd_run="/usr/bin/systemd-run", user_manager=True)
+        self.assertEqual(detached, [])
+        self.assertEqual(commands[0][:2], ["/usr/bin/systemd-run", "--user"])
+
+    def test_a_refused_systemd_job_falls_back_to_detached(self):
+        commands, detached = self._launch_on_linux(systemd_run="/usr/bin/systemd-run", user_manager=True, run_result=1)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(detached), 1)
+
+    def test_start_on_a_host_without_a_user_manager_is_not_blocked(self):
+        """The 3.25.0 symptom: `hermes bighelp update` answered `blocked` on a supported system-service host."""
+        manager = api.PluginUpdateManager(self.manager.data_root, self.plugin, "default")
+        self.manager = manager
+        # The real launcher, on a host where systemd-run exists but has no user bus (it exits 1 there).
+        _commands, detached = self._launch_on_linux_start(manager)
+        self.assertNotEqual(self._started["phase"], "blocked")
+        self.assertEqual(len(detached), 1)
+
+    def _launch_on_linux_start(self, manager):
+        detached = []
+        def popen(command, **kwargs):
+            detached.append(command)
+            return _REAL_POPEN([sys.executable, "-c", "pass"])
+        original_which = api.shutil.which
+        which = lambda name: ("/usr/bin/systemd-run" if name == "systemd-run" else original_which(name))
+        with patch.object(api.platform, "system", return_value="Linux"), \
+                patch.object(api.shutil, "which", side_effect=which), \
+                patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.root / "no-user-manager")}), \
+                patch.object(api.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)), \
+                patch.object(api.subprocess, "Popen", side_effect=popen):
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            self._started = manager.start(self.operation_id, self.device, False)
+        return [], detached
 
     def test_production_manager_refuses_a_shared_other_profile_installation(self):
         import hermes_constants
