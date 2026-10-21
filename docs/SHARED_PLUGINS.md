@@ -26,6 +26,8 @@ The plugin replaces a plugin folder of an agent with a link to the folder of the
 - the files are the same (`.git`, `__pycache__`, `.pyc` files and `.DS_Store` are not compared)
 
 The plugin does not change anything else: the plugins of the agent itself, other versions and local changes.
+If a plugin writes files into its own folder, the agents that share it also share those files. A copy whose
+files changed after the clone does not match, so it stays a copy.
 The swap holds the installer's lock (`.install-metadata.json.lock`). If a step fails, the plugin restores the copy.
 The plugin does not compare trees with more than 20,000 files or 512 MB. On Windows, nothing changes.
 
