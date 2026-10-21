@@ -257,11 +257,15 @@ async def context(request: Request) -> Response:
     owner = native_context(request)
     _record_serving_runtime(owner.serving_profile_id)
     # Each app connection starts here, in the process that serves its chats.
-    from . import durable_sessions
+    from . import durable_sessions, plugin_links
     try:
         durable_sessions.install()
     except Exception:  # never let it fail the context
         logger.warning("Durable bighelp sessions unavailable")
+    try:
+        plugin_links.refresh_in_background()
+    except Exception:
+        logger.warning("bighelp plugin links unavailable")
     if request.query_params:
         raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
     async for chunk in request.stream():
@@ -562,6 +566,32 @@ async def agents_talk(request: Request) -> Response:
         raise NativeAPIError(503, "agent_talk_unavailable", "Agent conversations aren't available on this host.")
     body = await _body(request, _AgentTalk)
     value = await run_in_threadpool(_agent_talk, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+def _share_plugins(body: _Body) -> dict:
+    from hermes_cli.profiles import profile_exists
+    from .plugin_links import link_agent
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    try:
+        return link_agent(body.agentId)
+    except TimeoutError:
+        raise NativeAPIError(409, "plugins_busy", "A plugin install is running for this agent; try again.") from None
+
+
+@router.post("/agents/plugins/share")
+async def agents_plugins_share(request: Request) -> Response:
+    """An agent cloned from the default one shares its plugins instead of keeping copies of them."""
+    from .plugin_links import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "plugin_links_unavailable", "Shared plugins aren't available on this host.")
+    body = await _body(request, _Body)
+    value = await run_in_threadpool(_share_plugins, body)
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response(value, owner, request_id)

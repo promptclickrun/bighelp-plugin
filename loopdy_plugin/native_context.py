@@ -391,4 +391,9 @@ def _native_features(
         features.append(my_templates_capability)
     else:
         skip(my_templates_capability, "saved templates need a POSIX host and Hermes' home helpers.")
+    from .plugin_links import CAPABILITY as plugin_links_capability, available as plugin_links_available
+    if plugin_links_available():
+        features.append(plugin_links_capability)
+    else:
+        skip(plugin_links_capability, "shared plugins need a POSIX host and Hermes' profile helpers.")
     return profile, tuple(features)
