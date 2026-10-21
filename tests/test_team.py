@@ -105,9 +105,13 @@ class TeamTests(unittest.TestCase):
         self.assertIn("- Havok (@havok): Builds and fixes code.", text)
         self.assertNotIn("- Nova (@nova)", text, "Not its own teammate")
         self.assertIn('hermes -p <id> chat -Q -q "Message from Nova (@nova): <message>"', text)
-        self.assertIn('skill_view("loopdy:profile-agent-collaboration")', text)
-        self.assertIn("persist_on_release=true", text)
-        self.assertIn("do not use message_agent for local teammates", text)
+        # Bot Mode's message_agent reaches a teammate whose Bot Chat bighelp has open; a CLI run against that
+        # chat is refused (SESSION_NOT_OWNED), so the brief must never steer agents away from it.
+        self.assertIn("message_agent", text)
+        self.assertNotIn("do not use message_agent", text.lower())
+        self.assertNotIn("team_handoff", text)
+        self.assertNotIn("-c 'Bot Chat'", text, "The CLI fallback starts a new chat; it never targets the Bot Chat")
+        self.assertIn("You still own the person's final answer", text)
         self.assertIn("Don't wait to be told", text, "Teammates are brought in without being asked")
         self.assertLess(len(text), 3_000)
         self.assertEqual(brief("nova", [agent for agent in agents if agent["id"] == "nova"]), "",
