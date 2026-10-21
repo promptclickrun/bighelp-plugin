@@ -179,14 +179,17 @@ phone picks the channels it gets alerts from, so it can get only bighelp's chats
 
 - **An alert's channel.** A reply, failure, helper result, question or approval comes from its session's stored
   `source`. `bighelp`, older bighelp builds' `loopdy` and `ios`, and turns nobody reads anywhere else (Group Chat
-  members, workflow stages, helpers, Kanban workers) are bighelp. `cli`, `tui`, `oneshot` and `tool` are
+  members, workflow stages, helpers, Kanban workers) are bighelp, and so is the agents' Bot Chat whatever its
+  source (Hermes' CLI stores it as `cli`; Peer chats has its own switch). `cli`, `tui`, `oneshot` and `tool` are
   `terminal`. Any other source is its own channel, by its Hermes platform name (`imsg`, `telegram`, ...).
 - **Scheduled tasks.** Hermes runs every job as `cron`, which no person reads. So a run comes from where its job
-  delivers, read from `cron/jobs.json` by Hermes' own rules: a failed run uses `failure_deliver` when the job has
-  one; `local`, `bot-chat` and the retired `loopdy` inbox are bighelp; `origin` is the platform the job was made
-  on; `all` is every channel but bighelp. A run whose job can't be found is bighelp.
+  delivers, read from `cron/jobs.json` by Hermes' own rules: `local`, `bot-chat` and the retired `loopdy` inbox
+  are bighelp; `origin` is the platform of the chat the job was made in (an origin Hermes skips, without a chat
+  or on the API server, is bighelp); `all` is every channel but bighelp. A failed run comes from `deliver` and
+  `failure_deliver` both: the run stays where `deliver` keeps it. A run whose job can't be found is bighelp.
 - **Rules.** A phone sends `"channels": {"other": <bool>, "choices": {"<channel>": <bool>, ...}}` in
-  `PUT /enrollments/<grantId>/preferences` (at most 64 choices; `bighelp` is never one). A channel in `choices`
+  `PUT /enrollments/<grantId>/preferences` (at most 64 choices, each a channel an alert can carry: never `bighelp`,
+  and never a source that maps to another channel, like `cli` or `loopdy`). A channel in `choices`
   follows its choice; any other channel follows `other`. An alert with more than one channel (a job that
   delivers to two) goes out when any of them is on. bighelp always alerts; its own kinds have their own switches.
   Every phone starts with every channel on (`{"other": true, "choices": {}}`), and the host reads no session

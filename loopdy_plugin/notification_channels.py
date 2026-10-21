@@ -41,6 +41,8 @@ _NAMES = {
     "google_chat": "Google Chat", "line": "LINE", "raft": "Raft",
 }
 _MAX_JOBS_BYTES = 8 * 1024 * 1024
+# The last read of each agent's jobs file, by path, kept while the file is unchanged.
+_JOBS_CACHE: dict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
 
 
 def is_channel(value: Any) -> bool:
@@ -76,17 +78,21 @@ def name(channel: str) -> str:
     return " ".join(part.capitalize() for part in channel.replace("-", "_").split("_") if part) or channel
 
 
+def _lane_parts(lane: Any) -> list[str]:
+    if isinstance(lane, (list, tuple)):
+        return [str(part).strip() for part in lane]
+    return str(lane if lane not in (None, "") else "local").split(",")
+
+
 def delivery_channels(job: dict[str, Any], *, failed: bool) -> frozenset[str]:
     """Where a scheduled job's run goes, as channels, by Hermes' own rules (cron/scheduler_delivery.py):
-    a failed run uses ``failure_deliver`` when the job has one; ``local``, ``bot-chat`` and the retired
-    ``loopdy`` inbox are bighelp; ``origin`` is the platform the job was made on."""
+    ``local``, ``bot-chat`` and the retired ``loopdy`` inbox are bighelp; ``origin`` is the chat the job was
+    made in. A failed run comes from both its job's lanes: Hermes sends its notice to ``failure_deliver``,
+    and the run itself is where ``deliver`` keeps it."""
+    parts = _lane_parts(job.get("deliver", "local"))
     lane = job.get("failure_deliver") if failed else None
-    if lane is None or not str(lane).strip():
-        lane = job.get("deliver", "local")
-    if isinstance(lane, (list, tuple)):
-        parts = [str(part).strip() for part in lane]
-    else:
-        parts = str(lane if lane not in (None, "") else "local").split(",")
+    if lane is not None and str(lane).strip():
+        parts += _lane_parts(lane)
     channels: set[str] = set()
     for raw in parts:
         part = raw.strip()
@@ -98,9 +104,11 @@ def delivery_channels(job: dict[str, Any], *, failed: bool) -> frozenset[str]:
         elif platform == "all":
             channels.add(EVERY_OTHER)
         elif platform == "origin":
-            origin = job.get("origin")
-            found = channel_of_source(origin.get("platform")) if isinstance(origin, dict) else None
-            channels.add(found or BIGHELP)
+            # Hermes skips an origin without a chat or on the API server and falls back to a home channel;
+            # those, and a job without one, alert as bighelp rather than risk dropping one.
+            origin = job.get("origin") if isinstance(job.get("origin"), dict) else {}
+            found = channel_of_source(origin.get("platform")) if origin.get("chat_id") else None
+            channels.add(found if found and found != "api_server" else BIGHELP)
         else:
             channels.add(channel_of_source(platform) or BIGHELP)
     return frozenset(channels or {BIGHELP})
@@ -111,13 +119,22 @@ def read_cron_jobs(profile: str) -> list[dict[str, Any]]:
     try:
         from hermes_cli.profiles import get_profile_dir
         path = Path(get_profile_dir(profile)) / "cron" / "jobs.json"
-        if path.stat().st_size > _MAX_JOBS_BYTES:
+        info = path.stat()
+        if info.st_size > _MAX_JOBS_BYTES:
             return []
+        stamp = (info.st_mtime_ns, info.st_size)
+        cached = _JOBS_CACHE.get(str(path))
+        if cached and cached[0] == stamp:
+            return cached[1]
         value = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # No such agent, no jobs file, or one that doesn't read.
         return []
     jobs = value.get("jobs") if isinstance(value, dict) else value
-    return [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
+    found = [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
+    if len(_JOBS_CACHE) >= 64:
+        _JOBS_CACHE.clear()
+    _JOBS_CACHE[str(path)] = (stamp, found)
+    return found
 
 
 def scheduled_channels(profile: str, job_id: str | None, *, failed: bool,
@@ -147,7 +164,9 @@ class ChannelRules:
         if type(other) is not bool or not isinstance(choices, dict) or len(choices) > MAX_CHOICES:
             raise ValueError("channel rules are invalid")
         for channel, allowed in choices.items():
-            if not is_channel(channel) or channel == BIGHELP or type(allowed) is not bool:
+            # Only names an alert can carry: `cli` is `terminal`, `loopdy` is bighelp, `cron` is its job's.
+            if (not is_channel(channel) or channel == BIGHELP or channel_of_source(channel) != channel
+                    or type(allowed) is not bool):
                 raise ValueError("channel rules are invalid")
         return cls(other, choices)
 

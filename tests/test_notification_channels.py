@@ -106,6 +106,17 @@ class ChannelAlertTests(unittest.TestCase):
         self.assertEqual(sorted((json.loads(row[0])["sessionId"], json.loads(row[0])["eventType"]) for row in queued),
                          [("chat-1", "approval.required"), ("chat-1", "clarification.required")])
 
+    def test_agents_bot_chat_is_bighelp_however_hermes_made_it(self):
+        # Hermes' CLI lane (`hermes chat -c "Bot Chat"`) stores the agents' Bot Chat as `cli`.
+        self.sessions["default"]["bot-chat"] = {"id": "bot-chat", "profile_name": "default", "source": "cli",
+                                                "title": "Bot Chat"}
+        self.service.set_preferences(self.grant_id, peer_chats=True, channels=ONLY_BIGHELP)
+        self.reply("bot-chat")
+        self.assertEqual(self.alerted(), [(self.grant_id, "session.completed")])
+        self.service.set_preferences(self.grant_id, peer_chats=False, channels=ONLY_BIGHELP)
+        self.reply("bot-chat", turn="turn-b")
+        self.assertEqual(self.alerted(), [], "Peer chats off still keeps it quiet")
+
     def test_two_phones_that_disagree_each_get_their_own(self):
         everything = self.grant_id
         bighelp_only = self.enroll("default")
@@ -133,9 +144,16 @@ class ChannelAlertTests(unittest.TestCase):
             ({"id": JOB, "deliver": "local"}, False, 1),
             ({"id": JOB, "deliver": "imsg:+15550100"}, False, 0),
             ({"id": JOB, "deliver": "imsg:+15550100", "failure_deliver": "local"}, True, 1),
-            ({"id": JOB, "deliver": "local", "failure_deliver": "imsg:+15550100"}, True, 0),
+            ({"id": JOB, "deliver": "imsg:+15550100", "failure_deliver": "telegram:42"}, True, 0),
+            # The run stays in bighelp even when Hermes sends its failure notice elsewhere.
+            ({"id": JOB, "deliver": "local", "failure_deliver": "imsg:+15550100"}, True, 1),
+            ({"id": JOB, "deliver": "local", "failure_deliver": "imsg:+15550100"}, False, 1),
             ({"id": JOB, "deliver": "origin", "origin": {"platform": "telegram", "chat_id": "42"}}, False, 0),
-            ({"id": JOB, "deliver": "origin", "origin": {"platform": "loopdy"}}, False, 1),
+            ({"id": JOB, "deliver": "origin", "origin": {"platform": "loopdy", "chat_id": "x"}}, False, 1),
+            # Origins Hermes skips for a home channel: never dropped.
+            ({"id": JOB, "deliver": "origin", "origin": {"platform": "telegram"}}, False, 1),
+            ({"id": JOB, "deliver": "origin", "origin": {"platform": "api_server", "chat_id": "x"}}, False, 1),
+            ({"id": JOB, "deliver": "origin"}, False, 1),
             ({"id": JOB, "deliver": "telegram,bot-chat"}, False, 1),
             ({"id": JOB, "deliver": "all"}, False, 0),
             ({"id": "another-job", "deliver": "imsg:+15550100"}, False, 1),
@@ -171,6 +189,8 @@ class ChannelAlertTests(unittest.TestCase):
         self.assertEqual(self.service.preferences(self.grant_id)["channels"], value)
         bad = [{"other": True}, {"other": "no", "choices": {}}, {"other": True, "choices": {"bighelp": False}},
                {"other": True, "choices": {"Not A Channel": False}}, {"other": True, "choices": {"imsg": 0}},
+               {"other": True, "choices": {"cli": False}}, {"other": True, "choices": {"loopdy": False}},
+               {"other": True, "choices": {"cron": False}},
                {"other": True, "choices": {f"c{n}": False for n in range(65)}},
                {"other": True, "choices": {}, "extra": 1}, []]
         for rules in bad:
@@ -217,6 +237,22 @@ class ChannelNameTests(unittest.TestCase):
         self.assertEqual(channels.name("imsg"), "iMessage")
         self.assertEqual(channels.name("terminal"), "Terminal")
         self.assertEqual(channels.name("acme_chat"), "Acme Chat")
+
+    def test_jobs_are_read_again_only_when_the_file_changes(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as home:
+            jobs = Path(home) / "cron" / "jobs.json"
+            jobs.parent.mkdir()
+            jobs.write_text(json.dumps({"jobs": [{"id": "a", "deliver": "local"}]}))
+            with patch("hermes_cli.profiles.get_profile_dir", return_value=Path(home)):
+                self.assertEqual([job["id"] for job in channels.read_cron_jobs("default")], ["a"])
+                with patch("pathlib.Path.read_text", side_effect=AssertionError("read again")):
+                    self.assertEqual([job["id"] for job in channels.read_cron_jobs("default")], ["a"])
+                jobs.write_text(json.dumps({"jobs": [{"id": "b", "deliver": "local"}, {"id": "c"}]}))
+                os.utime(jobs, ns=(1, 2_000_000_000_000_000_000))
+                self.assertEqual([job["id"] for job in channels.read_cron_jobs("default")], ["b", "c"])
 
     def test_a_missing_jobs_file_is_no_jobs(self):
         with patch("hermes_cli.profiles.get_profile_dir", side_effect=ValueError("bad profile")):

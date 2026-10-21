@@ -1110,13 +1110,19 @@ class ManagedNotifications:
             row = self.session_opener(profile, lambda db: db.get_session(session_id), read_only=True)
         except Exception:  # A gone or unreadable session still alerts, as before.
             row = None
-        source = row.get("source") if isinstance(row, dict) and row.get("id") == session_id else None
+        row = row if isinstance(row, dict) and row.get("id") == session_id else {}
+        # Agents' Bot Chat shows in bighelp, whichever way Hermes made it (its CLI stores `cli`).
+        # Peer chats has its own switch.
+        title = row.get("title")
+        if isinstance(title, str) and title.strip() == _PEER_CHAT_TITLE:
+            return frozenset({notification_channels.BIGHELP})
+        source = row.get("source")
         cron = isinstance(source, str) and source.strip().lower() == "cron"
         if event_type.startswith("scheduled.") or cron or (source is None and _CRON_SESSION.fullmatch(session_id)):
             job = scheduled_links.job_of_run(profile, session_id)
             return notification_channels.scheduled_channels(profile, job, failed=event_type == "scheduled.failed",
                                                             jobs=self.cron_jobs)
-        channel = notification_channels.channel_of_source(source) if source is not None else None
+        channel = notification_channels.channel_of_source(source) if isinstance(source, str) else None
         return frozenset({channel}) if channel else None
 
     def _queue_event(self, profile: str, session_id: str, turn_id: str, event_type: str,
@@ -1144,7 +1150,7 @@ class ManagedNotifications:
                                            and self._is_peer_chat(profile, session_id))
         # Where the alert comes from, worked out only when a phone here picks its channels. Workflows are
         # bighelp's own and have their own switches.
-        filtering = workflow_kind is None and self._filters_channels(profile, now)
+        filtering = workflow_kind is None and sender is None and self._filters_channels(profile, now)
         channels = self._alert_channels(profile, session_id, event_type) if filtering else None
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
