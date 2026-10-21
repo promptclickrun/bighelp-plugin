@@ -218,7 +218,10 @@ def _write_hint(hermes: Any, profile: str, previous: str, new: str) -> None:
 
 
 def _signature(agents: list[dict[str, str]]) -> str:
-    return hashlib.sha256(json.dumps(agents, sort_keys=True).encode("utf-8")).hexdigest()
+    # The words too, not just the roster: a plugin update that rewords the brief must reach agents on the
+    # next due turn, not wait for someone to open Teamwork in the app.
+    briefs = [brief(agent["id"], agents) for agent in agents]
+    return hashlib.sha256(json.dumps([agents, briefs], sort_keys=True).encode("utf-8")).hexdigest()
 
 
 class Team:
