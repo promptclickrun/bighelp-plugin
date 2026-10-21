@@ -525,8 +525,11 @@ class PluginUpdateManager:
             ]
         elif system == "Linux":
             systemd_run = shutil.which("systemd-run")
-            if not systemd_run:
-                raise PluginUpdateError("systemd-run is unavailable")
+            # `hermes gateway install --system --run-as-user` hosts and containers have no user manager, so
+            # `systemd-run --user` can't start anything there. Run the worker detached instead, like workflows.
+            if not systemd_run or not _systemd_user_available():
+                _launch_detached(clean_command)
+                return
             full_command = [
                 systemd_run,
                 "--user",
@@ -550,7 +553,49 @@ class PluginUpdateManager:
             env=_launcher_env(),
         )
         if result.returncode != 0:
+            if system == "Linux":
+                # A user manager that turned out unreachable (a stale XDG_RUNTIME_DIR) is the same host as above.
+                _launch_detached(clean_command)
+                return
             raise PluginUpdateError("The service manager rejected the updater job")
+
+
+def _systemd_user_available() -> bool:
+    """`systemd-run --user` needs a user manager; system-service hosts and containers often have none."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return os.path.exists(os.path.join(runtime, "systemd", "private")) or bool(
+        os.environ.get("DBUS_SESSION_BUS_ADDRESS"))
+
+
+# Detached workers this process started, so their exits are collected (no zombies in a long-lived dashboard).
+_detached: list[subprocess.Popen] = []
+
+
+def _launch_detached(command: list[str]) -> None:
+    """No user service manager: a child in its own session, so it outlives the CLI or request that started it.
+
+    The install lock stops a second worker, and the journal records every phase. A worker started inside a
+    system service shares that unit, so a restart of that same unit during the install ends it and leaves
+    the operation for Plugin Doctor; the restart this worker requests is the gateway's, and completion is
+    confirmed from the new runtime either way.
+    """
+    for process in list(_detached):
+        if process.poll() is not None:
+            _detached.remove(process)
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            cwd="/",
+            env=_launcher_env(),
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise PluginUpdateError("The detached updater could not start") from error
+    _detached.append(process)
 
 
 def _clean_exec_command(command: list[str], *, hermes_home: Path) -> list[str]:
