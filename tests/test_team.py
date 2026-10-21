@@ -125,8 +125,9 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(status["reached"], ["default", "havok", "nova"])
         self.assertEqual(status["failed"], [])
         self.assertIn("## Your team", self.hermes.hint("nova"))
-        self.assertTrue(self.hermes.hint("havok").startswith("Answer in French.\n\n## Your team"),
+        self.assertTrue(self.hermes.hint("havok").startswith(f"Answer in French.\n\n{team.BLOCK_START}\n## Your team"),
                         "The person's own hint stays first")
+        self.assertTrue(self.hermes.hint("havok").endswith(team.BLOCK_END))
         self.assertEqual(self.hermes.configs["havok"]["platform_hints"]["telegram"], "Short replies.")
 
         writes = len(self.hermes.writes)
@@ -172,6 +173,67 @@ class TeamTests(unittest.TestCase):
             self.assertIn("## Your team (v2)", self.hermes.hint(profile))
             self.assertEqual(self.hermes.hint(profile).count("## Your team"), 1, "The old words are replaced")
         self.assertNotEqual(old, self.hermes.hint("nova"))
+
+    def refresh(self):
+        team_patch = patch.object(team, "team", return_value=self.team)
+        team_patch.start()
+        self.addCleanup(team_patch.stop)
+        self.clock[0] += team.REFRESH_SECONDS + 1
+        team._pre_llm_call(platform="bighelp", session_id="s1")
+
+    def test_a_clone_gets_its_own_brief_and_loses_the_one_it_copied(self):
+        """Cloning an agent copies its config.yaml, team brief included. The clone must not keep being told
+        it is the agent it was copied from; everything else it copied (the person's own hint text) stays."""
+        self.hermes.configs["default"]["platform_hints"] = {"bighelp": {"append": "Answer in French."}}
+        self.team.set_enabled(True)
+        self.hermes.add("benson", "display_name: Benson\ndescription: Research\n")
+        self.hermes.configs["benson"] = copy.deepcopy(self.hermes.configs["default"])
+        self.assertIn("You're Gordie (@default)", self.hermes.hint("benson"), "The fixture is a real copy")
+        self.refresh()
+        hint = self.hermes.hint("benson")
+        self.assertNotIn("You're Gordie", hint)
+        self.assertIn("You're Benson (@benson)", hint)
+        self.assertEqual(hint.count("## Your team"), 1)
+        self.assertTrue(hint.startswith("Answer in French."), "Copied hint text the person wrote stays")
+        self.assertEqual(self.hermes.hint("default").count("## Your team"), 1)
+
+    def test_briefs_from_earlier_plugin_versions_are_recognized_and_replaced(self):
+        old_style = ("## Your team\nYou're Gordie (@default), one of several agents on this computer.\n"
+                     "- Nova (@nova): Calendar and email.\n- The person sees these conversations in bighelp.")
+        newer_style = ("## Your team\nYou're Gordie (@default). You don't work alone: these agents on this computer "
+                       "are your teammates.\n- Ask with message_agent.\n- The person sees these conversations in "
+                       "bighelp. If they ask how you work with your team, explain this.")
+        for copied in (old_style, newer_style):
+            with self.subTest(copied=copied[:60]):
+                self.hermes.configs["nova"]["platform_hints"] = {
+                    "bighelp": {"append": f"Be brief.\n\n{copied}\n\nSign off as Nova."}}
+                self.team.set_enabled(True)
+                hint = self.hermes.hint("nova")
+                self.assertNotIn("You're Gordie", hint)
+                self.assertEqual(hint.count("## Your team"), 1)
+                self.assertIn("Be brief.", hint)
+                self.assertIn("Sign off as Nova.", hint)
+                self.team.set_enabled(False)
+                self.assertEqual(self.hermes.hint("nova"), "Be brief.\n\nSign off as Nova.",
+                                 "Turning Teamwork off removes copied briefs too, and only them")
+
+    def test_a_recreated_agent_with_a_remembered_brief_is_still_cleaned(self):
+        """The plugin remembers what it wrote per agent id; a new agent reusing an old id must not be skipped."""
+        self.team.set_enabled(True)
+        remembered = self.hermes.hint("nova")
+        self.hermes.configs["nova"] = copy.deepcopy(self.hermes.configs["default"])  # deleted, then cloned anew
+        self.team.status()
+        hint = self.hermes.hint("nova")
+        self.assertEqual(hint, remembered)
+        self.assertNotIn("You're Gordie", hint)
+
+    def test_a_brief_the_person_wrote_themselves_is_never_touched(self):
+        own = "## Your team\nWork with Havok on code."
+        self.hermes.configs["nova"]["platform_hints"] = {"bighelp": {"append": own}}
+        self.team.set_enabled(True)
+        self.assertTrue(self.hermes.hint("nova").startswith(own))
+        self.team.set_enabled(False)
+        self.assertEqual(self.hermes.hint("nova"), own)
 
     def test_off_by_default_and_a_failed_write_is_reported(self):
         status = self.team.status()
@@ -284,6 +346,38 @@ class RealHermesTests(unittest.TestCase):
             with _profile_scope("nova"):
                 self.assertNotIn("bighelp", load_config().get("platform_hints") or {})
 
+
+    def test_a_profile_cloned_by_hermes_gets_its_own_identity(self):
+        """Hermes' own `create_profile(clone_from=...)` (the app's default for a new agent), then a refresh."""
+        if not team.available():
+            self.skipTest("this Hermes has no profile/config helpers")
+        from hermes_cli import profiles
+        from hermes_cli.config import load_config
+        from hermes_cli.web_routers._common import _profile_scope
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        home = Path(folder.name) / "hermes"
+        (home / "profiles" / "nova").mkdir(parents=True)
+        (home / "config.yaml").write_text("model:\n  default: fixture-model\nplatform_hints:\n  bighelp:\n"
+                                          "    append: Answer in French.\n", encoding="utf-8")
+        (home / "profiles" / "nova" / "config.yaml").write_text("model:\n  default: fixture-model\n", encoding="utf-8")
+        (home / "profiles" / "nova" / "profile.yaml").write_text(NOVA, encoding="utf-8")
+        (home / "profile.yaml").write_text(GORDIE, encoding="utf-8")
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}):
+            real = Team(TeamStore(lambda: home / "team.json"))
+            real.set_enabled(True)
+            profiles.create_profile(name="benson", clone_from="default", no_alias=True)
+            with _profile_scope("benson"):
+                copied = load_config()["platform_hints"]["bighelp"]["append"]
+            self.assertIn("You're Gordie (@default)", copied, "Hermes' clone really copies the brief")
+            real.status()
+            with _profile_scope("benson"):
+                hint = load_config()["platform_hints"]["bighelp"]["append"]
+        self.assertNotIn("You're Gordie", hint)
+        self.assertIn("You're Benson (@benson)", hint)
+        self.assertEqual(hint.count("## Your team"), 1)
+        self.assertTrue(hint.startswith("Answer in French."))
 
     def test_hermes_puts_the_brief_into_an_open_chats_message(self):
         """Hermes' own hook dispatch and message assembly carry the note, with the arguments it really sends."""

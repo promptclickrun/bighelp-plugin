@@ -42,6 +42,13 @@ Hermes' own config helpers and lock, the same way the dashboard saves config.
 
 - Text that was already in `platform_hints.bighelp` stays; the brief is added
   after it, and turning Teamwork off removes only the brief.
+- The brief sits between two marker lines (`<!-- bighelp Teamwork: … -->` and
+  `<!-- end bighelp Teamwork -->`). Cloning an agent copies its `config.yaml`,
+  brief included, so a new agent starts out told it is the agent it was copied
+  from. Each save takes out every marked block, and every unmarked brief from
+  3.24.x and earlier (recognized by its fixed first and last lines), before
+  adding the agent's own. A clone is corrected on the next refresh, since a new
+  agent changes the roster. Everything else a clone copied stays.
 - The roster stays current: each bighelp chat on the default agent checks at
   most every 10 minutes whether agents were added, renamed or removed, or
   whether a plugin update changed the brief's words, and saves new briefs only
