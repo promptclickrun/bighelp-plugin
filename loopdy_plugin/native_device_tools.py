@@ -55,6 +55,9 @@ KIND_CAPABILITIES = {
 LEASE_SECONDS = 30
 # A shortcut can run a minute, and photos.save has the phone download the file from this host.
 LONG_OPERATION_SECONDS = 60
+# The host waits this much longer than the request it sent allows. A late answer is then still taken, and a
+# long operation that never answers is "outcome_unknown", not "nothing happened".
+LONG_OPERATION_GRACE_SECONDS = 10
 MAX_CHANNELS = 64
 MAX_QUEUE = 128
 MAX_COMPLETED = 256
@@ -108,6 +111,16 @@ class _Channel:
     closed: bool = False
 
 
+def _grace(operation: str) -> int:
+    return LONG_OPERATION_GRACE_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else 0
+
+
+def _unanswered(operation: str) -> str:
+    """What the agent hears when the phone never answered. A shortcut or a saved picture may have happened
+    anyway, so the agent must not run it again."""
+    return "outcome_unknown" if operation in DEVICE_TOOL_LONG_OPERATIONS else "phone_unavailable"
+
+
 def _failed_result(request_id: str | None, code: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "version": 1,
@@ -116,6 +129,8 @@ def _failed_result(request_id: str | None, code: str) -> dict[str, Any]:
         "code": code,
         "payload": {},
     }
+    if code == "outcome_unknown":
+        result["payload"] = {"note": "The phone did not answer, so it may have run. Do not run it again; check first."}
     if request_id:
         result["requestId"] = request_id
     return result
@@ -314,7 +329,7 @@ class NativeDeviceToolHub:
         channel.requests.clear()
         for request_id, pending in tuple(channel.pending.items()):
             _mark_completed(channel, request_id)
-            _set_future(pending, _failed_result(request_id, "phone_unavailable"))
+            _set_future(pending, _failed_result(request_id, _unanswered(pending.request["operation"])))
         channel.pending.clear()
 
     def _get(self, owner: Any, channel_id: str) -> _Channel:
@@ -446,9 +461,9 @@ class NativeDeviceToolHub:
                 raise NativeDeviceToolError("authorization_required")
             if parsed["sentAt"] < pending.request["sentAt"]:
                 raise NativeDeviceToolError("result_timestamp_invalid")
-            if self.clock() >= pending.request["expiresAt"]:
+            if self.clock() >= pending.request["expiresAt"] + _grace(parsed["operation"]):
                 _mark_completed(channel, request_id)
-                _set_future(pending, _failed_result(request_id, "phone_unavailable"))
+                _set_future(pending, _failed_result(request_id, _unanswered(parsed["operation"])))
                 raise NativeDeviceToolError("result_expired")
             _mark_completed(channel, request_id)
             _set_future(pending, parsed)
@@ -540,15 +555,15 @@ class NativeDeviceToolHub:
                         device_photos.grant_save_path(
                             profile, self._stored_ids(session_id, channel.session_id), arguments["path"])
                     if operation in DEVICE_TOOL_LONG_OPERATIONS:
-                        channel.hold_until = max(channel.hold_until, self.clock() + timeout)
+                        channel.hold_until = max(channel.hold_until, self.clock() + timeout + _grace(operation))
                     pending = _Pending(request, fingerprint, Future())
                     channel.pending[request_id] = pending
                     channel.sequence += 1
                     channel.requests.append((channel.sequence, request))
                     while len(channel.requests) > MAX_QUEUE:
                         channel.requests.popleft()
-                deadline = pending.request["expiresAt"]
-            remaining = max(0.001, min(float(deadline - int(self.clock())), timeout))
+                deadline = pending.request["expiresAt"] + _grace(operation)
+            remaining = max(0.001, min(float(deadline - int(self.clock())), timeout + _grace(operation)))
             try:
                 # A middleware call may run through Hermes' persistent main
                 # loop or a per-worker loop.  Wrap the thread-safe shared
@@ -558,7 +573,7 @@ class NativeDeviceToolHub:
                 result = await asyncio.wait_for(asyncio.shield(shared_result), timeout=remaining)
                 return self._for_agent(operation, result)
             except asyncio.TimeoutError:
-                result = _failed_result(request_id, "phone_unavailable")
+                result = _failed_result(request_id, _unanswered(operation))
                 with self._lock:
                     _mark_completed(channel, request_id)
                     _set_future(pending, result)
@@ -588,16 +603,21 @@ class NativeDeviceToolHub:
     def _for_agent(self, operation: str, result: dict[str, Any]) -> dict[str, Any]:
         """What the agent reads. A photo from photos.get becomes a file on this host; the bytes end here."""
         payload = result.get("payload")
-        if operation != "photos.get" or result.get("status") != "completed" or not isinstance(payload, dict) \
-                or "image" not in payload:
+        if operation != "photos.get" or not isinstance(payload, dict) or "image" not in payload:
             return result
+        image = payload["image"]
+        rest = {key: value for key, value in payload.items() if key != "image"}
+        if result.get("status") != "completed":
+            # Whatever else came back, never the picture itself.
+            kept = {key: value for key, value in image.items() if key != "data"} if isinstance(image, dict) else None
+            return {**result, "payload": {**rest, **({"image": kept} if kept else {})}}
         try:
-            picture = device_photos.store_picture(payload["image"], self.photos_directory())
+            picture = device_photos.store_picture(image, self.photos_directory())
         except (device_photos.PhotoRefusal, OSError, ImportError) as exc:
             # Only a fixed code is logged: the picture's bytes and its path are the user's.
             logger.warning("bighelp phone photo not stored: %s", getattr(exc, "code", type(exc).__name__))
             return _failed_result(result.get("requestId"), getattr(exc, "code", "photo_unavailable"))
-        return {**result, "payload": {**{key: value for key, value in payload.items() if key != "image"}, "image": picture}}
+        return {**result, "payload": {**rest, "image": picture}}
 
 
 def _operation_for_tool(tool_name: str, args: Any) -> tuple[str, dict[str, Any]]:

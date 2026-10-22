@@ -31,7 +31,9 @@ MAX_SAVE_BYTES = 50 * 1024 * 1024
 KEEP_PICTURES = 50
 KEEP_SECONDS = 7 * 24 * 60 * 60
 GRANT_SECONDS = 10 * 60
-MAX_GRANTS = 64
+# Per chat, so one chat saving a lot can't push another chat's file out; the total only guards memory.
+MAX_GRANTS_PER_SESSION = 16
+MAX_GRANTS = 1_024
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp", ".dng"})
 _VIDEO_SUFFIXES = frozenset({".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm"})
 _STALE_PARTIAL_SECONDS = 24 * 60 * 60
@@ -71,9 +73,13 @@ def check_save_path(raw: Any) -> str:
     ):
         raise PhotoRefusal("invalid_arguments")
     try:
-        from gateway.platforms.base import BasePlatformAdapter
+        from gateway.platforms import base
+        from hermes_cli.profiles import get_profile_dir, profile_exists  # noqa: F401  (attachments/resolve needs them)
     except ImportError:
         raise PhotoRefusal("files_unavailable") from None
+    BasePlatformAdapter = base.BasePlatformAdapter
+    if not _is_served_media(raw, base):
+        raise PhotoRefusal("unsupported_media")
     safe = BasePlatformAdapter.validate_media_delivery_path(raw)
     # The phone asks resolve for "MEDIA:<path>", which must read back as exactly this one file.
     media, _cleaned = BasePlatformAdapter.extract_media("MEDIA:" + safe) if safe else ([], "")
@@ -82,9 +88,7 @@ def check_save_path(raw: Any) -> str:
         or BasePlatformAdapter.filter_media_delivery_paths(media) != [(safe, False)]
     ):
         raise PhotoRefusal("invalid_arguments")
-    suffix = Path(safe).suffix.lower()
-    kind = mimetypes.guess_type(safe)[0] or ""
-    if not (kind.startswith(("image/", "video/")) or suffix in _IMAGE_SUFFIXES | _VIDEO_SUFFIXES):
+    if not _is_served_media(safe, base):  # A link to another kind of file.
         raise PhotoRefusal("unsupported_media")
     try:
         size = os.stat(safe).st_size
@@ -97,6 +101,15 @@ def check_save_path(raw: Any) -> str:
     return safe
 
 
+def _is_served_media(path: str, base: Any) -> bool:
+    """A picture or video, of a kind the gateway delivers. It lists the extensions it serves and has no
+    .heic, for one: that's unsupported media here, not a bad path."""
+    suffix = Path(path).suffix.lower()
+    kind = mimetypes.guess_type(path)[0] or ""
+    return (kind.startswith(("image/", "video/")) or suffix in _IMAGE_SUFFIXES | _VIDEO_SUFFIXES) \
+        and suffix in getattr(base, "MEDIA_DELIVERY_EXTS", (suffix,))
+
+
 def grant_save_path(profile: str, session_ids: Iterable[str], path: str) -> None:
     """Let attachments/resolve serve `path` to these chats for a few minutes."""
     now = _clock()
@@ -106,6 +119,9 @@ def grant_save_path(profile: str, session_ids: Iterable[str], path: str) -> None
             del grants[key]
         for session_id in session_ids:
             grants[(profile, session_id, path)] = now + GRANT_SECONDS
+            chat = [key for key in grants if key[:2] == (profile, session_id)]
+            for key in sorted(chat, key=grants.__getitem__)[:max(0, len(chat) - MAX_GRANTS_PER_SESSION)]:
+                del grants[key]
         while len(grants) > MAX_GRANTS:
             del grants[min(grants, key=grants.__getitem__)]
 
@@ -114,6 +130,15 @@ def granted_paths(profile: str, session_id: str, paths: Iterable[str]) -> set[st
     now = _clock()
     with _state.lock:
         return {path for path in paths if _state.grants.get((profile, session_id, path), 0) > now}
+
+
+def file_stamp(path: str) -> str:
+    """Size and modification time of a granted file: the same path saved again after a rewrite is a new file."""
+    try:
+        status = os.stat(path)
+    except OSError:
+        return "missing"
+    return f"{status.st_size}:{status.st_mtime_ns}"
 
 
 # photos.get --------------------------------------------------------------------------------------
@@ -137,8 +162,7 @@ def store_picture(image: Any, directory: Path, *, now: float | None = None) -> d
         raise PhotoRefusal("photo_unreadable")
     if directory.is_symlink():
         raise PhotoRefusal("photo_unavailable")
-    directory.mkdir(parents=True, exist_ok=True)
-    os.chmod(directory, 0o700)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = directory / (hashlib.sha256(raw).hexdigest()[:40] + ".jpg")
     stamp = time.time() if now is None else now
     if target.is_file() and not target.is_symlink():

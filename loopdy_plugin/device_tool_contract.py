@@ -44,12 +44,15 @@ DEVICE_TOOL_OPERATIONS = frozenset(
     }
 )
 
-# Operations that only read. Their results are private and never kept for a retry.
+# Operations the app doesn't journal: reads, and the few that are the same done twice. Their results are
+# private and never kept for a retry.
 DEVICE_TOOL_READ_OPERATIONS = frozenset(
     {
         "health.read", "calendar.list", "reminders.list", "location.current", "appearance.get",
         "contacts.list", "photos.list", "photos.albums", "photos.get", "geofences.list", "alarms.list",
         "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
+        # The app doesn't journal these either: playing or pausing twice, or setting a look twice, is once.
+        "music.play", "music.control", "appearance.set",
     }
 )
 # One per switch in Device access; the channel's `enabled` list names them.

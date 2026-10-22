@@ -47,6 +47,7 @@ class AttachmentStore:
         session_id: str,
         items: Iterable[dict[str, Any]],
         max_bytes: int | None = None,
+        stamp: str = "",
     ) -> list[dict[str, Any]]:
         safe_profile = _bounded_identifier(profile, 80, "profile")
         safe_session = _bounded_identifier(session_id, 180, "session_id")
@@ -72,6 +73,7 @@ class AttachmentStore:
                     item_id=item_id,
                     text=text,
                     max_bytes=max_bytes,
+                    stamp=stamp,
                 )
             )
         return resolved_items
@@ -107,8 +109,11 @@ class AttachmentStore:
         item_id: str,
         text: str,
         max_bytes: int,
+        stamp: str,
     ) -> dict[str, Any]:
-        text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # `stamp` is whatever tells the caller the files behind `text` changed (a rewritten file at the same
+        # path); a new stamp is a new cache entry.
+        text_digest = hashlib.sha256((text + "\0" + stamp).encode("utf-8")).hexdigest()
         cached = self._cached_item(profile, session_id, item_id, text_digest)
         if cached is not None:
             return cached
@@ -143,7 +148,7 @@ class AttachmentStore:
         oversized_mime_types = []
         for source_path in paths[:MAX_ATTACHMENTS_PER_ITEM]:
             try:
-                attachment = self._cache_file(profile, session_id, item_id, source_path, max_bytes)
+                attachment = self._cache_file(profile, session_id, item_id, source_path, max_bytes, stamp)
             except _OversizedAttachment as error:
                 oversized_mime_types.append(error.mime_type)
                 continue
@@ -168,9 +173,10 @@ class AttachmentStore:
         item_id: str,
         source_path: str,
         max_bytes: int,
+        stamp: str,
     ) -> dict[str, Any] | None:
         source_key = hashlib.sha256(
-            "\0".join((profile, session_id, item_id, source_path)).encode("utf-8")
+            "\0".join((profile, session_id, item_id, source_path, *([stamp] if stamp else []))).encode("utf-8")
         ).hexdigest()
         with self._connect() as connection:
             existing = connection.execute(

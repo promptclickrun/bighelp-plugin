@@ -577,17 +577,77 @@ class TimeoutTests(ChannelCase):
             waits.append(timeout)
             raise asyncio.TimeoutError
 
-        for operation, arguments, seconds in (
-            ("shortcuts.run", {"name": "Log Water"}, 60), ("music.nowPlaying", {}, 30),
+        for operation, arguments, seconds, code in (
+            ("shortcuts.run", {"name": "Log Water"}, 70, "outcome_unknown"),
+            ("music.nowPlaying", {}, 30, "phone_unavailable"),
         ):
             with self.subTest(operation=operation):
                 fields = self.fields([operation.partition(".")[0]])
                 self.hub.connect(self.owner, fields)
                 with patch("loopdy_plugin.native_device_tools.asyncio.wait_for", fake_wait_for):
                     result = await self.call(operation, arguments)
-                self.assertEqual((result["status"], result["code"]), ("failed", "phone_unavailable"))
+                self.assertEqual((result["status"], result["code"]), ("failed", code))
                 self.assertEqual(waits[-1], seconds)
                 self.hub.close(self.owner, fields)
+
+
+class OutcomeUnknownTests(ChannelCase):
+    """The phone has 60 seconds; the host waits 10 more, so a late answer still counts. A long operation the
+    phone never answers may have happened (a shortcut can do anything): the agent must not run it again."""
+
+    async def send(self, operation: str, arguments: dict, fields: dict):
+        self.hub.connect(self.owner, fields)
+        with patch.object(device_photos, "check_save_path", side_effect=lambda raw: raw):
+            task = self.call(operation, arguments)
+            await asyncio.sleep(0)
+        [row] = self.hub.poll(self.owner, fields, after=0)["requests"]
+        request = row["request"]
+        self.assertEqual(request["expiresAt"] - request["sentAt"], 60)  # The phone's own deadline stays 60.
+        return task, request
+
+    async def test_the_host_gives_up_ten_seconds_after_the_phone_would(self):
+        waits = []
+
+        async def fake_wait_for(awaitable, timeout):
+            waits.append(timeout)
+            raise asyncio.TimeoutError
+
+        fields = self.fields(["shortcuts"])
+        self.hub.connect(self.owner, fields)
+        with patch("loopdy_plugin.native_device_tools.asyncio.wait_for", fake_wait_for):
+            result = await self.call("shortcuts.run", {"name": "Log Water"})
+        self.assertEqual((waits, result["status"], result["code"]), ([70], "failed", "outcome_unknown"))
+        self.assertIn("Do not run it again", result["payload"]["note"])
+
+    async def test_an_answer_up_to_ten_seconds_late_is_still_taken(self):
+        fields = self.fields(["shortcuts"])
+        task, request = await self.send("shortcuts.run", {"name": "Log Water"}, fields)
+        self.now += 65
+        self.answer(fields, request, {"id": "r1", "status": "completed", "output": "done", "truncated": False})
+        self.assertEqual((await task)["payload"]["output"], "done")
+
+    async def test_an_answer_after_the_host_deadline_is_refused_and_the_agent_hears_outcome_unknown(self):
+        fields = self.fields(["shortcuts"])
+        task, request = await self.send("shortcuts.run", {"name": "Log Water"}, fields)
+        self.now += 71
+        late = device_tool_result(request=request, status="completed", payload={"id": "r1"}, sent_at=self.now)
+        with self.assertRaises(NativeDeviceToolError):
+            self.hub.accept_result(self.owner, fields, late)
+        self.assertEqual((await task)["code"], "outcome_unknown")
+
+    async def test_a_channel_that_ends_during_a_long_call_leaves_it_unknown(self):
+        fields = self.fields(["shortcuts"])
+        task, _request_ = await self.send("shortcuts.run", {"name": "Log Water"}, fields)
+        self.hub.close(self.owner, fields)
+        self.assertEqual((await task)["code"], "outcome_unknown")
+
+    async def test_other_calls_still_say_phone_unavailable(self):
+        fields = self.fields(["contacts"])
+        self.hub.connect(self.owner, fields)
+        task = self.call("contacts.create", {"givenName": "Sam"})
+        await asyncio.sleep(0)
+        self.hub.close(self.owner, fields)
+        self.assertEqual((await task)["code"], "phone_unavailable")
 
 
 # Results ---------------------------------------------------------------------------------------
@@ -708,6 +768,30 @@ class PhotoResultTests(ChannelCase):
         result = device_tool_result(request=row["request"], status="failed", payload={}, sent_at=self.now, code="not_found")
         self.hub.accept_result(self.owner, self.channel_fields, result)
         self.assertEqual((await task)["code"], "not_found")
+
+    async def test_a_failed_read_never_hands_the_agent_picture_data(self):
+        task = self.call("photos.get", {"id": "photo-1"})
+        await asyncio.sleep(0)
+        [row] = self.hub.poll(self.owner, self.channel_fields, after=0)["requests"]
+        data = base64.b64encode(_jpeg()).decode()
+        result = device_tool_result(
+            request=row["request"], status="failed", code="cancelled", sent_at=self.now,
+            payload={"image": {"format": "jpeg", "width": 1, "height": 1, "data": data}, "id": "photo-1"})
+        self.hub.accept_result(self.owner, self.channel_fields, result)
+        answer = await task
+        self.assertEqual(answer["code"], "cancelled")
+        self.assertNotIn(data, json.dumps(answer))
+        self.assertNotIn("data", answer["payload"]["image"])
+        self.assertEqual(answer["payload"]["id"], "photo-1")
+        self.assertFalse(self.pictures.exists())
+
+    async def test_the_folder_is_made_private_from_the_start(self):
+        old = os.umask(0)
+        try:
+            await self.get(_photo_payload(_jpeg()))
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(self.pictures.stat().st_mode), 0o700)
 
     async def test_other_operations_pass_through_unchanged(self):
         task = self.call("photos.list", {})
@@ -843,10 +927,39 @@ class SavePathTests(unittest.TestCase):
         return caught.exception.code
 
     def test_a_picture_or_video_passes_and_comes_back_as_the_resolved_path(self):
-        for name in ("a.png", "b.JPG", "c.heic", "d.mov", "e.mp4", "f.webp"):
+        for name in ("a.png", "b.JPG", "d.mov", "e.mp4", "f.webp"):
             with self.subTest(name=name):
                 path = self.file(name)
                 self.assertEqual(device_photos.check_save_path(path), path)
+
+    def test_kinds_the_gateway_does_not_deliver_are_unsupported_media_not_a_bad_path(self):
+        # Hermes' delivery list has no .heic or .dng (some versions lack .m4v and .tif too).
+        from gateway.platforms import base
+
+        for name in ("c.heic", "c.heif", "c.m4v", "c.tif", "c.dng"):
+            with self.subTest(name=name):
+                path = self.file(name)
+                if Path(name).suffix in base.MEDIA_DELIVERY_EXTS:
+                    self.assertEqual(device_photos.check_save_path(path), path)
+                else:
+                    self.assertEqual(self.refusal(path), "unsupported_media")
+
+    def test_the_gateways_own_list_decides_not_the_host_pythons(self):
+        path = self.file("trip.png")
+        with patch("gateway.platforms.base.MEDIA_DELIVERY_EXTS", (".mp4",)):
+            self.assertEqual(self.refusal(path), "unsupported_media")
+        with patch("gateway.platforms.base.MEDIA_DELIVERY_EXTS", (".png",)):
+            self.assertEqual(device_photos.check_save_path(path), path)
+
+    def test_a_link_to_another_kind_of_file_is_unsupported_media(self):
+        link = self.root / "looks-like.png"
+        link.symlink_to(self.file("notes.txt"))
+        self.assertEqual(self.refusal(str(link)), "unsupported_media")
+
+    def test_without_the_attachment_routes_save_says_files_unavailable(self):
+        path = self.file("trip.png")
+        with patch.dict("sys.modules", {"hermes_cli.profiles": None}):
+            self.assertEqual(self.refusal(path), "files_unavailable")
 
     def test_a_symlink_is_resolved_before_the_phone_hears_of_it(self):
         target = self.file("real.png")
@@ -872,7 +985,9 @@ class SavePathTests(unittest.TestCase):
 
     def test_paths_the_resolve_route_would_not_serve_are_refused(self):
         self.assertEqual(self.refusal(str(self.root / "missing.png")), "invalid_arguments")
-        self.assertEqual(self.refusal(str(self.root)), "invalid_arguments")
+        folder = self.root / "folder.png"
+        folder.mkdir()
+        self.assertEqual(self.refusal(str(folder)), "invalid_arguments")
         self.assertEqual(self.refusal("relative/path.png"), "invalid_arguments")
         self.assertEqual(self.refusal(self.file("empty.png", 0)), "invalid_arguments")
         for raw in (None, 5, "", "x" * 5000, "/tmp/a\n.png", "/tmp/a\x00.png"):
@@ -941,10 +1056,17 @@ class SaveThroughTheChannelTests(ChannelCase):
             self.assertEqual(device_photos.granted_paths("default", "s1", ["/a.png"]), {"/a.png"})
         with patch.object(device_photos, "_clock", return_value=1_000.0 + device_photos.GRANT_SECONDS + 1):
             self.assertEqual(device_photos.granted_paths("default", "s1", ["/a.png"]), set())
+        device_photos._state.grants.clear()
         with patch.object(device_photos, "_clock", return_value=5.0):
-            for number in range(device_photos.MAX_GRANTS + 20):
+            device_photos.grant_save_path("default", ["other-chat"], "/keep.png")
+            for number in range(device_photos.MAX_GRANTS_PER_SESSION * 3):
                 device_photos.grant_save_path("default", ["s1"], f"/{number}.png")
-        self.assertEqual(len(device_photos._state.grants), device_photos.MAX_GRANTS)
+            chat = [key for key in device_photos._state.grants if key[1] == "s1"]
+            self.assertEqual(len(chat), device_photos.MAX_GRANTS_PER_SESSION)
+            # The newest stay; another chat's grant is not pushed out by this chat's.
+            self.assertIn(("default", "s1", f"/{device_photos.MAX_GRANTS_PER_SESSION * 3 - 1}.png"), chat)
+            self.assertNotIn(("default", "s1", "/0.png"), chat)
+            self.assertEqual(device_photos.granted_paths("default", "other-chat", ["/keep.png"]), {"/keep.png"})
 
 
 class AttachmentsServeGrantedPathsTests(unittest.TestCase):
@@ -991,6 +1113,63 @@ class AttachmentsServeGrantedPathsTests(unittest.TestCase):
         with patch("loopdy_plugin.attachments.MAX_ARTIFACT_BYTES", 1_000), \
                 patch.object(device_photos, "MAX_SAVE_BYTES", 1_400):
             self.assertEqual(self.resolve(item_id="m2"), [])
+
+    def test_a_file_the_agent_already_sent_still_gets_the_photo_limit_when_granted(self):
+        import sqlite3
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE messages SET content = ?", (f"MEDIA:{self.picture}",))
+        device_photos.grant_save_path("default", ["chat-1"], str(self.picture))
+        with patch("loopdy_plugin.attachments.MAX_ARTIFACT_BYTES", 1_000), \
+                patch.object(device_photos, "MAX_SAVE_BYTES", 2_000):
+            self.assertEqual(len(self.resolve()), 1)
+
+    def fetch_all(self, attachment: dict) -> bytes:
+        data, offset = b"", 0
+        while offset is not None:
+            chunk = na.fetch(na._Fetch(agentId="default", attachmentId=attachment["id"], offset=offset))
+            data += base64.b64decode(chunk["data"])
+            offset = chunk["nextOffset"]
+        return data
+
+    def test_the_same_path_saved_again_after_a_rewrite_serves_the_new_file(self):
+        device_photos.grant_save_path("default", ["chat-1"], str(self.picture))
+        [first] = self.resolve(item_id="photo")  # The app names every picture it saves "photo".
+        self.assertEqual(self.fetch_all(first), b"p" * 1_500)
+        self.picture.write_bytes(b"q" * 1_500)  # Same size: only the time differs.
+        os.utime(self.picture, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        [second] = self.resolve(item_id="photo")
+        self.assertNotEqual(second["id"], first["id"])
+        self.assertEqual(self.fetch_all(second), b"q" * 1_500)
+        self.picture.write_bytes(b"r" * 1_700)  # A different size.
+        [third] = self.resolve(item_id="photo")
+        self.assertEqual(self.fetch_all(third), b"r" * 1_700)
+
+    def test_an_unchanged_file_saved_again_reuses_the_cached_copy(self):
+        device_photos.grant_save_path("default", ["chat-1"], str(self.picture))
+        [first] = self.resolve(item_id="photo")
+        [second] = self.resolve(item_id="photo")
+        self.assertEqual(first["id"], second["id"])
+
+    def test_a_file_past_the_old_offset_limit_can_be_fetched_to_its_end(self):
+        # A 27 MB file is fetched in 3 MB pieces; the ninth starts past 25 MiB.
+        big = self.root / "clip.mov"
+        with big.open("wb") as handle:
+            handle.truncate(27 * 1024 * 1024 + 5)
+            handle.seek(27 * 1024 * 1024)
+            handle.write(b"END!!")
+        self.picture = big
+        device_photos.grant_save_path("default", ["chat-1"], str(big))
+        [attachment] = self.resolve(item_id="photo")
+        self.assertEqual(attachment["byteCount"], 27 * 1024 * 1024 + 5)
+        offset = 26 * 1024 * 1024
+        chunk = na.fetch(na._Fetch(agentId="default", attachmentId=attachment["id"], offset=offset))
+        self.assertEqual(chunk["offset"], offset)
+        last = na.fetch(na._Fetch(agentId="default", attachmentId=attachment["id"], offset=27 * 1024 * 1024))
+        self.assertEqual(base64.b64decode(last["data"]), b"END!!")
+        self.assertIsNone(last["nextOffset"])
+        na._Fetch(agentId="default", attachmentId="a" * 32, offset=device_photos.MAX_SAVE_BYTES)
+        with self.assertRaises(ValueError):
+            na._Fetch(agentId="default", attachmentId="a" * 32, offset=device_photos.MAX_SAVE_BYTES + 1)
 
     def test_an_ungranted_file_keeps_the_ordinary_limit(self):
         import sqlite3

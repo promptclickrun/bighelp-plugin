@@ -35,7 +35,7 @@ class AppearanceContractTests(unittest.TestCase):
         self.assertIn("appearance.get", DEVICE_TOOL_OPERATIONS)
         self.assertIn("appearance.set", DEVICE_TOOL_OPERATIONS)
         self.assertIn("appearance.get", DEVICE_TOOL_READ_OPERATIONS)
-        self.assertNotIn("appearance.set", DEVICE_TOOL_READ_OPERATIONS)
+        self.assertIn("appearance.set", DEVICE_TOOL_READ_OPERATIONS)  # Not journaled: twice is once.
         self.assertEqual(_request("appearance.get", {})["arguments"], {})
         request = _request(arguments={"mode": "dark", "color": "rose"})
         self.assertEqual(request["arguments"], {"mode": "dark", "color": "rose"})

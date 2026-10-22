@@ -59,7 +59,7 @@ class _Fetch(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     attachmentId: str = Field(min_length=16, max_length=128)
-    offset: StrictInt = Field(ge=0, le=25 * 1024 * 1024)
+    offset: StrictInt = Field(ge=0, le=device_photos.MAX_SAVE_BYTES)
 
 
 class _Recent(BaseModel):
@@ -161,7 +161,7 @@ def resolve(body: _Resolve) -> dict[str, Any]:
         wanted.extend(p for p in _media_paths(item.text) if p not in wanted)
     allowed = emitted_by_session(db_path, body.storedId, wanted)
     # A picture or video the agent asked iphone_photos to save is served to that chat too (see device_photos.py).
-    granted = device_photos.granted_paths(body.agentId, body.storedId, [p for p in wanted if p not in allowed])
+    granted = device_photos.granted_paths(body.agentId, body.storedId, wanted)
     allowed |= granted
     store = attachment_store()
     projected = []
@@ -170,10 +170,13 @@ def resolve(body: _Resolve) -> dict[str, Any]:
         if not paths:
             projected.append({"itemId": item.itemId, "text": item.text, "attachments": []})
             continue
+        only_granted = granted.issuperset(paths)
         [result] = store.resolve(
             profile=body.agentId, session_id=body.storedId,
             items=[{"id": item.itemId, "text": _only(item.text, paths)}],
-            max_bytes=device_photos.MAX_SAVE_BYTES if granted.issuperset(paths) else None,
+            max_bytes=device_photos.MAX_SAVE_BYTES if only_granted else None,
+            # The app names every picture it saves "photo"; the same path saved again may be a new file.
+            stamp="|".join(device_photos.file_stamp(path) for path in paths) if only_granted else "",
         )
         projected.append({
             "itemId": item.itemId,
