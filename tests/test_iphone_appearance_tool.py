@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from loopdy_plugin.device_tool_contract import (
+    APPEARANCE_COLOR_PATTERN,
     DEVICE_TOOL_OPERATIONS,
     DEVICE_TOOL_READ_OPERATIONS,
     device_tool_request,
@@ -35,7 +36,7 @@ class AppearanceContractTests(unittest.TestCase):
         self.assertIn("appearance.get", DEVICE_TOOL_OPERATIONS)
         self.assertIn("appearance.set", DEVICE_TOOL_OPERATIONS)
         self.assertIn("appearance.get", DEVICE_TOOL_READ_OPERATIONS)
-        self.assertNotIn("appearance.set", DEVICE_TOOL_READ_OPERATIONS)
+        self.assertIn("appearance.set", DEVICE_TOOL_READ_OPERATIONS)  # Not journaled: twice is once.
         self.assertEqual(_request("appearance.get", {})["arguments"], {})
         request = _request(arguments={"mode": "dark", "color": "rose"})
         self.assertEqual(request["arguments"], {"mode": "dark", "color": "rose"})
@@ -85,7 +86,7 @@ class AppearanceToolSchemaTests(unittest.TestCase):
         self.assertEqual(properties["operation"]["enum"], ["get", "set"])
         self.assertEqual(properties["mode"]["enum"], ["system", "light", "dark"])
         self.assertEqual(properties["color"]["maxLength"], 24)
-        pattern = re.compile(properties["color"]["pattern"])
+        pattern = re.compile(APPEARANCE_COLOR_PATTERN)  # The model sees the rule in words; the host checks it.
         for value in ("rose", "Ocean", "#0E7C66"):
             self.assertTrue(pattern.fullmatch(value), value)
         for value in ("", "#0E7C6", "rgb(1,2,3)", "dark violet"):

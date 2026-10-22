@@ -12,6 +12,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from .device_tool_arguments import LOCATION_TRIGGER, OPERATIONS as EXTENDED_OPERATIONS, check_value, validate_operation
+
 
 _OPAQUE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -20,6 +22,14 @@ _OPAQUE = re.compile(r"^[A-Za-z0-9_-]+$")
 # a payload accepted here cannot be rejected after it reaches the phone.
 MAX_DEVICE_TOOL_PAYLOAD_BYTES = 20 * 1024
 MAX_DEVICE_TOOL_ARGUMENT_BYTES = 16 * 1024
+# The phone bounds a result at 128 KB (a photo from photos.get is most of that). Results nest deeper
+# than arguments do: a contact's phones are a list of objects inside the list of contacts.
+MAX_DEVICE_TOOL_RESULT_BYTES = 128 * 1024
+MAX_DEVICE_TOOL_RESULT_DEPTH = 6
+# photos.get: a JPEG of at most 90 KB (the phone steps quality down to fit), sent as base64 text.
+MAX_PHOTO_JPEG_BYTES = 90 * 1024
+MAX_PHOTO_BASE64_CHARACTERS = 4 * ((MAX_PHOTO_JPEG_BYTES + 2) // 3)
+MAX_PHOTO_PIXELS = 2_048
 MAX_DEVICE_TOOL_DATE_RANGE_SECONDS = 31 * 24 * 60 * 60
 MAX_DEVICE_TOOL_LIST_LIMIT = 200
 MAX_DEVICE_TOOL_ID_COUNT = 50
@@ -30,14 +40,28 @@ DEVICE_TOOL_OPERATIONS = frozenset(
         "reminders.list", "reminders.create", "reminders.update", "reminders.delete",
         "location.current",
         "appearance.get", "appearance.set",
+        *EXTENDED_OPERATIONS,
     }
 )
 
-# Operations that only read. Their results are private and never kept for a retry.
+# Operations the app doesn't journal: reads, and the few that are the same done twice. Their results are
+# private and never kept for a retry.
 DEVICE_TOOL_READ_OPERATIONS = frozenset(
-    {"health.read", "calendar.list", "reminders.list", "location.current", "appearance.get"}
+    {
+        "health.read", "calendar.list", "reminders.list", "location.current", "appearance.get",
+        "contacts.list", "photos.list", "photos.albums", "photos.get", "geofences.list", "alarms.list",
+        "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
+        # The app doesn't journal these either: playing or pausing twice, or setting a look twice, is once.
+        "music.play", "music.control", "appearance.set",
+    }
 )
-DEVICE_TOOL_KINDS = ("health", "calendar", "reminders", "location", "appearance")
+# One per switch in Device access; the channel's `enabled` list names them.
+DEVICE_TOOL_KINDS = (
+    "health", "calendar", "reminders", "location", "appearance",
+    "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts",
+)
+# Wait longer than the usual 30 seconds: a shortcut can run that long, and a file is fetched from the host.
+DEVICE_TOOL_LONG_OPERATIONS = frozenset({"shortcuts.run", "photos.save"})
 
 # iphone_appearance: the app's light or dark mode, and its chat color as one of
 # the app's own color names (the phone checks the name) or #rrggbb.
@@ -203,7 +227,7 @@ def parse_device_tool_result(
         raise ValueError("bighelp device tool result status is invalid")
     if not isinstance(value.get("payload"), dict):
         raise ValueError("bighelp device tool result payload is invalid")
-    payload = _device_tool_json(value["payload"])
+    payload = _device_tool_result_payload(value.get("operation"), value["payload"])
     code = value.get("code")
     if code is not None:
         code = _opaque(code, "code", 1, 80)
@@ -224,7 +248,7 @@ def parse_device_tool_result(
         result.pop("code", None)
     else:
         result["code"] = code
-    if _json_size(result) > MAX_DEVICE_TOOL_PAYLOAD_BYTES:
+    if _json_size(result) > MAX_DEVICE_TOOL_RESULT_BYTES:
         raise ValueError("bighelp device tool result is too large")
     return result
 
@@ -247,8 +271,22 @@ def _device_tool_operation(value: Any) -> str:
     return value
 
 
-def _device_tool_json(value: Any, *, depth: int = 0) -> Any:
-    if depth > 4:
+def _device_tool_result_payload(operation: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """A result's payload, with the picture of photos.get checked on its own: it's the one long text."""
+    image = payload.get("image")
+    if operation != "photos.get" or not isinstance(image, dict) or not isinstance(image.get("data"), str):
+        return _device_tool_json(payload, max_depth=MAX_DEVICE_TOOL_RESULT_DEPTH)
+    data = image["data"]
+    if len(data) > MAX_PHOTO_BASE64_CHARACTERS or re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", data) is None:
+        raise ValueError("bighelp device tool picture is invalid")
+    checked = _device_tool_json(
+        {**payload, "image": {**image, "data": ""}}, max_depth=MAX_DEVICE_TOOL_RESULT_DEPTH)
+    checked["image"]["data"] = data
+    return checked
+
+
+def _device_tool_json(value: Any, *, depth: int = 0, max_depth: int = 4) -> Any:
+    if depth > max_depth:
         raise ValueError("bighelp device tool JSON is too deep")
     if value is None or isinstance(value, (str, bool, int, float)):
         if isinstance(value, float) and (not math.isfinite(value)):
@@ -259,12 +297,12 @@ def _device_tool_json(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, list):
         if len(value) > 200:
             raise ValueError("bighelp device tool list is too large")
-        return [_device_tool_json(item, depth=depth + 1) for item in value]
+        return [_device_tool_json(item, depth=depth + 1, max_depth=max_depth) for item in value]
     if isinstance(value, dict):
         if len(value) > 64:
             raise ValueError("bighelp device tool object is too large")
         return {
-            _opaque(key, "device tool key", 1, 96): _device_tool_json(item, depth=depth + 1)
+            _opaque(key, "device tool key", 1, 96): _device_tool_json(item, depth=depth + 1, max_depth=max_depth)
             for key, item in value.items()
         }
     raise ValueError("bighelp device tool JSON is invalid")
@@ -341,6 +379,8 @@ def _device_tool_id_list(value: dict[str, Any], field: str) -> None:
 def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("bighelp device tool arguments are invalid")
+    if operation in EXTENDED_OPERATIONS:
+        return _device_tool_json(validate_operation(operation, value))
     common_range = {"start", "end", "timeZone", "limit"}
     allowed: set[str]
     if operation == "health.read":
@@ -352,13 +392,14 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
     elif operation == "calendar.create":
         allowed = {"title", "start", "end", "timeZone", "calendarID", "location", "notes", "url", "span"}
     elif operation == "reminders.create":
-        allowed = {"title", "listID", "dueDate", "startDate", "timeZone", "notes", "priority"}
+        allowed = {"title", "listID", "dueDate", "startDate", "timeZone", "notes", "priority", "locationTrigger"}
     elif operation == "calendar.update":
         allowed = {"id", "expectedRevision", "title", "start", "end", "timeZone", "location", "notes", "url", "span", "occurrenceStart"}
     elif operation == "calendar.delete":
         allowed = {"id", "expectedRevision", "span", "occurrenceStart"}
     elif operation == "reminders.update":
-        allowed = {"id", "expectedRevision", "title", "dueDate", "startDate", "timeZone", "notes", "priority", "completed"}
+        allowed = {"id", "expectedRevision", "title", "dueDate", "startDate", "timeZone", "notes", "priority", "completed",
+                   "locationTrigger", "clearLocationTrigger"}
     elif operation in {"location.current", "appearance.get"}:
         # Where the phone is right now, or how the app looks; nothing to choose.
         allowed = set()
@@ -433,6 +474,13 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             raise ValueError("bighelp device tool priority is invalid")
         if "completed" in result and type(result["completed"]) is not bool:
             raise ValueError("bighelp device tool completed is invalid")
+        if "locationTrigger" in result:
+            check_value(result["locationTrigger"], LOCATION_TRIGGER, "locationTrigger")
+        if "clearLocationTrigger" in result:
+            if result["clearLocationTrigger"] is not True:
+                raise ValueError("bighelp device tool clearLocationTrigger is invalid")
+            if "locationTrigger" in result:
+                raise ValueError("bighelp device tool locationTrigger and clearLocationTrigger conflict")
     if operation == "appearance.set":
         if not result:
             raise ValueError("bighelp device tool appearance needs a mode or a color")

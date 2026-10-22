@@ -25,7 +25,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from .device_tool_contract import device_tool_request, parse_device_tool_result
+from . import device_photos
+from .device_tool_contract import (
+    DEVICE_TOOL_LONG_OPERATIONS,
+    DEVICE_TOOL_OPERATIONS,
+    device_tool_request,
+    parse_device_tool_result,
+)
 
 
 logger = logging.getLogger("hermes.plugins.bighelp")
@@ -36,7 +42,22 @@ CAPABILITY = "native-device-tools-v1"
 LOCATION_CAPABILITY = "native-device-location-v1"
 # Phones may let agents change how bighelp looks (iphone_appearance) only with plugins that list this.
 APPEARANCE_CAPABILITY = "native-device-appearance-v1"
+# Likewise for each tool that came after: the phone sends its kind in `enabled` only when the plugin lists it.
+KIND_CAPABILITIES = {
+    "contacts": "native-device-contacts-v1",
+    "photos": "native-device-photos-v1",
+    "geofences": "native-device-geofences-v1",
+    "alarms": "native-device-alarms-v1",
+    "music": "native-device-music-v1",
+    "focus": "native-device-focus-v1",
+    "shortcuts": "native-device-shortcuts-v1",
+}
 LEASE_SECONDS = 30
+# A shortcut can run a minute, and photos.save has the phone download the file from this host.
+LONG_OPERATION_SECONDS = 60
+# The host waits this much longer than the request it sent allows. A late answer is then still taken, and a
+# long operation that never answers is "outcome_unknown", not "nothing happened".
+LONG_OPERATION_GRACE_SECONDS = 10
 MAX_CHANNELS = 64
 MAX_QUEUE = 128
 MAX_COMPLETED = 256
@@ -47,6 +68,7 @@ _PROFILE = r"\A[a-z0-9][a-z0-9_-]{0,63}\z"
 _HOST = r"\A[A-Za-z0-9_-]{1,96}\z"
 _TOOL_NAMES = frozenset({
     "iphone_health", "iphone_calendar", "iphone_reminders", "iphone_location", "iphone_appearance",
+    *(f"iphone_{kind}" for kind in KIND_CAPABILITIES),
 })
 
 
@@ -79,6 +101,8 @@ class _Channel:
     session_id: str
     enabled: frozenset[str]
     lease_expires: float
+    # While a long call waits, the phone may be in another app and unable to poll.
+    hold_until: float = 0.0
     sequence: int = 0
     requests: deque[tuple[int, dict[str, Any]]] = field(default_factory=deque)
     pending: dict[str, _Pending] = field(default_factory=dict)
@@ -87,7 +111,20 @@ class _Channel:
     closed: bool = False
 
 
-def _failed_result(request_id: str | None, code: str) -> dict[str, Any]:
+_CONTRACT_PREFIX = "bighelp device tool "
+
+
+def _grace(operation: str) -> int:
+    return LONG_OPERATION_GRACE_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else 0
+
+
+def _unanswered(operation: str) -> str:
+    """What the agent hears when the phone never answered. A shortcut or a saved picture may have happened
+    anyway, so the agent must not run it again."""
+    return "outcome_unknown" if operation in DEVICE_TOOL_LONG_OPERATIONS else "phone_unavailable"
+
+
+def _failed_result(request_id: str | None, code: str, note: str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "version": 1,
         "type": "device.tool.result",
@@ -95,6 +132,10 @@ def _failed_result(request_id: str | None, code: str) -> dict[str, Any]:
         "code": code,
         "payload": {},
     }
+    if code == "outcome_unknown":
+        note = "The phone did not answer, so it may have run. Do not run it again; check first."
+    if note:
+        result["payload"] = {"note": note}
     if request_id:
         result["requestId"] = request_id
     return result
@@ -266,7 +307,9 @@ class NativeDeviceToolHub:
         clock: Callable[[], float] | None = None,
         lease_seconds: int = LEASE_SECONDS,
         profile_session_validator: Callable[[str, str], bool] | None = None,
+        photos_directory: Callable[[], Path] | None = None,
     ) -> None:
+        self.photos_directory = photos_directory or device_photos.photos_directory
         self.clock = clock or time.time
         self.lease_seconds = max(20, min(LEASE_SECONDS, int(lease_seconds)))
         self.profile_session_validator = profile_session_validator or _default_profile_session_validator
@@ -275,7 +318,7 @@ class NativeDeviceToolHub:
         self._lock = threading.RLock()
 
     def _expired(self, channel: _Channel) -> bool:
-        return channel.closed or self.clock() >= channel.lease_expires
+        return channel.closed or self.clock() >= max(channel.lease_expires, channel.hold_until)
 
     def _purge_expired(self) -> None:
         for channel_id, channel in tuple(self.channels.items()):
@@ -291,7 +334,7 @@ class NativeDeviceToolHub:
         channel.requests.clear()
         for request_id, pending in tuple(channel.pending.items()):
             _mark_completed(channel, request_id)
-            _set_future(pending, _failed_result(request_id, "phone_unavailable"))
+            _set_future(pending, _failed_result(request_id, _unanswered(pending.request["operation"])))
         channel.pending.clear()
 
     def _get(self, owner: Any, channel_id: str) -> _Channel:
@@ -423,9 +466,9 @@ class NativeDeviceToolHub:
                 raise NativeDeviceToolError("authorization_required")
             if parsed["sentAt"] < pending.request["sentAt"]:
                 raise NativeDeviceToolError("result_timestamp_invalid")
-            if self.clock() >= pending.request["expiresAt"]:
+            if self.clock() >= pending.request["expiresAt"] + _grace(parsed["operation"]):
                 _mark_completed(channel, request_id)
-                _set_future(pending, _failed_result(request_id, "phone_unavailable"))
+                _set_future(pending, _failed_result(request_id, _unanswered(parsed["operation"])))
                 raise NativeDeviceToolError("result_expired")
             _mark_completed(channel, request_id)
             _set_future(pending, parsed)
@@ -475,6 +518,10 @@ class NativeDeviceToolHub:
         try:
             if not isinstance(arguments, dict):
                 raise ValueError
+            if operation == "photos.save":
+                # Checked here, before anything is queued: the phone gets only a path the host will serve.
+                arguments = {**arguments, "path": device_photos.check_save_path(arguments.get("path"))}
+            timeout = LONG_OPERATION_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else self.lease_seconds
             request_id = _request_id(channel, session_id, turn_id, tool_call_id)
             fingerprint = _fingerprint(operation, arguments)
             with self._lock:
@@ -505,27 +552,33 @@ class NativeDeviceToolHub:
                         operation=operation,
                         arguments=arguments,
                         sent_at=sent_at,
-                        expires_at=sent_at + self.lease_seconds,
+                        expires_at=sent_at + timeout,
                     )
                     if len(channel.pending) >= MAX_QUEUE:
                         return _failed_result(request_id, "busy")
+                    if operation == "photos.save":
+                        device_photos.grant_save_path(
+                            profile, self._stored_ids(session_id, channel.session_id), arguments["path"])
+                    if operation in DEVICE_TOOL_LONG_OPERATIONS:
+                        channel.hold_until = max(channel.hold_until, self.clock() + timeout + _grace(operation))
                     pending = _Pending(request, fingerprint, Future())
                     channel.pending[request_id] = pending
                     channel.sequence += 1
                     channel.requests.append((channel.sequence, request))
                     while len(channel.requests) > MAX_QUEUE:
                         channel.requests.popleft()
-                deadline = pending.request["expiresAt"]
-            remaining = max(0.001, min(float(deadline - int(self.clock())), self.lease_seconds))
+                deadline = pending.request["expiresAt"] + _grace(operation)
+            remaining = max(0.001, min(float(deadline - int(self.clock())), timeout + _grace(operation)))
             try:
                 # A middleware call may run through Hermes' persistent main
                 # loop or a per-worker loop.  Wrap the thread-safe shared
                 # future on this caller's loop so duplicates can coalesce
                 # across either execution path without cross-loop awaits.
                 shared_result = asyncio.wrap_future(pending.future, loop=asyncio.get_running_loop())
-                return await asyncio.wait_for(asyncio.shield(shared_result), timeout=remaining)
+                result = await asyncio.wait_for(asyncio.shield(shared_result), timeout=remaining)
+                return self._for_agent(operation, result)
             except asyncio.TimeoutError:
-                result = _failed_result(request_id, "phone_unavailable")
+                result = _failed_result(request_id, _unanswered(operation))
                 with self._lock:
                     _mark_completed(channel, request_id)
                     _set_future(pending, result)
@@ -538,8 +591,42 @@ class NativeDeviceToolHub:
                             channel.pending.pop(request_id, None)
         except NativeDeviceToolError as exc:
             return _failed_result(None, exc.code)
-        except (TypeError, ValueError, KeyError):
-            return _failed_result(None, "invalid_arguments")
+        except device_photos.PhotoRefusal as exc:
+            return _failed_result(None, exc.code)
+        except (TypeError, ValueError, KeyError) as exc:
+            # The contract's own messages name the field and never repeat a value, so they're safe to show
+            # the agent (the tool schemas it sees leave out most bounds).
+            text = str(exc)
+            return _failed_result(None, "invalid_arguments", text.removeprefix(_CONTRACT_PREFIX)
+                                  if isinstance(exc, ValueError) and text.startswith(_CONTRACT_PREFIX) else None)
+
+    def _stored_ids(self, *session_ids: str) -> list[str]:
+        """These session coordinates and the stored sessions Hermes' live map pairs them with."""
+        ids = list(dict.fromkeys(session_ids))
+        for runtime_id, row in _live_sessions_snapshot().items():
+            stored_id = row.get("session_key") if isinstance(row, dict) else None
+            if isinstance(stored_id, str) and runtime_id in ids and stored_id not in ids:
+                ids.append(stored_id)
+        return ids
+
+    def _for_agent(self, operation: str, result: dict[str, Any]) -> dict[str, Any]:
+        """What the agent reads. A photo from photos.get becomes a file on this host; the bytes end here."""
+        payload = result.get("payload")
+        if operation != "photos.get" or not isinstance(payload, dict) or "image" not in payload:
+            return result
+        image = payload["image"]
+        rest = {key: value for key, value in payload.items() if key != "image"}
+        if result.get("status") != "completed":
+            # Whatever else came back, never the picture itself.
+            kept = {key: value for key, value in image.items() if key != "data"} if isinstance(image, dict) else None
+            return {**result, "payload": {**rest, **({"image": kept} if kept else {})}}
+        try:
+            picture = device_photos.store_picture(image, self.photos_directory())
+        except (device_photos.PhotoRefusal, OSError, ImportError) as exc:
+            # Only a fixed code is logged: the picture's bytes and its path are the user's.
+            logger.warning("bighelp phone photo not stored: %s", getattr(exc, "code", type(exc).__name__))
+            return _failed_result(result.get("requestId"), getattr(exc, "code", "photo_unavailable"))
+        return {**result, "payload": {**rest, "image": picture}}
 
 
 def _operation_for_tool(tool_name: str, args: Any) -> tuple[str, dict[str, Any]]:
@@ -566,9 +653,16 @@ def _operation_for_tool(tool_name: str, args: Any) -> tuple[str, dict[str, Any]]
         if selected not in {"get", "set"}:
             raise NativeDeviceToolError("invalid_arguments", status=422)
         return f"appearance.{selected}", values
+    kind = tool_name.removeprefix("iphone_")
+    if kind in KIND_CAPABILITIES:
+        # Each of these tools lists its own operations in the contract (contacts.list, photos.createAlbum ...).
+        operation = f"{kind}.{selected}" if isinstance(selected, str) else ""
+        if operation not in DEVICE_TOOL_OPERATIONS:
+            raise NativeDeviceToolError("invalid_arguments", status=422)
+        return operation, values
     if selected not in {"list", "create", "update", "delete"}:
         raise NativeDeviceToolError("invalid_arguments", status=422)
-    return f"{tool_name.removeprefix('iphone_')}.{selected}", values
+    return f"{kind}.{selected}", values
 
 
 def register_middleware(
@@ -762,8 +856,10 @@ class _Connect(_Scope):
     authorizationEpoch: StrictInt = Field(ge=1, le=1)
     agentId: str = Field(pattern=_PROFILE)
     sessionId: str = Field(pattern=_SESSION)
-    enabled: list[Literal["health", "calendar", "reminders", "location", "appearance"]] = Field(
-        min_length=0, max_length=5)
+    enabled: list[Literal[
+        "health", "calendar", "reminders", "location", "appearance",
+        "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts",
+    ]] = Field(min_length=0, max_length=12)
 
     @field_validator("enabled")
     @classmethod

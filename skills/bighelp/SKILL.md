@@ -158,6 +158,44 @@ the name isn't one of `colors`. The color is for the user's message bubbles and
 buttons; the page itself stays light or dark. Tell the user they can change it
 back in bighelp's Appearance. Don't make a theme file for this.
 
+### More phone tools
+
+Each one is off until the user turns it on in bighelp > Settings > Device access,
+and works only while the app is open. An unavailable phone or a switch that's off
+comes back as a clear result: say so, and don't guess. Use them only when the user
+asked. A `stale_revision` means it changed: read again. If a write is uncertain,
+read before you retry; never repeat it blindly. `outcome_unknown` (from `iphone_shortcuts` `run` or
+`iphone_photos` `save`) means the phone didn't answer and it may have happened: check first, and don't run it again.
+
+- `iphone_contacts` (`list`, `create`, `update`, `delete`): `list` takes an
+  optional `query`. Change or delete with the exact `id` and `expectedRevision`.
+  In `update`, a list you give replaces the whole list, and an empty value clears
+  a field. Notes aren't available. With limited access you see only the people
+  the user shared (`access: "limited"`).
+- `iphone_photos` (`list`, `albums`, `get`, `save`, `update`, `createAlbum`,
+  `delete`): `get` gives a small copy of one item as a file on this host
+  (`image.path`); look at it with the vision tool. `save` takes the absolute path
+  of a picture or video on this host (up to 50 MB). `delete` makes iOS ask the
+  user first; `cancelled` means they said no, so don't ask again.
+- `iphone_geofences` (`list`, `create`, `delete`): watch a place and get a message
+  in this chat when the user arrives or leaves. Give `latitude` and `longitude`,
+  or `here: true`, and a `note` saying what you want to do then. A place is gone
+  after its first event unless `repeats` is true. To remind them at a place in
+  Apple Reminders, put `locationTrigger` on an `iphone_reminders` create or
+  update (`clearLocationTrigger: true` takes it off).
+- `iphone_alarms` (`list`, `create`, `update`, `delete`): alarms and timers, on
+  iPhone and iPad with iOS 26 or later. You see only the ones bighelp made.
+  `create` takes a `label` and exactly one of `time`, `date` or `timerSeconds`.
+- `iphone_music` (`nowPlaying`, `search`, `library`, `play`, `control`,
+  `createPlaylist`, `addToPlaylist`, `addToLibrary`): pass `id`, `type` and
+  `source` to `play` exactly as a result gave them. `subscription_required`
+  means the catalog needs an Apple Music subscription.
+- `iphone_focus` (`current`): read only, to respect the user's Focus. You can't
+  change it. `active: false` can also mean the Focus has no bighelp filter.
+- `iphone_shortcuts` (`list`, `run`): you can run only the names `list` returns.
+  A shortcut can do anything, so never run one the user didn't ask for, and don't
+  run it again to check it. `run` waits up to 60 seconds for its `output`.
+
 ## Template Catalog
 
 When the user wants a template or a new kind of agent, look in bighelp's
