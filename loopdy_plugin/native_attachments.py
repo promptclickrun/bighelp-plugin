@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from starlette.concurrency import run_in_threadpool
 
+from . import device_photos
 from .native_context import NativeAPIError, NativeContext, PROFILE_ID, native_context
 
 CAPABILITY = "native-agent-attachments-v1"
@@ -159,6 +160,9 @@ def resolve(body: _Resolve) -> dict[str, Any]:
     for item in body.items:
         wanted.extend(p for p in _media_paths(item.text) if p not in wanted)
     allowed = emitted_by_session(db_path, body.storedId, wanted)
+    # A picture or video the agent asked iphone_photos to save is served to that chat too (see device_photos.py).
+    granted = device_photos.granted_paths(body.agentId, body.storedId, [p for p in wanted if p not in allowed])
+    allowed |= granted
     store = attachment_store()
     projected = []
     for item in body.items:
@@ -169,6 +173,7 @@ def resolve(body: _Resolve) -> dict[str, Any]:
         [result] = store.resolve(
             profile=body.agentId, session_id=body.storedId,
             items=[{"id": item.itemId, "text": _only(item.text, paths)}],
+            max_bytes=device_photos.MAX_SAVE_BYTES if granted.issuperset(paths) else None,
         )
         projected.append({
             "itemId": item.itemId,
