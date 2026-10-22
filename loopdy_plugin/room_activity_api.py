@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -11,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from .native_api import _NativeRoute, _body, _precondition, _response
 from .native_context import NativeAPIError, native_context
-from .room_activity import CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, PeerScope, RoomScope, activity_hub
+from .room_activity import (
+    CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, PeerScope, RoomScope, activity_hub, room_member_sessions,
+)
 
 
 router = APIRouter(prefix="/groups/activity", route_class=_NativeRoute)
@@ -52,7 +55,10 @@ class _Poll(_Stream):
     limit: StrictInt = Field(ge=1, le=8)
 
 
-async def read_room_scope(room_id: str) -> RoomScope:
+async def read_room_scope(room_id: str, request: Request | None = None) -> RoomScope:
+    authority = _session_authority(request)
+    if authority is not None:
+        return await asyncio.to_thread(_session_room_scope, authority, room_id)
     from hermes_constants import (
         get_process_hermes_home, set_hermes_home_override, reset_hermes_home_override,
     )
@@ -69,6 +75,29 @@ async def read_room_scope(room_id: str) -> RoomScope:
 
 class _RoomStateUnavailable(RuntimeError):
     pass
+
+
+def _session_authority(request: Request | None):
+    """The gateway's session authority when this dashboard is the gateway's own listener
+    (Hermes 0.22.4 and later). The app's `groups.*` go through that authority's session path
+    there, which keeps rooms in its own store and never fires the room hook."""
+    state = getattr(getattr(request, "app", None), "state", None)
+    return getattr(state, "session_authority", None)
+
+
+def _session_room_scope(authority, room_id: str) -> RoomScope:
+    try:
+        from gateway.hosted_rooms import room_state
+        room = room_state(authority.db.db_path, room_id=room_id)
+    except Exception:
+        raise NativeAPIError(503, "room_unavailable", "The native room could not be verified.") from None
+    scope = RoomScope.from_state({"room": room}, room_id)
+    try:
+        service = getattr(authority, "hosted_room_service", None)
+        homes = dict(service.profile_homes()) if service is not None else {}
+    except Exception:
+        homes = {}
+    return replace(scope, member_sessions=room_member_sessions(room_id, scope.members, homes))
 
 
 def _hosted_room_state(room_id: str) -> dict:
@@ -130,7 +159,7 @@ async def open_feed(request: Request) -> Response:
         scope = await read_peer_scope(body.roomId, body.peer)
     else:
         _same_owner(request, owner)
-        scope = await read_room_scope(body.roomId)
+        scope = await read_room_scope(body.roomId, request)
     _same_owner(request, owner)
     page = activity_hub().open(owner, scope, responding=bool(body.include))
     return _response(page, owner, request_id)
@@ -145,7 +174,7 @@ async def poll_feed(request: Request) -> Response:
     hub = activity_hub()
     scope = hub.scope(body.streamId, owner, body.roomId)
     if not hasattr(scope, "home_install_id"):  # a room hosted here: verify it again
-        scope = await read_room_scope(body.roomId)
+        scope = await read_room_scope(body.roomId, request)
     _same_owner(request, owner)
     page = hub.poll(body.streamId, owner, scope, body.after, body.limit)
     return _response(page, owner, request_id)

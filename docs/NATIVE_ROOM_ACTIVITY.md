@@ -85,6 +85,23 @@ session to Hermes' hidden room session
 as `taskId` and generation 1, since this computer doesn't know the home's
 thread or turn.
 
+### Rooms on Hermes' session path
+
+From Hermes 0.22.4 a gateway's own listener answers `groups.*` on its session
+path. That path keeps rooms in the gateway authority's store and runs member
+turns without `on_room_member_activity`, so its feeds carry `member.responding`
+only, never tool events. When the dashboard is that listener (its app state has
+a `session_authority`), the plugin reads the room from that authority's store
+(`gateway.hosted_rooms.room_state`) instead of the older `groups.state`
+handler, and it matches stream deltas (`surface: "bot_room"`) to each member's
+hidden room session: titled `Group: <room ID>` with source `bot_room` in that
+member's own `state.db`, read-only, plus the sessions compression continued it
+in. A member's session appears on its first turn, so each poll reads them again
+and a new one never retires the feed. Events use `threadId: "peer"`, the session
+ID as `taskId` and generation 1, as above. A `hermes serve` dashboard keeps the
+older path, unchanged. As on every path, an agent whose own profile doesn't load
+this plugin reports no writing.
+
 Every shown property is required. Detail `state` is exactly `available`,
 `unavailable`, `omitted_size` or `omitted_sensitive`; `text` is a string only
 when available, otherwise null. No inferred profile, success, current-running

@@ -199,6 +199,26 @@ class RoomActivityTests(unittest.TestCase):
         self.assertEqual(refused.status_code, 503)
         self.assertIn(room_activity.PEER_TYPING_CAPABILITY, self.fixture.context().json()["features"])
 
+    def test_session_path_members_report_writing_from_their_hidden_room_sessions(self):
+        # A gateway's own listener (Hermes' session path) never fires the room hook: its members
+        # write in hidden room sessions, which the scope names once each member has had a turn.
+        first = replace(SCOPE)
+        later = replace(SCOPE, member_sessions=(("local-" + "a" * 64, "alice"),))
+        self.read_scope.side_effect = [first, later, later]
+        result = self.call("open", {"roomId": SCOPE.room_id, "include": ["member.responding"]})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.stream = result.json()["streamId"]
+        stream = self.callbacks[room_activity.STREAM_HOOK]
+        stream(session_id="local-" + "a" * 64, surface="bot_room", turn_id="turn-1", delta="Private", kind="text")
+        stream(session_id="local-" + "b" * 64, surface="bot_room", turn_id="turn-1", delta="x", kind="text")  # another room
+        stream(session_id="local-" + "c" * 64, surface="bighelp", turn_id="turn-1", delta="x", kind="text")  # a chat
+        page = self.poll()
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual([(row["memberId"], row["taskId"], row["kind"]) for row in page.json()["events"]],
+                         [("alice", "local-" + "a" * 64, "member.responding")])
+        self.assertNotIn("Private", page.text)
+        self.assertEqual(self.poll(1).status_code, 200, "A member's new session never resets the feed")
+
     def test_feeds_that_dont_ask_never_see_member_writing(self):
         self.open()
         self.emit(kind="message.delta", payload={"text": "words"})
@@ -260,7 +280,7 @@ class RoomActivityTests(unittest.TestCase):
         self.open()
         before = native_context.RUNTIME_ID
         self.addCleanup(setattr, native_context, "RUNTIME_ID", before)
-        async def changed(_room):
+        async def changed(_room, _request=None):
             native_context.RUNTIME_ID = "changed-runtime"
             return SCOPE
         self.read_scope.side_effect = changed
@@ -269,7 +289,7 @@ class RoomActivityTests(unittest.TestCase):
     def test_unload_during_room_await_discards_the_pending_projection(self):
         self.open()
         self.emit()
-        async def unload_during_read(_room):
+        async def unload_during_read(_room, _request=None):
             await asyncio.sleep(0)
             self.stop()
             return SCOPE
@@ -314,6 +334,64 @@ class RoomActivityTests(unittest.TestCase):
         self.assertEqual(hub.poll(stream, owner, SCOPE, 0, 8)["highWater"], 0)
         hub.observe(current, event())
         self.assertEqual(hub.poll(stream, owner, SCOPE, 0, 8)["highWater"], 1)
+
+
+class SessionPathRoomScopeTests(unittest.TestCase):
+    """Hermes' session path keeps rooms in the gateway authority's own store."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.homes = {"default": self.root / "default", "research": self.root / "research"}
+        self.homes["default"].mkdir()
+        self.homes["research"].mkdir()
+
+    def store(self, home, rows):
+        import sqlite3
+        with sqlite3.connect(home / "state.db") as db:
+            db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, title TEXT, "
+                       "parent_session_id TEXT, hidden INTEGER)")
+            db.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, 1)", rows)
+
+    def test_each_member_maps_to_its_hidden_room_session_and_its_continuations(self):
+        self.store(self.homes["default"], [
+            ("local-a", "bot_room", "Group: room-fixture", None),
+            ("local-a2", "bot_room", "Group: room-fixture", "local-a"),  # compression continued it
+            ("local-other", "bot_room", "Group: room-other", None),
+            ("local-chat", "bighelp", "Group: room-fixture", None)])
+        # research has no store yet: it hasn't had a turn here.
+        sessions = room_activity.room_member_sessions("room-fixture", SCOPE.members, self.homes)
+        self.assertEqual(sessions, (("local-a", "alice"), ("local-a2", "alice")))
+        self.assertEqual(room_activity.room_member_sessions("room-fixture", SCOPE.members, {}), ())
+
+    def test_a_gateway_listener_reads_the_room_from_its_own_authority(self):
+        self.store(self.homes["research"], [("local-b", "bot_room", "Group: room-fixture", None)])
+        room = {"room_id": "room-fixture", "authority_gateway_id": "gateway-fixture", "authority_epoch": 1,
+                "members": [{"member_id": "alice", "profile": "default"}, {"member_id": "bob", "profile": "research"}]}
+        authority = SimpleNamespace(db=SimpleNamespace(db_path=str(self.root / "state.db")),
+                                    hosted_room_service=SimpleNamespace(profile_homes=lambda: self.homes))
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(session_authority=authority)))
+        legacy = patch.object(room_activity_api, "_hosted_room_state", side_effect=AssertionError("older path"))
+        with legacy, patch("gateway.hosted_rooms.room_state", return_value=room) as room_state:
+            scope = asyncio.run(room_activity_api.read_room_scope("room-fixture", request))
+        room_state.assert_called_once_with(str(self.root / "state.db"), room_id="room-fixture")
+        self.assertEqual(scope, SCOPE)
+        self.assertEqual(scope.sessions, {"local-b": "bob"})
+        with patch("gateway.hosted_rooms.room_state", side_effect=RuntimeError("missing")):
+            with self.assertRaises(NativeAPIError) as refused:
+                asyncio.run(room_activity_api.read_room_scope("room-fixture", request))
+        self.assertEqual((refused.exception.status, refused.exception.code), (503, "room_unavailable"))
+
+    def test_a_standalone_dashboard_keeps_the_older_path(self):
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+        state = {"room": {"room_id": "room-fixture", "authority_gateway_id": "gateway-fixture", "authority_epoch": 1,
+                          "members": [{"member_id": "alice", "profile": "default"},
+                                      {"member_id": "bob", "profile": "research"}]}}
+        with patch.object(room_activity_api, "_hosted_room_state", return_value=state) as legacy:
+            scope = asyncio.run(room_activity_api.read_room_scope("room-fixture", request))
+        legacy.assert_called_once_with("room-fixture")
+        self.assertEqual((scope, scope.sessions), (SCOPE, {}))
 
 
 @unittest.skipUnless(room_activity.HOOK in VALID_HOOKS, "Hermes does not provide the public room observer")
@@ -379,6 +457,8 @@ print("stock auth, actual native room, public emitter, scoped HTTP tool observat
             home = Path(directory) / "hermes-home"
             (home / "plugins").mkdir(parents=True)
             (home / "profiles/research").mkdir(parents=True)
+            # Hermes 0.22.4 seats only a folder that is a profile (one of its identity files).
+            (home / "profiles/research/config.yaml").write_text("{}\n")
             (home / "plugins/loopdy").symlink_to(ROOT, target_is_directory=True)
             (home / "config.yaml").write_text("plugins:\n  enabled: [loopdy]\n")
             env = {key: os.environ[key] for key in ("PATH", "PYTHONPATH") if key in os.environ}

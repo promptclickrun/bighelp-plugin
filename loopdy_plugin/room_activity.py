@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import closing
 from dataclasses import dataclass, field
 import copy
 import hashlib
 import json
 import logging
 import math
+from pathlib import Path
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -157,6 +160,15 @@ class RoomScope:
     gateway_id: str
     epoch: int
     members: tuple[tuple[str, str], ...]
+    # Hermes' session path (a gateway's own listener) never fires the room hook. Its
+    # members write in their own hidden room sessions, so writing is read from those
+    # sessions' stream deltas. A member's session appears on its first turn, so this
+    # is read again on every poll and never makes a scope differ.
+    member_sessions: tuple[tuple[str, str], ...] = field(default=(), compare=False)
+
+    @property
+    def sessions(self) -> dict[str, str]:
+        return dict(self.member_sessions)
 
     @classmethod
     def from_state(cls, value: dict, room_id: str) -> "RoomScope":
@@ -175,6 +187,42 @@ class RoomScope:
                        _integer(room["authority_epoch"], minimum=1), members)
         except (KeyError, TypeError, ValueError):
             raise NativeAPIError(503, "room_state_invalid", "The room state could not be verified.") from None
+
+
+def room_member_sessions(room_id: str, members: tuple[tuple[str, str], ...],
+                         homes: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """`(session ID, member ID)` of each member's hidden room session on Hermes' session path:
+    titled `Group: <room>` with source `bot_room` in that member's own store, plus the sessions
+    compression continued it in. Read-only; a store that can't be read leaves its member out."""
+    try:
+        from tui_gateway.hosted_room_driver import ROOM_SESSION_SOURCE, room_session_title
+        title, source = room_session_title(room_id), ROOM_SESSION_SOURCE
+    except ImportError:
+        title, source = f"Group: {room_id}", "bot_room"
+    found: list[tuple[str, str]] = []
+    for member_id, profile in members:
+        home = homes.get(profile)
+        path = Path(home) / "state.db" if home is not None else None
+        if path is None or not path.is_file():
+            continue
+        try:
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+                ids = [row[0] for row in db.execute(
+                    "SELECT id FROM sessions WHERE title=? AND source=? LIMIT 4", (title, source))]
+                frontier = list(ids)
+                for _ in range(8):
+                    if not frontier or len(ids) >= 16:
+                        break
+                    marks = ",".join("?" for _ in frontier)
+                    frontier = [row[0] for row in db.execute(
+                        f"SELECT id FROM sessions WHERE parent_session_id IN ({marks}) LIMIT 8", frontier)
+                        if row[0] not in ids]
+                    ids += frontier
+        except (OSError, sqlite3.Error):
+            continue
+        found += [(session_id, member_id) for session_id in ids
+                  if isinstance(session_id, str) and 0 < len(session_id) <= 128]
+    return tuple(found[:64])
 
 
 def peer_session_id(home_install_id: str, room_id: str, member_id: str, target_profile: str) -> str:
@@ -328,6 +376,7 @@ class RoomActivityHub:
             if feed.scope != scope:
                 del self._feeds[stream_id]
                 raise NativeAPIError(410, "activity_reset_required", "The room authority or roster changed.")
+            feed.scope = scope  # the same room, with the member sessions read just now
             if type(after) is not int or not 0 <= after <= feed.high_water or type(limit) is not int or not 1 <= limit <= 8:
                 raise NativeAPIError(422, "invalid_request", "The observation cursor or limit is invalid.")
             feed.deadline = self._clock() + LEASE_SECONDS
@@ -337,11 +386,10 @@ class RoomActivityHub:
 
     def _pull_presence(self, feed: _Feed) -> None:
         """Adds who is writing, from notes any Hermes process here wrote."""
-        if _is_peer(feed.scope):
-            sessions = feed.scope.sessions
+        sessions = feed.scope.sessions
+        if sessions:
             notes = self._presence.since(feed.presence_after, session_ids=tuple(sessions))
         else:
-            sessions = {}
             notes = self._presence.since(feed.presence_after, room_id=feed.scope.room_id)
         members = {member for member, _profile in feed.scope.members}
         for note in notes:
@@ -349,7 +397,7 @@ class RoomActivityHub:
             try:
                 if sessions:
                     observation = {"roomId": feed.scope.room_id, "memberId": sessions[note["session_id"]],
-                                   # The home's thread and turn aren't known here.
+                                   # A session's stream doesn't carry the room's thread and turn.
                                    "threadId": "peer", "turnId": _peer_turn(note.get("turn_id")),
                                    "taskId": note["session_id"], "executionGeneration": 1}
                 else:
@@ -435,10 +483,12 @@ class RoomActivityHub:
                 self._record(feed, observation)
 
     def observe_stream(self, lease: str, value: dict) -> None:
-        """An agent's own writing; only RoomLink member sessions matter here."""
+        """An agent's own writing; only room member sessions matter here: RoomLink's, and
+        the hidden ones Hermes' session path runs room turns in (`surface: bot_room`)."""
         session_id = value.get("session_id")
         if (lease not in self._stream_registrations or not isinstance(session_id, str)
-                or not session_id.startswith("room_") or len(session_id) > 128):
+                or not (session_id.startswith("room_") or value.get("surface") == "bot_room")
+                or len(session_id) > 128):
             return
         self._presence.note("\0".join(("session", session_id)), session_id=session_id,
                             turn_id=_peer_turn(value.get("turn_id")))
