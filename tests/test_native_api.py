@@ -185,6 +185,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.chat_activity import available as chat_activity_available
         if chat_activity_available():
             expected.append("native-chat-activity-v1")
+        from loopdy_plugin.agents_activity import available as agents_activity_available
+        if agents_activity_available():
+            expected.append("native-agents-activity-v1")
         from loopdy_plugin.team import available as team_available
         if team_available():
             expected.append("native-team-v1")
