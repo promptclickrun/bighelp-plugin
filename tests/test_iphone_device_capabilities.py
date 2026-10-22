@@ -311,8 +311,8 @@ class ReminderPlaceTests(unittest.TestCase):
     def test_schemas_offer_the_place_on_reminders_only(self):
         schemas = _register()
         reminders = schemas["iphone_reminders"]["parameters"]["properties"]
-        self.assertEqual(reminders["locationTrigger"]["properties"]["radiusMeters"],
-                         {"type": "integer", "minimum": 100, "maximum": 5000})
+        self.assertEqual(reminders["locationTrigger"]["type"], "object")
+        self.assertIn("radiusMeters: 100-5000", reminders["locationTrigger"]["description"])
         self.assertEqual(reminders["clearLocationTrigger"], {"type": "boolean", "enum": [True]})
         self.assertNotIn("locationTrigger", schemas["iphone_calendar"]["parameters"]["properties"])
         self.assertNotIn("clearLocationTrigger", schemas["iphone_calendar"]["parameters"]["properties"])
@@ -337,49 +337,52 @@ class ToolSchemaTests(unittest.TestCase):
                 self.assertTrue({"deviceId", "hostId", "sessionId", "targetDeviceId"}.isdisjoint(parameters["properties"]))
                 Draft202012Validator.check_schema(parameters)
                 description = schema["description"]
-                self.assertIn("Settings > Device access", description)
-                self.assertIn("app is open", description)
-                self.assertLess(len(description), 1_400)
+                self.assertIn("Device access", description)
+                self.assertIn("app open", description)
+                self.assertLess(len(description), 450)
 
     def test_descriptions_carry_the_rules_agents_must_follow(self):
         expect = {
-            "contacts": ("expectedRevision", "list again"),
-            "photos": ("vision tool", "expectedRevision", "50 MB", "cancelled"),
-            "geofences": ("only when the user asks", "iphone_reminders"),
-            "alarms": ("bighelp made", "Clock app"),
-            "music": ("exactly as a result gave them", "subscription_required"),
-            "focus": ("can't turn a Focus on or off",),
-            "shortcuts": ("only shortcut names you may run", "never run it again"),
+            "contacts": ("expectedRevision", "list first", "replaces"),
+            "photos": ("vision tool", "50 MB", "cancelled", "outcome_unknown"),
+            "geofences": ("Only when asked", "iphone_reminders"),
+            "alarms": ("bighelp's own", "Clock app"),
+            "music": ("unchanged", "subscription_required"),
+            "focus": ("can't be changed",),
+            "shortcuts": ("only names you may run", "don't rerun"),
         }
         for kind, phrases in expect.items():
             for phrase in phrases:
                 with self.subTest(kind=kind, phrase=phrase):
                     self.assertIn(phrase, self.schemas[f"iphone_{kind}"]["description"])
 
+    def test_all_iphone_schemas_stay_within_ten_kilobytes(self):
+        # Sent with every request to the serving agent, whatever the Device access switches say.
+        total = sum(len(json.dumps(schema, separators=(",", ":"))) for schema in self.schemas.values())
+        self.assertLessEqual(total, 10_000, total)
+
     def test_bounds_are_the_contracts(self):
         def prop(kind: str, name: str) -> dict:
             return self.schemas[f"iphone_{kind}"]["parameters"]["properties"][name]
 
-        self.assertEqual((prop("contacts", "limit")["minimum"], prop("contacts", "limit")["maximum"]), (1, 50))
+        self.assertEqual(prop("contacts", "limit"), {"type": "integer", "maximum": 50})
         self.assertEqual(prop("contacts", "phones")["maxItems"], 10)
         self.assertEqual(prop("contacts", "urls")["maxItems"], 5)
-        self.assertEqual(prop("contacts", "givenName")["minLength"], 0)  # Update clears with an empty value.
-        self.assertEqual(prop("contacts", "givenName")["maxLength"], 200)
-        self.assertEqual(prop("contacts", "birthday")["maxLength"], 10)
         self.assertEqual(prop("photos", "maxPixels"), {"type": "integer", "minimum": 256, "maximum": 1024})
-        self.assertEqual((prop("photos", "ids")["minItems"], prop("photos", "ids")["maxItems"]), (1, 50))
+        self.assertEqual(prop("photos", "ids")["maxItems"], 50)
         self.assertEqual(prop("photos", "addToAlbumIDs")["maxItems"], 20)
         self.assertEqual(prop("photos", "limit")["maximum"], 100)
         self.assertEqual(prop("geofences", "radiusMeters"), {"type": "integer", "minimum": 100, "maximum": 5000})
-        self.assertEqual(prop("geofences", "note")["maxLength"], 1000)
         self.assertEqual(prop("geofences", "latitude")["maximum"], 90)
+        # Long text limits stay in the host's check, not in the schema the model reads on every request.
+        self.assertNotIn("maxLength", prop("shortcuts", "input"))
+        self.assertEqual(prop("contacts", "phones")["description"], "[{label, value}]")
         self.assertEqual(prop("alarms", "timerSeconds"), {"type": "integer", "minimum": 5, "maximum": 86_400})
         self.assertEqual(prop("alarms", "label")["maxLength"], 60)
         self.assertEqual(prop("alarms", "weekdays")["maxItems"], 7)
         self.assertEqual(prop("music", "limit")["maximum"], 50)
         self.assertEqual(prop("music", "itemIDs")["maxItems"], 100)
         self.assertEqual(prop("music", "action")["enum"], ["pause", "resume", "next", "previous", "stop"])
-        self.assertEqual(prop("shortcuts", "input")["maxLength"], 4_000)
         self.assertEqual(self.schemas["iphone_focus"]["parameters"]["properties"],
                          {"operation": {"type": "string", "enum": ["current"]}})
 
@@ -395,8 +398,8 @@ class ToolSchemaTests(unittest.TestCase):
         for operation, arguments in (
             ("contacts.list", {"limit": 51}), ("photos.get", {"id": ID, "maxPixels": 2000}),
             ("alarms.create", {"label": "x", "timerSeconds": 4}), ("geofences.create", {"name": "O", "here": True, "radiusMeters": 50}),
-            ("music.control", {"action": "skip"}), ("shortcuts.run", {"name": "x" * 201}),
-            ("photos.delete", {"ids": []}), ("alarms.create", {"label": "x", "sound": "bell", "timerSeconds": 60}),
+            ("music.control", {"action": "skip"}), ("photos.delete", {"ids": ["a"] * 51}),
+            ("alarms.create", {"label": "x", "sound": "bell", "timerSeconds": 60}),
         ):
             kind, _, name = operation.partition(".")
             with self.subTest(operation=operation, arguments=arguments):
@@ -526,6 +529,10 @@ class ChannelGatingTests(ChannelCase):
         self.hub.connect(self.owner, fields)
         result = await self.call("alarms.create", {"label": "x", "timerSeconds": 4})
         self.assertEqual(result["code"], "invalid_arguments")
+        self.assertEqual(result["payload"], {"note": "timerSeconds is invalid"})  # The schema leaves the bound out.
+        secret = await self.call("alarms.create", {"label": "x", "secret-value": 1}, "call-2")
+        self.assertEqual(secret["payload"], {"note": "arguments contain an unknown key"})
+        self.assertNotIn("secret-value", json.dumps(secret))
         self.assertEqual(self.hub.poll(self.owner, fields, after=0)["requests"], [])
 
 

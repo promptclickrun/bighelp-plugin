@@ -164,7 +164,8 @@ Each one is off until the user turns it on in bighelp > Settings > Device access
 and works only while the app is open. An unavailable phone or a switch that's off
 comes back as a clear result: say so, and don't guess. Use them only when the user
 asked. A `stale_revision` means it changed: read again. If a write is uncertain,
-read before you retry; never repeat it blindly.
+read before you retry; never repeat it blindly. `outcome_unknown` (from `iphone_shortcuts` `run` or
+`iphone_photos` `save`) means the phone didn't answer and it may have happened: check first, and don't run it again.
 
 - `iphone_contacts` (`list`, `create`, `update`, `delete`): `list` takes an
   optional `query`. Change or delete with the exact `id` and `expectedRevision`.

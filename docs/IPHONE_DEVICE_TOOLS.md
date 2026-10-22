@@ -156,18 +156,29 @@ uncertain, the agent reads the current state before it tries again.
   writes the picture to `bighelp/phone-photos/` in the serving agent's Hermes home (named by its content hash,
   owner-only), and gives the agent `image: {format, width, height, path}` so it can look at the picture with its
   vision tool. The folder keeps the newest 50 pictures from the last 7 days. A picture that isn't a JPEG within the
-  limits is `photo_unreadable`.
+  limits is `photo_unreadable`. `photos.get` never gives the agent picture data, even in a failed result.
 - `photos.save` takes a file on the host. The plugin checks it the way `attachments/resolve` checks files an agent
   sends: the gateway's delivery policy decides which files an agent may send, the file must be a picture or video,
-  and it can be at most 50 MB. Refusals are `invalid_arguments`, `unsupported_media` and `file_too_large`, and the
-  phone is not asked. The phone gets the resolved absolute path and downloads it through `attachments/resolve` and
+  and it can be at most 50 MB. Refusals are `invalid_arguments`, `unsupported_media` (including kinds the gateway doesn't deliver, such as
+  `.heic`), `file_too_large` and `files_unavailable` (the attachment routes can't run), and the phone is not
+  asked. The phone gets the resolved absolute path and downloads it through `attachments/resolve` and
   `attachments/fetch` for the chat; that chat may resolve the path for 10 minutes, even though no message of the
   agent names it.
 
 ### Waiting
 
-A call waits up to 30 seconds for the phone, except `shortcuts.run` and `photos.save`, which wait up to 60. While
-one of those waits, the channel's lease lasts for the whole wait: the phone may be in another app.
+A call waits up to 30 seconds for the phone. `shortcuts.run` and `photos.save` give the phone 60 seconds (the
+request's `expiresAt` stays within 60) and the host waits 10 seconds longer, so a slightly late answer still
+counts. While one of those waits, the channel's lease lasts for the whole wait: the phone may be in another app.
+If the phone never answers one of them, the agent gets `outcome_unknown` (not `phone_unavailable`): the shortcut
+may have run or the file may have been saved. The result says not to run it again and to check first.
+
+### Tool schemas
+
+The schemas the agent reads are short on purpose, because they are sent with every request to the serving agent
+(about 10 KB for all `iphone_*` tools). They keep the enums, number ranges and list sizes, and leave out formats,
+patterns, long text limits and nested shapes (a contact's `phones` is described as `[{label, value}]`). The plugin
+checks every bound in the table above, and `invalid_arguments` names the field that was wrong in `payload.note`.
 
 ## How it works
 

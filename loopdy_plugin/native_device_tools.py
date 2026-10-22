@@ -111,6 +111,9 @@ class _Channel:
     closed: bool = False
 
 
+_CONTRACT_PREFIX = "bighelp device tool "
+
+
 def _grace(operation: str) -> int:
     return LONG_OPERATION_GRACE_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else 0
 
@@ -121,7 +124,7 @@ def _unanswered(operation: str) -> str:
     return "outcome_unknown" if operation in DEVICE_TOOL_LONG_OPERATIONS else "phone_unavailable"
 
 
-def _failed_result(request_id: str | None, code: str) -> dict[str, Any]:
+def _failed_result(request_id: str | None, code: str, note: str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "version": 1,
         "type": "device.tool.result",
@@ -130,7 +133,9 @@ def _failed_result(request_id: str | None, code: str) -> dict[str, Any]:
         "payload": {},
     }
     if code == "outcome_unknown":
-        result["payload"] = {"note": "The phone did not answer, so it may have run. Do not run it again; check first."}
+        note = "The phone did not answer, so it may have run. Do not run it again; check first."
+    if note:
+        result["payload"] = {"note": note}
     if request_id:
         result["requestId"] = request_id
     return result
@@ -588,8 +593,12 @@ class NativeDeviceToolHub:
             return _failed_result(None, exc.code)
         except device_photos.PhotoRefusal as exc:
             return _failed_result(None, exc.code)
-        except (TypeError, ValueError, KeyError):
-            return _failed_result(None, "invalid_arguments")
+        except (TypeError, ValueError, KeyError) as exc:
+            # The contract's own messages name the field and never repeat a value, so they're safe to show
+            # the agent (the tool schemas it sees leave out most bounds).
+            text = str(exc)
+            return _failed_result(None, "invalid_arguments", text.removeprefix(_CONTRACT_PREFIX)
+                                  if isinstance(exc, ValueError) and text.startswith(_CONTRACT_PREFIX) else None)
 
     def _stored_ids(self, *session_ids: str) -> list[str]:
         """These session coordinates and the stored sessions Hermes' live map pairs them with."""
