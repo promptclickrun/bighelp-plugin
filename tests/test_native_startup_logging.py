@@ -30,6 +30,7 @@ PROCESS_FEATURES = (
     "native-live-alerts-v1", "native-notification-quiet-hours-v1", "native-composio-v1",
     "native-agent-talk-v1",
     "native-chat-activity-v1",
+    "native-agents-activity-v1",
     "native-team-v1",
     "native-my-templates-v1",
     "native-agent-plugin-links-v1",
@@ -93,15 +94,17 @@ class NativeStartupLoggingTests(unittest.TestCase):
                                  available=Mock(return_value=True))
         self.chat_activity = module("loopdy_plugin.chat_activity", CAPABILITY=PROCESS_FEATURES[30],
                                     available=Mock(return_value=True))
-        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[31],
+        self.agents_activity = module("loopdy_plugin.agents_activity", CAPABILITY=PROCESS_FEATURES[31],
+                                      available=Mock(return_value=True))
+        self.team = module("loopdy_plugin.team", CAPABILITY=PROCESS_FEATURES[32],
                            available=Mock(return_value=True), register=Mock())
-        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[32],
+        self.my_templates = module("loopdy_plugin.my_templates", CAPABILITY=PROCESS_FEATURES[33],
                                    available=Mock(return_value=True))
-        self.plugin_links = module("loopdy_plugin.plugin_links", CAPABILITY=PROCESS_FEATURES[33],
+        self.plugin_links = module("loopdy_plugin.plugin_links", CAPABILITY=PROCESS_FEATURES[34],
                                    available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
-                   self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.team,
+                   self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.agents_activity, self.team,
                    self.my_templates, self.plugin_links, module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
@@ -151,6 +154,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.composio.available.return_value = False
         self.agent_talk.available.return_value = False
         self.chat_activity.available.return_value = False
+        self.agents_activity.available.return_value = False
         self.team.available.return_value = False
         self.my_templates.available.return_value = False
         self.plugin_links.available.return_value = False
