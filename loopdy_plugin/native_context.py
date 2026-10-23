@@ -304,6 +304,12 @@ def _native_features(
         features.append(people_capability)
     else:
         skip(people_capability, "public profile helpers are unimportable.")
+    # The app's note on each turn is how a chat says it draws these, so they ride with it.
+    from .card_objects import CAPABILITY as card_objects_capability
+    if people_available():
+        features.append(card_objects_capability)
+    else:
+        skip(card_objects_capability, "public profile helpers are unimportable.")
     from .provider_usage import CAPABILITY as usage_capability, available as usage_available
     if usage_available():
         features.append(usage_capability)

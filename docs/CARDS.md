@@ -111,7 +111,70 @@ Colors are limited to `primary`, `secondary`, `positive`, `warning`, `negative`,
 `callout`, `headline`, `title`, and `large_title`. The document cannot provide
 RGB values, font names, font sizes, frames, coordinates, blur radii, arbitrary
 SF Symbol names, or SwiftUI modifiers. Version 1 images are bundled symbols or
-assets only; remote image decoding is not supported.
+assets only; remote image decoding is not supported. Object components
+(`contact`, `place`, `music`) are described below.
+
+## Object components
+
+Feature `native-card-objects-v1` adds three components that show one real thing
+the person can act on: a person, a place or music. They are still data. Each
+button is one fixed native action the app chooses from the props; a card can't
+name a URL scheme, a selector or code. The app's side of this contract is in its
+`docs/BIGHELP_CARDS.md`. Props are plain values (no `{ "literal": ... }`
+binding), and every object is a leaf with no children.
+
+| Type | Purpose | Allowed props | Children |
+|---|---|---|---|
+| `contact` | A person, with Call, Message, Email and Contacts | `name`, `subtitle`, `phones`, `emails`, `address`, `contact_id` | None |
+| `place` | A spot on a map, with Directions and Maps | `name`, `subtitle`, `address`, `latitude`, `longitude`, `span_meters` | None |
+| `music` | A song, album, playlist or artist, with Play and Music | `kind`, `title`, `artist`, `music_id`, `source`, `url` | None |
+
+- `contact`: `name` (required, 1-200). `subtitle` (up to 200). `phones` and
+  `emails` (up to 5 each) are `{label, value}` with `label` (optional, up to 40, may be empty) and
+  `value` up to 200. A phone holds only digits, spaces and `+ ( ) - .` (and at least one
+  digit); an email must look like `name@example.com`. `address` is `{street,
+  city, region, postal_code, country}`, each up to 100; an address with every part empty reads as no address.
+  `contact_id` (up to 512) is the id from `iphone_contacts`.
+- `place`: `name` (required, 1-200), `latitude` (-90 to 90) and `longitude`
+  (-180 to 180), both required. `subtitle` (up to 200), `address` (up to 300),
+  `span_meters` (200 to 50,000, the app uses 1,000).
+- `music`: `kind` (required: `song`, `album`, `playlist` or `artist`), `title`
+  (required, 1-200). `artist` (up to 200), `music_id` (up to 512) and `source`
+  (`catalog` or `library`) from `iphone_music`, `url` (up to 500, only
+  `https://music.apple.com/...`, no user info or port).
+- Text in these props is one line. Unknown props, extra address fields and
+  numbers that aren't finite are refused (`unknown_field`, `invalid_value`,
+  `invalid_phone`, `invalid_email`, `invalid_url`, `limit_exceeded`). A card may
+  hold several objects, up to the card's element limit.
+
+### Which chats may use them
+
+Older apps reject an unknown element type, so the plugin accepts objects only in
+a chat whose app said it draws them. Before each turn the app's
+`POST /native/people/speaking` note carries an optional
+`renders: ["contact", "place", "music"]` (at most 8 short lowercase names; the
+app sends it when `/native/context` lists `native-card-objects-v1`).
+
+- The plugin keeps the list per agent and chat in
+  `plugin-data/loopdy/people.sqlite3` (table `renders`), up to 2,048 chats, the
+  least recently noted dropped first, and anything older than 180 days. It's on
+  disk, not in memory, because the card tool and the route run in two copies of
+  the plugin that share no memory (see AGENTS.md); a restart also keeps what a
+  chat said.
+- Each note replaces the list for its chat. A note without `renders` (an older
+  app) or with an empty list means basic components only. Names the plugin
+  doesn't know are ignored.
+- `bighelp_render_card` checks the document's object types against the list of
+  the call's chat before it validates anything. Without a match it fails with
+  `card_objects_unavailable` and a note that tells the agent to rebuild the card
+  with basic components. Scheduled jobs, subagents and chats with no note have
+  no list, so they get the basic components too. Cards without objects are never
+  checked and never change.
+- Templates stay basic: saving a layout with an object, installing such a
+  template or rendering one fails with `objects_unavailable`, because a template
+  is rendered in any chat and would bypass this check.
+- `/native/context` lists `native-card-objects-v1` together with
+  `native-people-v1`, since the chat's note is how the list arrives.
 
 ## Weather backgrounds
 

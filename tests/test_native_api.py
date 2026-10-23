@@ -154,6 +154,7 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.people import available as people_available
         if people_available():
             expected.append("native-people-v1")
+            expected.append("native-card-objects-v1")
         expected.append("native-provider-usage-v1")
         from loopdy_plugin.usage_activity import available as activity_available
         if activity_available():
@@ -356,6 +357,40 @@ class NativeAPITests(unittest.TestCase):
         headers["If-Match"] = '"stale"'
         self.assertEqual(speaking({"agentId": "default", "sessionId": "s1", "personId": person},
                                   headers).status_code, 412)
+
+    def test_people_speaking_records_what_the_chats_app_draws(self):
+        from loopdy_plugin.people import available, store_for_profile
+        if not available():
+            self.skipTest("Hermes profile helpers unavailable")
+        person = "11111111-1111-4111-8111-111111111111"
+        chat = "20261022_101500_abc123"
+
+        def speaking(**fields):
+            return self.client.post(PREFIX + "/people/speaking", headers=self.headers(),
+                                    json={"agentId": "default", "sessionId": chat, "personId": person, **fields})
+
+        store = store_for_profile("default")
+        # An older app sends no list: the note still works and the chat draws basic components only.
+        older = speaking(name="Sam")
+        self.assertEqual(older.status_code, 200, older.text)
+        self.assertEqual(older.json(), {"agentId": "default", "sessionId": chat, "name": "Sam"})
+        self.assertEqual(store.renders(chat), frozenset())
+        # A current app lists what it draws; the latest note wins.
+        newer = speaking(renders=["contact", "place", "music"])
+        self.assertEqual(newer.status_code, 200, newer.text)
+        self.assertEqual(newer.json()["renders"], ["contact", "music", "place"])
+        self.assertEqual(store.renders(chat), frozenset({"contact", "place", "music"}))
+        self.assertEqual(speaking(renders=["place"]).status_code, 200)
+        self.assertEqual(store.renders(chat), frozenset({"place"}))
+        # A newer app's unknown names are ignored, not an error.
+        future = speaking(renders=["place", "event"])
+        self.assertEqual(future.status_code, 200, future.text)
+        self.assertEqual(future.json()["renders"], ["place"])
+        self.assertEqual(speaking(renders=[]).status_code, 200)
+        self.assertEqual(store.renders(chat), frozenset())
+        for bad in ([f"name{number}" for number in range(9)], ["Place"], ["x" * 40], [1], "place", [None]):
+            with self.subTest(bad=bad):
+                self.assertEqual(speaking(renders=bad).status_code, 422)
 
     def test_agents_share_the_default_agents_plugins(self):
         from loopdy_plugin.plugin_links import available

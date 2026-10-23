@@ -1,0 +1,51 @@
+{
+  "schema": "loopdy.card",
+  "version": 1,
+  "title": "Lunch spots",
+  "spoken_summary": "Sam Rivera, Sample Cafe and a song for the walk.",
+  "data_sources": [],
+  "root": "card",
+  "elements": {
+    "card": {
+      "type": "card",
+      "props": { "title": "Lunch spots" },
+      "children": ["person", "spot", "song"]
+    },
+    "person": {
+      "type": "contact",
+      "props": {
+        "name": "Sam Rivera",
+        "subtitle": "Sample Cafe",
+        "phones": [{ "label": "mobile", "value": "+1 (555) 010-0100" }],
+        "emails": [{ "label": "work", "value": "sam.rivera@example.com" }],
+        "address": { "street": "1 Sample Street", "city": "Sampleton", "region": "ST", "postal_code": "00000", "country": "Exampleland" },
+        "contact_id": "sample-contact-1"
+      },
+      "children": []
+    },
+    "spot": {
+      "type": "place",
+      "props": {
+        "name": "Sample Cafe",
+        "subtitle": "Coffee · Open until 6 PM",
+        "address": "1 Sample Street, Sampleton",
+        "latitude": 37.5,
+        "longitude": -122.25,
+        "span_meters": 800
+      },
+      "children": []
+    },
+    "song": {
+      "type": "music",
+      "props": {
+        "kind": "song",
+        "title": "Sample Song",
+        "artist": "Sample Artist",
+        "music_id": "sample-song-1",
+        "source": "catalog",
+        "url": "https://music.apple.com/us/song/sample-song/1"
+      },
+      "children": []
+    }
+  }
+}

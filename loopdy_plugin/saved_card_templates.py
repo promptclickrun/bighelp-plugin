@@ -38,7 +38,7 @@ INTENT = (
 DESCRIPTION = (
     INTENT
     + " Check first with bighelp_search_card_templates. `layout` is a bighelp_render_card "
-    "document (no data_sources) where every value that changes is a {{name}} placeholder in "
+    "document (no data_sources; basic components, no contact, place or music) where every value that changes is a {{name}} placeholder in "
     "text or a literal value; `parameters` declares each placeholder once, and optional ones "
     "need a default. To change a saved template, pass its template_id and the version you "
     "read as expected_version. Returns template_id; render it later with "

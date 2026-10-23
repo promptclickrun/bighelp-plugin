@@ -27,6 +27,20 @@ Every element has a unique ID, a catalog `type`, bounded `props`, and legal `chi
 | `spacer` | bounded spacing token | no |
 | `image` | bundled SF Symbol or app asset | no |
 
+### Object components
+
+`contact`, `place` and `music` show one real person, place or song with fixed action buttons. They are leaves (no children) and take plain values, not `{"literal": ...}` bindings. Use them after you find the thing, instead of a text list; a `vstack` of several is fine. Only a chat whose app draws them accepts them: the call is refused otherwise, so build the card from basic components. Saved templates and `bighelp_render_card_template` stay with basic components.
+
+| Component | Props (required in bold) | Limits |
+|---|---|---|
+| `contact` | **`name`**, `subtitle`, `phones`, `emails`, `address`, `contact_id` | `name`, `subtitle` up to 200. `phones` and `emails`: up to 5 of `{label, value}` (label optional, up to 40; value up to 200). A phone has only digits, spaces and `+ ( ) - .`. An email looks like `name@example.com`. `address` is `{street, city, region, postal_code, country}`, each up to 100 (an address with every part empty counts as none). `contact_id` (up to 512) is the id `iphone_contacts` gave. |
+| `place` | **`name`**, **`latitude`**, **`longitude`**, `subtitle`, `address`, `span_meters` | `name`, `subtitle` up to 200, `address` up to 300. Latitude -90 to 90, longitude -180 to 180. `span_meters` 200 to 50000 (default 1000). |
+| `music` | **`kind`**, **`title`**, `artist`, `music_id`, `source`, `url` | `kind` is `song`, `album`, `playlist` or `artist`. `title`, `artist` up to 200. `music_id` (up to 512) and `source` (`catalog` or `library`) come from `iphone_music`. `url` (up to 500) is only `https://music.apple.com/...`. |
+
+```json
+{"type":"contact","props":{"name":"Sam Rivera","subtitle":"Sample Cafe","phones":[{"label":"mobile","value":"+1 555 0100"}],"contact_id":"sample-id"},"children":[]}
+```
+
 Colors are semantic: `primary`, `secondary`, `positive`, `warning`, `negative`, `accent`, `neutral`. Spacing and typography are finite tokens. Image names are an app-owned allowlist.
 
 ### Weather background
