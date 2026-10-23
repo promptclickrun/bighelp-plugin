@@ -51,8 +51,16 @@ its own shows nothing.
 | A checklist | `bighelp_render_checklist` |
 | A scheduled job, with Pause, Resume and Run buttons | `bighelp_render_automation`, using the job's real ID, profile and state |
 | A short summary, metrics, a list, a timeline | `bighelp_render_summary`, `_metrics`, `_list`, `_timeline` |
+| A person, place or song you found (`iphone_contacts`, `iphone_music`, a search for a place) | `bighelp_render_card` with a `contact`, `place` or `music` component |
 | Any other static layout | `bighelp_render_card` |
 | A saved card template | `bighelp_search_card_templates`, `bighelp_get_card_template`, `bighelp_render_card_template` |
+
+After you find a person, a place or music, show it with a `contact`, `place` or
+`music` component instead of a text list: it gives the user Call, Directions or
+Play in one tap. Take the fields from what you found (a contact's `contact_id`,
+a song's `music_id` and `source`, a place's latitude and longitude). The call is
+refused in a chat whose app can't draw them, and in scheduled jobs; then build
+the card from basic components. Saved templates keep to basic components.
 
 When a reply with a card notifies the user, the card reads as a short plain
 preview made from it. To word it yourself, pass the renderer an optional

@@ -14,6 +14,9 @@ with one host, agents now know which of them is writing.
    - `personId`: a random lowercase UUID the app keeps in iCloud Keychain, so one person's
      iPhone, iPad and Vision Pro match
    - `name`: the name the person saved in the app, or empty
+   - `renders` (optional): the card components the app draws, a list of at most 8 names such as
+     `["contact", "place", "music"]` (feature `native-card-objects-v1`, see [Cards](CARDS.md)). Older apps
+     send none, which means basic components only.
 2. The chat brief names whoever started the chat.
 3. Once a second person writes in a chat, each message carries a one-line
    `[bighelp] This message is from {"person":"Sam"}` note through Hermes'
