@@ -19,6 +19,7 @@ from starlette.datastructures import Headers, QueryParams
 from loopdy_plugin.device_tool_contract import device_tool_result
 from loopdy_plugin.native_context import NativeContext
 from loopdy_plugin.native_device_tools import (
+    LAPSE_MEMORY_SECONDS,
     NativeDeviceToolError,
     NativeDeviceToolHub,
     _Scope,
@@ -131,7 +132,8 @@ class NativeDeviceToolHubTests(unittest.IsolatedAsyncioTestCase):
             tool_call_id="call-3", operation="health.read", arguments={"start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
         )
         self.assertEqual(denied["code"], "authorization_required")
-        self.clock.advance(31)
+        # Gone for longer than the host remembers it, so there is no phone to wait for.
+        self.clock.advance(31 + LAPSE_MEMORY_SECONDS)
         expired = await self.hub.execute(
             profile="default", session_id="stored-session", turn_id="turn-4",
             tool_call_id="call-4", operation="calendar.list", arguments={
@@ -220,11 +222,14 @@ class NativeDeviceToolHubTests(unittest.IsolatedAsyncioTestCase):
             tool_call_id="call-stale", operation="reminders.list", arguments={},
         ))
         await asyncio.sleep(0)
+        # The old channel's phone received the request, so it may be running it: it is not sent again.
+        self.assertEqual(len(self.hub.poll(self.owner, stale, after=0)["requests"]), 1)
         self.clock.advance(5)
         fresh = channel_fields(device_id=stale["deviceId"])
         self.assertEqual(self.hub.connect(self.owner, fresh), {"channelId": fresh["channelId"], "connected": True})
-        # A call waiting on the old channel fails as it does when that channel closes.
+        # A call the old channel's phone received fails as it does when that channel closes.
         self.assertEqual((await waiting)["code"], "phone_unavailable")
+        self.assertEqual(self.hub.poll(self.owner, fresh, after=0)["requests"], [])
         for operation in (
             lambda: self.hub.poll(self.owner, {"channelId": stale["channelId"], "after": 0}),
             lambda: self.hub.close(self.owner, {"channelId": stale["channelId"]}),

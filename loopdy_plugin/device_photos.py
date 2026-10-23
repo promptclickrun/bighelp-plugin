@@ -53,10 +53,17 @@ class PhotoRefusal(ValueError):
         self.code = code
 
 
-def photos_directory() -> Path:
-    """The folder pictures from photos.get are kept in: inside the Hermes home of the serving profile."""
-    from hermes_constants import get_process_hermes_home
-    return get_process_hermes_home() / "bighelp" / "phone-photos"
+def photos_directory(profile: str | None = None) -> Path:
+    """The folder pictures from photos.get are kept in: inside the Hermes home of the agent that asked.
+
+    With no profile it is the serving profile's, as before.
+    """
+    from hermes_constants import get_process_hermes_home, profile_name_for_home
+    home = get_process_hermes_home()
+    if profile and profile_name_for_home(home) != profile:
+        from hermes_cli.profiles import get_profile_dir
+        home = get_profile_dir(profile)
+    return home / "bighelp" / "phone-photos"
 
 
 # photos.save -------------------------------------------------------------------------------------
