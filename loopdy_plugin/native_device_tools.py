@@ -5,12 +5,18 @@ authenticated phone lease and forwards the already validated ``device.tool``
 wire contracts to that phone.  The execution middleware receives the real
 session, turn, and tool call coordinates from Hermes; none of those identities
 are accepted from model arguments.
+
+One Hermes process loads this plugin once for each profile it serves, and each
+copy has its own module globals.  The phone's HTTP routes reach only the serving
+profile's copy, so the hub lives in a process-wide registry (``_shared_hub``)
+that every copy of the same hub version shares.  Each profile's middleware names
+its own profile, and a channel is matched on ``(profile, session)``.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+from collections import OrderedDict, deque
 from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, field
 import hashlib
@@ -20,6 +26,7 @@ import sqlite3
 import sys
 import threading
 import time
+import types
 from typing import Any, Callable, Literal
 from pathlib import Path
 
@@ -52,7 +59,13 @@ KIND_CAPABILITIES = {
     "focus": "native-device-focus-v1",
     "shortcuts": "native-device-shortcuts-v1",
 }
+# Every profile's agent can use the phone tools: a chat of any profile on this host may open a channel.
+AGENTS_CAPABILITY = "native-device-tools-agents-v1"
+# A call waits for the same phone to open the chat again, and a paused phone keeps what it never received.
+WAIT_CAPABILITY = "native-device-tools-wait-v1"
 LEASE_SECONDS = 30
+# A call finds no channel but the chat had one this recently: it waits for that phone to come back.
+LAPSE_MEMORY_SECONDS = 120
 # A shortcut can run a minute, and photos.save has the phone download the file from this host.
 LONG_OPERATION_SECONDS = 60
 # The host waits this much longer than the request it sent allows. A late answer is then still taken, and a
@@ -61,7 +74,18 @@ LONG_OPERATION_GRACE_SECONDS = 10
 MAX_CHANNELS = 64
 MAX_QUEUE = 128
 MAX_COMPLETED = 256
+MAX_LAPSES = MAX_CHANNELS
+MAX_FINISHED_CALLS = 512
+# One chat that waits for its phone can hold this many calls, so it can't make every other chat answer busy.
+MAX_PARKED_PER_CHAT = 32
 MAX_POLL_ITEMS = 8
+# The only operations whose outcome the agent may simply ask for again. Any other operation, and any
+# operation not listed here, can change something on the phone, so a lost answer is "outcome_unknown".
+PURE_READ_OPERATIONS = frozenset({
+    "health.read", "calendar.list", "reminders.list", "location.current", "appearance.get",
+    "contacts.list", "photos.list", "photos.albums", "photos.get", "geofences.list", "alarms.list",
+    "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
+})
 _UUID = r"\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z"
 _SESSION = r"\A[A-Za-z0-9_-]{1,180}\z"
 _PROFILE = r"\A[a-z0-9][a-z0-9_-]{0,63}\z"
@@ -82,12 +106,28 @@ class NativeDeviceToolError(ValueError):
         self.status = status
 
 
+_Call = tuple[str, str, str, str]
+_Phone = tuple[Any, str, str, int]
+
+
 @dataclass
 class _Pending:
     request: dict[str, Any]
     fingerprint: str
     future: Future[dict[str, Any]]
     waiters: int = 1
+    # The call as Hermes names it (profile, session, turn, tool call). It stays the same when the request
+    # moves to another channel, so a retry is still the same call.
+    call: _Call = ("", "", "", "")
+    # Every session coordinate the call may be matched to a channel by.
+    chat: tuple[str, ...] = ()
+    # When the host stops waiting: the request's expiry plus the long-operation grace.
+    deadline: float = 0.0
+    # Whether a poll handed the request to the phone. It may have run since, so it never moves or runs twice.
+    delivered: bool = False
+    channel: "_Channel | None" = None
+    # While no channel holds the request: the phone whose next channel for this chat may take it.
+    phone: _Phone | None = None
 
 
 @dataclass
@@ -108,20 +148,41 @@ class _Channel:
     pending: dict[str, _Pending] = field(default_factory=dict)
     completed: set[str] = field(default_factory=set)
     completed_order: deque[str] = field(default_factory=deque)
+    # Calls that reached the phone on this channel and ended. If the channel ends with the phone coming back,
+    # a retry of one must still not run it again (hub._finished).
+    ended_calls: deque[_Call] = field(default_factory=lambda: deque(maxlen=MAX_COMPLETED))
     closed: bool = False
 
 
+@dataclass
+class _Lapse:
+    """A phone's channel for a chat ended without the phone saying it was done with the chat."""
+
+    profile: str
+    session_id: str
+    phone: _Phone
+    enabled: frozenset[str]
+    ended_at: float
+
+
 _CONTRACT_PREFIX = "bighelp device tool "
+PHONE_UNAVAILABLE_NOTE = "bighelp isn't open on the phone right now. Ask the person to open bighelp, then try again."
 
 
 def _grace(operation: str) -> int:
     return LONG_OPERATION_GRACE_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else 0
 
 
-def _unanswered(operation: str) -> str:
-    """What the agent hears when the phone never answered. A shortcut or a saved picture may have happened
-    anyway, so the agent must not run it again."""
-    return "outcome_unknown" if operation in DEVICE_TOOL_LONG_OPERATIONS else "phone_unavailable"
+def _unanswered(operation: str, delivered: bool = False) -> str:
+    """What the agent hears when the phone never answered.
+
+    A request the phone received (``delivered``) may have changed something unless it only reads, and a
+    shortcut or a saved picture may have happened anyway: the agent must not run those again. A request the
+    phone never received did nothing, so the agent may try again.
+    """
+    if operation in DEVICE_TOOL_LONG_OPERATIONS or (delivered and operation not in PURE_READ_OPERATIONS):
+        return "outcome_unknown"
+    return "phone_unavailable"
 
 
 def _failed_result(request_id: str | None, code: str, note: str | None = None) -> dict[str, Any]:
@@ -134,6 +195,8 @@ def _failed_result(request_id: str | None, code: str, note: str | None = None) -
     }
     if code == "outcome_unknown":
         note = "The phone did not answer, so it may have run. Do not run it again; check first."
+    elif code == "phone_unavailable" and not note:
+        note = PHONE_UNAVAILABLE_NOTE
     if note:
         result["payload"] = {"note": note}
     if request_id:
@@ -162,8 +225,10 @@ def _request_id(channel: _Channel, session_id: str, turn_id: str, tool_call_id: 
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _owner_profile(owner: Any) -> str:
-    return str(getattr(owner, "serving_profile_id", "") or "")
+def _parked_request_id(call: _Call) -> str:
+    """A request ID for a call that waits for its phone. The channel that takes it gives it the real one."""
+    value = json.dumps(["waiting", *call], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _owner_key(owner: Any) -> tuple[Any, ...]:
@@ -175,14 +240,19 @@ def _owner_key(owner: Any) -> tuple[Any, ...]:
     )
 
 
+def _phone_of(owner: Any, device_id: str, host_id: str, authorization_epoch: int) -> _Phone:
+    """Who a channel belongs to: the signed-in person and the device, host and grant it speaks for."""
+    return (_owner_key(owner), device_id, host_id, authorization_epoch)
+
+
+def _channel_phone(channel: _Channel) -> _Phone:
+    return _phone_of(channel.owner, channel.device_id, channel.host_id, channel.authorization_epoch)
+
+
 def _same_phone(channel: _Channel, owner: Any, fields: dict[str, Any]) -> bool:
     """Whether a connect comes from the phone that holds this channel, for the same person."""
-    return (
-        _owner_key(channel.owner) == _owner_key(owner)
-        and channel.device_id == fields["deviceId"]
-        and channel.host_id == fields["hostId"]
-        and channel.authorization_epoch == fields["authorizationEpoch"]
-    )
+    return _channel_phone(channel) == _phone_of(
+        owner, fields["deviceId"], fields["hostId"], fields["authorizationEpoch"])
 
 
 def _set_future(pending: _Pending, result: dict[str, Any]) -> None:
@@ -202,8 +272,20 @@ def _mark_completed(channel: _Channel, request_id: str) -> None:
         channel.completed.discard(channel.completed_order.popleft())
 
 
+def _default_profile_exists(profile: str) -> bool:
+    """Whether Hermes has a profile of this name on this host."""
+    try:
+        from hermes_cli.profiles import profile_exists
+        return bool(profile_exists(profile))
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def _default_profile_session_validator(profile: str, session_id: str) -> bool:
-    """Verify a stored or currently live Hermes session with official helpers."""
+    """Verify a stored or currently live Hermes session with official helpers.
+
+    The session is looked up in the requested profile's own store (read-only), never in another profile's.
+    """
     try:
         from hermes_cli.profiles import get_profile_dir, profile_exists
         from hermes_constants import (
@@ -217,6 +299,9 @@ def _default_profile_session_validator(profile: str, session_id: str) -> bool:
     try:
         if not profile_exists(profile):
             return False
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    try:
         token = set_hermes_home_override(get_process_hermes_home())
         try:
             db_path = get_profile_dir(profile) / "state.db"
@@ -226,7 +311,8 @@ def _default_profile_session_validator(profile: str, session_id: str) -> bool:
         finally:
             reset_hermes_home_override(token)
     except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error):
-        return False
+        # A profile that has not had a chat yet has no store. Its running chat is still in Hermes' live map.
+        pass
 
     # A live gateway may have a runtime UI ID before its durable session row is
     # visible to a reader.  Hermes' own session gateway map is the only allowed
@@ -307,13 +393,23 @@ class NativeDeviceToolHub:
         clock: Callable[[], float] | None = None,
         lease_seconds: int = LEASE_SECONDS,
         profile_session_validator: Callable[[str, str], bool] | None = None,
+        profile_validator: Callable[[str], bool] | None = None,
         photos_directory: Callable[[], Path] | None = None,
     ) -> None:
-        self.photos_directory = photos_directory or device_photos.photos_directory
+        # Without one, pictures go to the Hermes home of the profile whose agent asked.
+        self.photos_directory = photos_directory
         self.clock = clock or time.time
         self.lease_seconds = max(20, min(LEASE_SECONDS, int(lease_seconds)))
         self.profile_session_validator = profile_session_validator or _default_profile_session_validator
+        # None: only the session check runs (the shared hub sets the real one).
+        self.profile_validator = profile_validator
         self.channels: dict[str, _Channel] = {}
+        # Calls the phone has not received that wait for its next channel, by call.
+        self._parked: dict[_Call, _Pending] = {}
+        # Chats whose channel ended without a goodbye in the last LAPSE_MEMORY_SECONDS.
+        self._lapses: list[_Lapse] = []
+        # Calls that reached the phone (or finished). A retry of one never runs it again.
+        self._finished: OrderedDict[_Call, None] = OrderedDict()
         self._retired_ids: deque[str] = deque(maxlen=MAX_COMPLETED)
         self._lock = threading.RLock()
 
@@ -323,19 +419,64 @@ class NativeDeviceToolHub:
     def _purge_expired(self) -> None:
         for channel_id, channel in tuple(self.channels.items()):
             if self._expired(channel):
-                self._retire(channel)
+                self._retire(channel, keep=True)
                 self.channels.pop(channel_id, None)
 
-    def _retire(self, channel: _Channel) -> None:
+    def _retire(self, channel: _Channel, *, keep: bool = False) -> None:
+        """End a channel.
+
+        With ``keep`` (the lease lapsed, the same phone opened the chat again, or the phone paused), a request
+        the phone never received waits for that phone's next channel for the chat, and the chat is remembered.
+        Every other pending call fails, as it does when the channel closes for good.
+        """
         if channel.closed:
             return
+        now = self.clock()
+        ended_at = min(now, max(channel.lease_expires, channel.hold_until))
         channel.closed = True
         self._retired_ids.append(channel.channel_id)
         channel.requests.clear()
+        phone = _channel_phone(channel)
         for request_id, pending in tuple(channel.pending.items()):
+            if keep and not pending.delivered and not pending.future.done():
+                pending.channel, pending.phone = None, phone
+                self._parked[pending.call] = pending
+                continue
             _mark_completed(channel, request_id)
-            _set_future(pending, _failed_result(request_id, _unanswered(pending.request["operation"])))
+            if pending.delivered:
+                channel.ended_calls.append(pending.call)
+            _set_future(pending, _failed_result(
+                request_id, _unanswered(pending.request["operation"], pending.delivered)))
         channel.pending.clear()
+        self._forget_lapses(channel.profile, channel.session_id)
+        if keep:
+            # The phone comes back, and a retry of a call it received must not run that call again.
+            for call in channel.ended_calls:
+                self._remember_call(call)
+            self._lapses.append(_Lapse(channel.profile, channel.session_id, phone, channel.enabled, ended_at))
+            del self._lapses[:max(0, len(self._lapses) - MAX_LAPSES)]
+
+    def _remember_call(self, call: _Call) -> None:
+        self._finished[call] = None
+        self._finished.move_to_end(call)
+        while len(self._finished) > MAX_FINISHED_CALLS:
+            self._finished.popitem(last=False)
+
+    def _forget_lapses(self, profile: str, session_id: str) -> None:
+        self._lapses = [
+            lapse for lapse in self._lapses
+            if not (lapse.profile == profile and _same_live_session(lapse.session_id, session_id))
+        ]
+
+    def _recent_lapse(self, profile: str, session_id: str) -> _Lapse | None:
+        """The phone that had a channel for this chat a moment ago, if there is no channel now."""
+        horizon = self.clock() - LAPSE_MEMORY_SECONDS
+        self._lapses = [lapse for lapse in self._lapses if lapse.ended_at > horizon]
+        found = [
+            lapse for lapse in self._lapses
+            if lapse.profile == profile and _same_live_session(lapse.session_id, session_id)
+        ]
+        return max(found, key=lambda lapse: lapse.ended_at) if found else None
 
     def _get(self, owner: Any, channel_id: str) -> _Channel:
         channel = self.channels.get(channel_id)
@@ -346,7 +487,7 @@ class NativeDeviceToolHub:
         if _owner_key(channel.owner) != _owner_key(owner):
             raise NativeDeviceToolError("channel_owner_changed", status=403)
         if self._expired(channel):
-            self._retire(channel)
+            self._retire(channel, keep=True)
             raise NativeDeviceToolError("phone_unavailable")
         return channel
 
@@ -354,8 +495,14 @@ class NativeDeviceToolHub:
         channel_id = fields["channelId"]
         profile = fields["agentId"]
         session_id = fields["sessionId"]
-        if _owner_profile(owner) != profile:
-            raise NativeDeviceToolError("profile_not_served", status=403)
+        # Any profile of this host may open a channel, but only for a chat that is in its own session store.
+        if self.profile_validator is not None:
+            try:
+                known = self.profile_validator(profile)
+            except Exception:
+                known = False
+            if not known:
+                raise NativeDeviceToolError("profile_not_found", status=404)
         try:
             verified = self.profile_session_validator(profile, session_id)
         except Exception:
@@ -379,7 +526,8 @@ class NativeDeviceToolHub:
             if any(not _same_phone(channel, owner, fields) for channel in held):
                 raise NativeDeviceToolError("channel_ambiguous")
             for channel in held:
-                self._retire(channel)
+                # What that channel never handed to the phone moves to the new one.
+                self._retire(channel, keep=True)
                 self.channels.pop(channel.channel_id, None)
             if held:
                 logger.info("bighelp native device channel replaced: the same phone reconnected")
@@ -397,14 +545,77 @@ class NativeDeviceToolHub:
                 lease_expires=self.clock() + self.lease_seconds,
             )
             self.channels[channel_id] = channel
+            # The chat has a channel again, so the memory of the old one has done its work.
+            self._forget_lapses(profile, session_id)
+            self._adopt(channel)
         return {"channelId": channel_id, "connected": True}
+
+    def _adopt(self, channel: _Channel) -> None:
+        """Hand the calls that waited for this chat to its new channel, if the same phone opened it."""
+        phone = _channel_phone(channel)
+        for call, pending in tuple(self._parked.items()):
+            if call[0] != channel.profile or not any(
+                _same_live_session(channel.session_id, session) for session in pending.chat
+            ):
+                continue
+            del self._parked[call]
+            if pending.future.done():
+                continue
+            if pending.phone != phone:
+                # Another phone (or person) has the chat now. The one the call waited for is not coming back.
+                _set_future(pending, _failed_result(pending.request["requestId"], "phone_unavailable"))
+                continue
+            self._attach(channel, pending)
+
+    def _attach(self, channel: _Channel, pending: _Pending) -> None:
+        """Queue a request the phone never received on its new channel. It keeps its deadline."""
+        old = pending.request
+        operation = old["operation"]
+        profile, session_id, turn_id, tool_call_id = pending.call
+        refusal = None
+        request = None
+        if operation.split(".", 1)[0] not in channel.enabled:
+            refusal = "authorization_required"
+        elif len(channel.pending) >= MAX_QUEUE:
+            refusal = "busy"
+        else:
+            try:
+                request = device_tool_request(
+                    request_id=_request_id(channel, session_id, turn_id, tool_call_id),
+                    device_id=channel.device_id,
+                    host_id=channel.host_id,
+                    authorization_epoch=channel.authorization_epoch,
+                    session_id=channel.session_id,
+                    agent_id=profile,
+                    turn_id=turn_id,
+                    operation=operation,
+                    arguments=old["arguments"],
+                    sent_at=old["sentAt"],
+                    expires_at=old["expiresAt"],
+                )
+            except ValueError:
+                refusal = "invalid_arguments"
+        if request is None:
+            _set_future(pending, _failed_result(old["requestId"], refusal or "invalid_arguments"))
+            return
+        if operation == "photos.save":
+            device_photos.grant_save_path(
+                profile, self._stored_ids(session_id, channel.session_id), request["arguments"]["path"])
+        if operation in DEVICE_TOOL_LONG_OPERATIONS:
+            channel.hold_until = max(channel.hold_until, pending.deadline)
+        pending.request, pending.channel, pending.phone, pending.delivered = request, channel, None, False
+        channel.pending[request["requestId"]] = pending
+        channel.sequence += 1
+        channel.requests.append((channel.sequence, request))
+        while len(channel.requests) > MAX_QUEUE:
+            channel.requests.popleft()
 
     def _matching(self, profile: str, session_id: str) -> list[_Channel]:
         matches: list[_Channel] = []
         with self._lock:
             for channel in tuple(self.channels.values()):
                 if self._expired(channel):
-                    self._retire(channel)
+                    self._retire(channel, keep=True)
                     self.channels.pop(channel.channel_id, None)
                     continue
                 if channel.profile == profile and _same_live_session(channel.session_id, session_id):
@@ -414,6 +625,19 @@ class NativeDeviceToolHub:
     def native_channel_count(self, profile: str, session_id: str) -> int:
         """Return the active native-channel count for middleware fallback routing."""
         return len(self._matching(profile, session_id))
+
+    def _target(self, profile: str, session_id: str) -> tuple[_Channel | None, _Lapse | None]:
+        """Where a call for this chat goes: its one channel, or the phone it waits for."""
+        with self._lock:
+            matches = self._matching(profile, session_id)
+            if len(matches) > 1:
+                raise NativeDeviceToolError("channel_ambiguous")
+            if matches:
+                return matches[0], None
+            lapse = self._recent_lapse(profile, session_id)
+            if lapse is None:
+                raise NativeDeviceToolError("phone_unavailable")
+            return None, lapse
 
     def poll(self, owner: Any, fields: dict[str, Any], *, after: int | None = None) -> dict[str, Any]:
         with self._lock:
@@ -427,13 +651,19 @@ class NativeDeviceToolHub:
             while channel.requests and channel.requests[0][0] <= after:
                 channel.requests.popleft()
             rows = list(channel.requests)[:MAX_POLL_ITEMS]
+            # A call nobody waits for any more (its time ran out) is skipped, but still acknowledged by `next`,
+            # so the phone never runs a request whose agent was already told it did not arrive.
+            live = [(sequence, request) for sequence, request in rows if request["requestId"] in channel.pending]
+            for _sequence, request in live:
+                # From here the phone may have run it, even if the answer never comes back.
+                channel.pending[request["requestId"]].delivered = True
             channel.lease_expires = self.clock() + self.lease_seconds
             return {
                 "channelId": channel.channel_id,
                 "next": rows[-1][0] if rows else after,
                 "requests": [
                     {"sequence": sequence, "request": request}
-                    for sequence, request in rows
+                    for sequence, request in live
                 ],
             }
 
@@ -468,26 +698,49 @@ class NativeDeviceToolHub:
                 raise NativeDeviceToolError("result_timestamp_invalid")
             if self.clock() >= pending.request["expiresAt"] + _grace(parsed["operation"]):
                 _mark_completed(channel, request_id)
-                _set_future(pending, _failed_result(request_id, _unanswered(parsed["operation"])))
+                channel.ended_calls.append(pending.call)
+                _set_future(pending, _failed_result(request_id, _unanswered(parsed["operation"], True)))
                 raise NativeDeviceToolError("result_expired")
             _mark_completed(channel, request_id)
+            channel.ended_calls.append(pending.call)
             _set_future(pending, parsed)
             channel.lease_expires = self.clock() + self.lease_seconds
         return {"accepted": True}
 
     def close(self, owner: Any, fields: dict[str, Any]) -> dict[str, Any]:
+        """Close a channel. ``reason: "paused"`` says the phone will be back (the app went to the background),
+        so what it never received keeps waiting. Any other close fails every pending call."""
         with self._lock:
             channel = self._get(owner, fields["channelId"])
-            self._retire(channel)
+            self._retire(channel, keep=fields.get("reason") == "paused")
             self.channels.pop(channel.channel_id, None)
         return {"closed": True}
 
-    def close_all(self) -> None:
-        """Retire every phone lease when Hermes unloads this plugin generation."""
+    def close_profile(self, profile: str) -> None:
+        """Retire every phone lease of one profile when Hermes unloads this plugin for it."""
         with self._lock:
             for channel_id, channel in tuple(self.channels.items()):
-                self._retire(channel)
-                self.channels.pop(channel_id, None)
+                if channel.profile == profile:
+                    self._retire(channel)
+                    self.channels.pop(channel_id, None)
+            for call, pending in tuple(self._parked.items()):
+                if call[0] == profile:
+                    del self._parked[call]
+                    _set_future(pending, _failed_result(pending.request["requestId"], "phone_unavailable"))
+            self._lapses = [lapse for lapse in self._lapses if lapse.profile != profile]
+            for call in [call for call in self._finished if call[0] == profile]:
+                del self._finished[call]
+
+    def close_all(self) -> None:
+        """Retire every phone lease of every profile."""
+        with self._lock:
+            profiles = (
+                {channel.profile for channel in self.channels.values()}
+                | {call[0] for call in self._parked} | {lapse.profile for lapse in self._lapses}
+                | {call[0] for call in self._finished}
+            )
+            for profile in profiles:
+                self.close_profile(profile)
 
     async def execute(
         self,
@@ -506,47 +759,51 @@ class NativeDeviceToolHub:
                 return _failed_result(None, "phone_unavailable")
         except Exception:
             return _failed_result(None, "phone_unavailable")
-        matches = self._matching(profile, session_id)
-        if not matches:
-            return _failed_result(None, "phone_unavailable")
-        if len(matches) != 1:
-            return _failed_result(None, "channel_ambiguous")
-        channel = matches[0]
+        call: _Call = (profile, session_id, turn_id, tool_call_id)
         capability = operation.split(".", 1)[0]
-        if capability not in channel.enabled:
-            return _failed_result(None, "authorization_required")
         try:
+            # No channel now is not the end if the chat's phone had one a moment ago: the call then waits
+            # for that phone to open the chat again (_target). With no recent channel it fails at once.
+            channel, lapse = self._target(profile, session_id)
+            if capability not in (channel.enabled if channel is not None else lapse.enabled):
+                return _failed_result(None, "authorization_required")
             if not isinstance(arguments, dict):
                 raise ValueError
             if operation == "photos.save":
                 # Checked here, before anything is queued: the phone gets only a path the host will serve.
-                arguments = {**arguments, "path": device_photos.check_save_path(arguments.get("path"))}
+                # In the asking agent's own home: the gateway's delivery rules are read from there.
+                with device_photos.profile_scope(profile):
+                    arguments = {**arguments, "path": device_photos.check_save_path(arguments.get("path"))}
             timeout = LONG_OPERATION_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else self.lease_seconds
-            request_id = _request_id(channel, session_id, turn_id, tool_call_id)
             fingerprint = _fingerprint(operation, arguments)
             with self._lock:
-                if self._expired(channel):
-                    self._retire(channel)
-                    return _failed_result(None, "phone_unavailable")
-                existing = channel.pending.get(request_id)
+                # Look again: the channel may have ended, or come back, while the arguments were checked.
+                channel, lapse = self._target(profile, session_id)
+                if capability not in (channel.enabled if channel is not None else lapse.enabled):
+                    return _failed_result(None, "authorization_required")
+                request_id = _request_id(channel, session_id, turn_id, tool_call_id) if channel is not None else None
+                existing = self._parked.get(call)
+                if existing is None and channel is not None:
+                    existing = channel.pending.get(request_id)
                 if existing is not None:
                     if existing.fingerprint != fingerprint:
                         return _failed_result(request_id, "request_conflict")
                     existing.waiters += 1
                     pending = existing
-                elif request_id in channel.completed:
+                elif call in self._finished or (channel is not None and request_id in channel.completed):
                     return _failed_result(request_id, "result_replay")
                 else:
                     sent_at = int(self.clock())
                     request = device_tool_request(
-                        request_id=request_id,
-                        device_id=channel.device_id,
-                        host_id=channel.host_id,
-                        authorization_epoch=channel.authorization_epoch,
+                        request_id=request_id or _parked_request_id(call),
+                        device_id=channel.device_id if channel is not None else lapse.phone[1],
+                        host_id=channel.host_id if channel is not None else lapse.phone[2],
+                        authorization_epoch=(
+                            channel.authorization_epoch if channel is not None else lapse.phone[3]),
                         # Echo the channel's validated coordinate.  If the
                         # phone connected with Hermes' runtime sid, the
                         # middleware's durable sid is used only for matching.
-                        session_id=channel.session_id,
+                        session_id=channel.session_id if channel is not None else lapse.session_id,
                         agent_id=profile,
                         turn_id=turn_id,
                         operation=operation,
@@ -554,20 +811,35 @@ class NativeDeviceToolHub:
                         sent_at=sent_at,
                         expires_at=sent_at + timeout,
                     )
-                    if len(channel.pending) >= MAX_QUEUE:
+                    if channel is not None:
+                        crowded = len(channel.pending) >= MAX_QUEUE
+                    else:
+                        crowded = len(self._parked) >= MAX_QUEUE or sum(
+                            1 for other in self._parked if other[0] == profile and other[1] == session_id
+                        ) >= MAX_PARKED_PER_CHAT
+                    if crowded:
                         return _failed_result(request_id, "busy")
+                    coordinate = channel.session_id if channel is not None else lapse.session_id
                     if operation == "photos.save":
                         device_photos.grant_save_path(
-                            profile, self._stored_ids(session_id, channel.session_id), arguments["path"])
-                    if operation in DEVICE_TOOL_LONG_OPERATIONS:
-                        channel.hold_until = max(channel.hold_until, self.clock() + timeout + _grace(operation))
-                    pending = _Pending(request, fingerprint, Future())
-                    channel.pending[request_id] = pending
-                    channel.sequence += 1
-                    channel.requests.append((channel.sequence, request))
-                    while len(channel.requests) > MAX_QUEUE:
-                        channel.requests.popleft()
-                deadline = pending.request["expiresAt"] + _grace(operation)
+                            profile, self._stored_ids(session_id, coordinate), arguments["path"])
+                    pending = _Pending(
+                        request, fingerprint, Future(), call=call, chat=(session_id, coordinate),
+                        deadline=request["expiresAt"] + _grace(operation),
+                    )
+                    if channel is not None:
+                        if operation in DEVICE_TOOL_LONG_OPERATIONS:
+                            channel.hold_until = max(channel.hold_until, self.clock() + timeout + _grace(operation))
+                        pending.channel = channel
+                        channel.pending[request_id] = pending
+                        channel.sequence += 1
+                        channel.requests.append((channel.sequence, request))
+                        while len(channel.requests) > MAX_QUEUE:
+                            channel.requests.popleft()
+                    else:
+                        pending.phone = lapse.phone
+                        self._parked[call] = pending
+                deadline = pending.deadline
             remaining = max(0.001, min(float(deadline - int(self.clock())), timeout + _grace(operation)))
             try:
                 # A middleware call may run through Hermes' persistent main
@@ -576,19 +848,16 @@ class NativeDeviceToolHub:
                 # across either execution path without cross-loop awaits.
                 shared_result = asyncio.wrap_future(pending.future, loop=asyncio.get_running_loop())
                 result = await asyncio.wait_for(asyncio.shield(shared_result), timeout=remaining)
-                return self._for_agent(operation, result)
+                return self._for_agent(operation, result, profile)
             except asyncio.TimeoutError:
-                result = _failed_result(request_id, _unanswered(operation))
                 with self._lock:
-                    _mark_completed(channel, request_id)
-                    _set_future(pending, result)
+                    result = self._give_up(pending)
                 return result
             finally:
                 with self._lock:
-                    if channel.pending.get(request_id) is pending:
-                        pending.waiters -= 1
-                        if pending.waiters <= 0 or pending.future.done():
-                            channel.pending.pop(request_id, None)
+                    pending.waiters -= 1
+                    if pending.waiters <= 0 or pending.future.done():
+                        self._release(pending)
         except NativeDeviceToolError as exc:
             return _failed_result(None, exc.code)
         except device_photos.PhotoRefusal as exc:
@@ -600,6 +869,30 @@ class NativeDeviceToolHub:
             return _failed_result(None, "invalid_arguments", text.removeprefix(_CONTRACT_PREFIX)
                                   if isinstance(exc, ValueError) and text.startswith(_CONTRACT_PREFIX) else None)
 
+    def _give_up(self, pending: _Pending) -> dict[str, Any]:
+        """The call's own deadline came and the phone did not answer."""
+        operation = pending.request["operation"]
+        request_id = pending.request["requestId"]
+        if pending.channel is None and not pending.delivered:
+            # It never reached a phone, so nothing happened and the agent may try again.
+            result = _failed_result(request_id, "phone_unavailable")
+        else:
+            result = _failed_result(request_id, _unanswered(operation, pending.delivered))
+        if pending.channel is not None:
+            _mark_completed(pending.channel, request_id)
+            if pending.delivered:
+                pending.channel.ended_calls.append(pending.call)
+        _set_future(pending, result)
+        return result
+
+    def _release(self, pending: _Pending) -> None:
+        """Forget a call nobody waits for any more, wherever it is held."""
+        channel = pending.channel
+        if channel is not None and channel.pending.get(pending.request["requestId"]) is pending:
+            channel.pending.pop(pending.request["requestId"], None)
+        if self._parked.get(pending.call) is pending:
+            del self._parked[pending.call]
+
     def _stored_ids(self, *session_ids: str) -> list[str]:
         """These session coordinates and the stored sessions Hermes' live map pairs them with."""
         ids = list(dict.fromkeys(session_ids))
@@ -609,7 +902,7 @@ class NativeDeviceToolHub:
                 ids.append(stored_id)
         return ids
 
-    def _for_agent(self, operation: str, result: dict[str, Any]) -> dict[str, Any]:
+    def _for_agent(self, operation: str, result: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
         """What the agent reads. A photo from photos.get becomes a file on this host; the bytes end here."""
         payload = result.get("payload")
         if operation != "photos.get" or not isinstance(payload, dict) or "image" not in payload:
@@ -621,8 +914,9 @@ class NativeDeviceToolHub:
             kept = {key: value for key, value in image.items() if key != "data"} if isinstance(image, dict) else None
             return {**result, "payload": {**rest, **({"image": kept} if kept else {})}}
         try:
-            picture = device_photos.store_picture(image, self.photos_directory())
-        except (device_photos.PhotoRefusal, OSError, ImportError) as exc:
+            directory = self.photos_directory() if self.photos_directory else device_photos.photos_directory(profile)
+            picture = device_photos.store_picture(image, directory)
+        except (device_photos.PhotoRefusal, OSError, ImportError, ValueError) as exc:
             # Only a fixed code is logged: the picture's bytes and its path are the user's.
             logger.warning("bighelp phone photo not stored: %s", getattr(exc, "code", type(exc).__name__))
             return _failed_result(result.get("requestId"), getattr(exc, "code", "photo_unavailable"))
@@ -756,9 +1050,13 @@ def register_middleware(
         _set_registered(True, profile)
 
         def unload() -> None:
+            # The hub is shared with the other profiles' copies of this plugin: end only this profile's leases.
+            retire_profile = getattr(selected_hub, "close_profile", None)
             retire = getattr(selected_hub, "close_all", None)
             try:
-                if callable(retire):
+                if callable(retire_profile):
+                    retire_profile(profile)
+                elif callable(retire):
                     retire()
             finally:
                 _set_registered(False, profile)
@@ -780,7 +1078,46 @@ def register_middleware(
     return True
 
 
-_HUB = NativeDeviceToolHub()
+# Bump when the hub's state or methods change in a way another copy of this module can't use. Copies of
+# different versions each keep their own hub.
+HUB_PROTOCOL_VERSION = 1
+_HUB_REGISTRY_NAME = "_bighelp_device_tool_hubs"
+
+
+def _source_digest() -> str:
+    """A fingerprint of this file, so a copy with different code never takes a hub another copy made."""
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:32]
+    except OSError:
+        from .version import PLUGIN_VERSION
+        return hashlib.sha256(PLUGIN_VERSION.encode("utf-8")).hexdigest()[:32]
+
+
+_SOURCE_DIGEST = _source_digest()
+
+
+def _shared_hub(*, version: int = HUB_PROTOCOL_VERSION, digest: str | None = None) -> NativeDeviceToolHub:
+    """The process-wide hub for this protocol version and this exact code.
+
+    Hermes imports the plugin once for each profile it serves, and module globals are not shared between
+    those copies. The hub is kept in a plain module registered in ``sys.modules`` so every copy finds the
+    same one. Only plain containers and locks live in the registry, and callers use the hub only by its
+    methods and attributes, never by ``isinstance``.
+    """
+    registry = sys.modules.get(_HUB_REGISTRY_NAME)
+    if registry is None:
+        candidate = types.ModuleType(_HUB_REGISTRY_NAME)
+        candidate.lock, candidate.hubs = threading.Lock(), {}
+        registry = sys.modules.setdefault(_HUB_REGISTRY_NAME, candidate)
+    with registry.lock:
+        key = (version, digest or _SOURCE_DIGEST)
+        hub = registry.hubs.get(key)
+        if hub is None:
+            hub = registry.hubs[key] = NativeDeviceToolHub(profile_validator=_default_profile_exists)
+        return hub
+
+
+_HUB = _shared_hub()
 _registered = False
 _registered_profile: str | None = None
 _MODULE_ORIGIN = Path(__file__).resolve()
@@ -869,12 +1206,24 @@ class _Connect(_Scope):
         return value
 
 
+class _Close(_Scope):
+    # "paused": the app went to the background and will be back. Nothing else is accepted.
+    reason: Literal["paused"] | None = None
+
+
 class _Poll(_Scope):
     after: StrictInt = Field(ge=0, le=9_007_199_254_740_991)
 
 
 class _Result(_Scope):
     result: dict[str, Any]
+
+
+def _is_hub_refusal(error: BaseException) -> bool:
+    return (
+        isinstance(error, ValueError) and type(error).__name__ == NativeDeviceToolError.__name__
+        and isinstance(getattr(error, "code", None), str) and isinstance(getattr(error, "status", None), int)
+    )
 
 
 async def request(
@@ -905,7 +1254,7 @@ async def request(
         "connect": _Connect,
         "poll": _Poll,
         "result": _Result,
-        "close": _Scope,
+        "close": _Close,
     }
     if operation not in models:
         raise NativeAPIError(404, "unknown_device_tool_operation", "The device-tool operation is unknown.")
@@ -920,14 +1269,18 @@ async def request(
     fields = body.model_dump()
     try:
         if operation == "connect":
-            value = _HUB.connect(owner, fields)
+            # It reads the profile's session store (SQLite), so it must not run on the event loop.
+            value = await asyncio.to_thread(_HUB.connect, owner, fields)
         elif operation == "poll":
             value = _HUB.poll(owner, fields)
         elif operation == "result":
             value = _HUB.accept_result(owner, fields, fields["result"])
         else:
             value = _HUB.close(owner, fields)
-    except NativeDeviceToolError as error:
+    except Exception as error:
+        # The hub may belong to another profile's copy of this module, so its error class is not ours.
+        if not _is_hub_refusal(error):
+            raise
         raise NativeAPIError(error.status, error.code, str(error)) from None
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; reconcile the outcome.")
@@ -935,6 +1288,6 @@ async def request(
 
 
 __all__ = [
-    "CAPABILITY", "NativeDeviceToolError", "NativeDeviceToolHub", "available",
+    "AGENTS_CAPABILITY", "CAPABILITY", "WAIT_CAPABILITY", "NativeDeviceToolError", "NativeDeviceToolHub", "available",
     "register_middleware", "request",
 ]
