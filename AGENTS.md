@@ -115,10 +115,15 @@ One Hermes dashboard process holds **two separate copies** of the plugin's modul
 - the dashboard API loader adds the plugin root to `sys.path` and imports top-level `loopdy_plugin`
 - Hermes' plugin loader imports `hermes_plugins.loopdy.loopdy_plugin` for hooks and tools
 
+The same holds for each profile a process serves: Hermes loads the plugin again for every profile home, under its own
+`hermes_plugins.loopdy__home_<digest>` name.
+
 Module-level singletons are therefore duplicated. State a hook records is invisible to an HTTP route unless it's
 shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `managed_notifications.py`). When a route
 "can't see" something a hook did, suspect this first. This bug once kept every phone's Live Activity stuck on
-"Updates paused".
+"Updates paused". The phone-tool hub is shared that way (`_shared_hub` in `native_device_tools.py`), one per hub
+protocol version. Change `HUB_PROTOCOL_VERSION` when the hub's state or methods change in a way an older copy can't
+use, and never use `isinstance` across copies.
 
 ## Adding a feature for the app
 

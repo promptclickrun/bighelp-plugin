@@ -37,11 +37,13 @@ overwrite a newer change.
   background. bighelp shares approximate location by default; on each call iOS may ask whether to share your
   precise location this time. If you keep it approximate, the agent gets only a rough area.
 - The tools only work while bighelp is open, unlocked and showing that host's chat. Leaving the chat,
-  switching hosts, turning a tool off or backgrounding the app stops them, and anything in flight is dropped
-  rather than retried later.
+  switching hosts or turning a tool off stops them, and anything in flight is dropped rather than retried later.
+  When the app goes to the background, or the phone is away for a short time, a call waits a little for the
+  phone to come back (see Waiting), but only if the phone has not received it yet.
 - If the phone isn't available, the agent gets a clear "phone unavailable" result, never made-up or empty data.
-  Apple doesn't reveal whether Health read access was denied, so an empty Health result can mean either no
-  data or no access.
+  The result tells the agent what to say: `payload.note` is "bighelp isn't open on the phone right now. Ask the
+  person to open bighelp, then try again." Apple doesn't reveal whether Health read access was denied, so an empty
+  Health result can mean either no data or no access.
 
 What the tools return goes to your Hermes host and its AI provider, and may stay in the chat's normal history.
 The app keeps only small records needed to avoid repeating a change, never the Health, calendar, reminder or
@@ -173,6 +175,30 @@ counts. While one of those waits, the channel's lease lasts for the whole wait: 
 If the phone never answers one of them, the agent gets `outcome_unknown` (not `phone_unavailable`): the shortcut
 may have run or the file may have been saved. The result says not to run it again and to check first.
 
+If a call finds no open channel for its chat but the chat's phone had one in the last 120 seconds (the lease
+lapsed, the app went to the background, or the same phone is opening the chat again), the call waits for that
+same phone to open a channel for that chat again. The same phone means the same signed-in person, `deviceId` and
+`hostId`. The wait ends at the call's own deadline, 30 seconds from the call (70 for `shortcuts.run` and
+`photos.save`), and never later. A different phone or person that opens the chat does not get the call, and the
+call fails with `phone_unavailable`. With no recent channel, the call fails at once. Advertised as
+`native-device-tools-wait-v1`.
+
+A channel can end in four ways:
+
+| How it ends | A request the phone has not received | A request the phone already received |
+| --- | --- | --- |
+| The lease lapses (no poll for 30 seconds) | Waits for the same phone's next channel for the chat | Fails |
+| The same phone opens the chat again | Moves to the new channel at once | Fails |
+| `close` with `reason: "paused"` (the app went to the background and will be back) | Waits for the same phone's next channel for the chat | Fails |
+| `close` without a reason, an owner change, or the plugin unloading | Fails | Fails |
+
+A request the phone has received is one that a `poll` answer has handed to it. It may have run, so it is never
+sent again: a read fails with `phone_unavailable` and `shortcuts.run` or `photos.save` fails with `outcome_unknown`.
+A request that waits keeps its `sentAt` and `expiresAt`. It gets a new `requestId`, because the ID names the
+channel, so an answer for the old channel is not taken on the new one. A retry of the same Hermes tool call (the
+same session, turn and tool-call ID) joins the waiting request, and a call that already reached the phone is not
+run again by a retry (`result_replay`).
+
 ### Tool schemas
 
 The schemas the agent reads are short on purpose, because they are sent with every request to the serving agent
@@ -187,19 +213,21 @@ The phone opens a short-lived channel for the exact agent and chat it has open, 
 - `POST /api/plugins/loopdy/native/device-tools/connect` with the chat's agent and session and the tools you
   enabled
 - `…/poll` to pick up requests, and `…/result` to return each answer
-- `…/close` when the chat closes
+- `…/close` when the chat closes. The optional `reason: "paused"` says the app went to the background and will
+  be back; no other reason is accepted (`invalid_request`, like any other unknown field).
 
 A channel expires after 30 seconds without a poll. When an agent calls an `iphone_*` tool, Hermes' public tool
 execution middleware hands the call to the phone that holds a channel for that exact agent and session, using
 Hermes' own session, turn and tool-call IDs. Nothing is taken from the model's arguments to decide which phone
-to use. With no open channel, the tool fails with `phone_unavailable`. A call the phone doesn't answer in time fails
+to use. With no open channel and no recent one (see Waiting), the tool fails with `phone_unavailable`. A call the phone doesn't answer in time fails
 rather than being retried.
 
 One chat has one phone. A `connect` for a chat that another phone holds fails with `channel_ambiguous`: the plugin
 never picks a phone by which one came last. The same phone opening the chat again (the same signed-in person,
 `deviceId` and `hostId`) replaces its own earlier channel, for example after the app closed before its `close`
-arrived. A call that waits on the old channel fails with `phone_unavailable`, as it does when that channel closes,
-and the old channel's `close` answers `phone_unavailable` too.
+arrived. A call the old channel's phone has not received yet moves to the new channel. A call it has received fails
+with `phone_unavailable`, as it does when that channel closes, and the old channel's `close` answers
+`phone_unavailable` too.
 
 The plugin advertises `native-device-tools-v1` only when the Hermes host supports tool execution middleware.
 `native-device-location-v1` comes with it and tells the app that `location` may be in the channel's `enabled`
@@ -209,11 +237,28 @@ list; older plugins reject it, so the app leaves Location out for them and asks 
 `native-device-focus-v1` and `native-device-shortcuts-v1` for `contacts`, `photos`, `geofences`, `alarms`, `music`,
 `focus` and `shortcuts`. A call whose kind isn't in the channel's `enabled` list fails with `authorization_required`.
 Because Appearance is on by default, the phone opens a
-channel for every chat with the serving agent on a host that lists it, and polls more slowly (every 8 seconds instead
+channel for every chat on a host that lists it, and polls more slowly (every 8 seconds instead
 of 0.75) while Appearance is the only tool on that channel.
 
-Hermes loads the plugin, and so the `iphone_*` tools, only into the agent it serves (`servingProfileId` in
-`/native/context`, usually `default`). The plugin refuses a channel for any other agent (`profile_not_served`), and
-the phone doesn't ask: in another agent's chat it opens no channel, and Settings › Device access names the agent
-that can use the shared data.
+### Every agent
+
+Hermes loads the plugin once for each agent (profile) that has it, and each copy has its own tools. The phone's
+routes reach only the copy of the agent that serves the app (`servingProfileId` in `/native/context`, usually
+`default`). So the plugin keeps one hub for the whole Hermes process, and every copy of the same hub version uses
+it. Each agent's tools name their own profile (Hermes' `profile_name`, never a value from the model), and a call
+reaches only a channel for that profile and chat.
+
+A phone may open a channel (`connect`) with an `agentId` that is any agent of this host, if that agent's own session
+store (read-only) has the `sessionId`. Everything else is as before: the same person must own the channel, a second
+phone for one chat fails with `channel_ambiguous`, and the same phone replaces its own channel. These answers are
+new or changed:
+
+| Code | Status | When |
+| --- | --- | --- |
+| `profile_not_found` | 404 | `agentId` is not an agent of this host. The plugin never uses another agent instead. |
+| `session_not_found` | 404 | The `sessionId` is not in that agent's session store. |
+
+`profile_not_served` (403) is no longer sent. The plugin advertises `native-device-tools-agents-v1` when it works
+this way. An agent that has no bighelp plugin has no `iphone_*` tools, so the phone has nothing to call there. A
+picture from `photos.get` goes to `bighelp/phone-photos/` in the Hermes home of the agent that asked.
 The routes use the usual native session checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)).
