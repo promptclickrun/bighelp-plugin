@@ -193,7 +193,14 @@ A channel can end in four ways:
 | `close` without a reason, an owner change, or the plugin unloading | Fails | Fails |
 
 A request the phone has received is one that a `poll` answer has handed to it. It may have run, so it is never
-sent again: a read fails with `phone_unavailable` and `shortcuts.run` or `photos.save` fails with `outcome_unknown`.
+sent again. Only a pure read fails with `phone_unavailable`, and the agent may ask again. The pure reads are
+`health.read`, `calendar.list`, `reminders.list`, `location.current`, `appearance.get`, `contacts.list`,
+`photos.list`, `photos.albums`, `photos.get`, `geofences.list`, `alarms.list`, `music.nowPlaying`, `music.search`,
+`music.library`, `focus.current` and `shortcuts.list`. Every other operation (and any operation the plugin does not
+know) fails with `outcome_unknown`, whose note tells the agent not to run it again and to check first. A request
+the phone never received did nothing, so it fails with `phone_unavailable` (except `shortcuts.run` and
+`photos.save`, which always say `outcome_unknown` when they time out). A request whose time ran out is also no
+longer handed out by `poll`.
 A request that waits keeps its `sentAt` and `expiresAt`. It gets a new `requestId`, because the ID names the
 channel, so an answer for the old channel is not taken on the new one. A retry of the same Hermes tool call (the
 same session, turn and tool-call ID) joins the waiting request, and a call that already reached the phone is not
@@ -214,7 +221,8 @@ The phone opens a short-lived channel for the exact agent and chat it has open, 
   enabled
 - `…/poll` to pick up requests, and `…/result` to return each answer
 - `…/close` when the chat closes. The optional `reason: "paused"` says the app went to the background and will
-  be back; no other reason is accepted (`invalid_request`, like any other unknown field).
+  be back; no other reason is accepted (`invalid_request`, like any other unknown field). The body of `close`
+  refuses fields it does not know, so an app sends `reason` only when `native-device-tools-wait-v1` is listed.
 
 A channel expires after 30 seconds without a poll. When an agent calls an `iphone_*` tool, Hermes' public tool
 execution middleware hands the call to the phone that holds a channel for that exact agent and session, using
@@ -260,5 +268,15 @@ new or changed:
 
 `profile_not_served` (403) is no longer sent. The plugin advertises `native-device-tools-agents-v1` when it works
 this way. An agent that has no bighelp plugin has no `iphone_*` tools, so the phone has nothing to call there. A
-picture from `photos.get` goes to `bighelp/phone-photos/` in the Hermes home of the agent that asked.
+picture from `photos.get` goes to `bighelp/phone-photos/` in the Hermes home of the agent that asked, and the
+checks of `photos.save` run in that agent's home too.
+
+The hub is shared only by copies of the plugin with the same hub version and the same hub code. An agent whose
+Hermes home carries an older copy of the plugin (one from before this feature, or one that was not updated) keeps a
+private hub. `/native/context` still lists `native-device-tools-agents-v1`, because it describes the serving
+copy, but the phone tools of that agent answer `phone_unavailable`. Update the plugin in that agent's home (a link
+to the default agent's copy, see [Shared plugins](SHARED_PLUGINS.md), updates it too).
+
+A `connect` for a profile with no `state.db` yet (no chat has been saved) is accepted when the chat is live in
+Hermes. A chat that is in neither place is `session_not_found`.
 The routes use the usual native session checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)).

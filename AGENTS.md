@@ -123,7 +123,10 @@ shared through one `sys.modules` entry (see `sys.modules.setdefault(...)` in `ma
 "can't see" something a hook did, suspect this first. This bug once kept every phone's Live Activity stuck on
 "Updates paused". The phone-tool hub is shared that way (`_shared_hub` in `native_device_tools.py`), one per hub
 protocol version. Change `HUB_PROTOCOL_VERSION` when the hub's state or methods change in a way an older copy can't
-use, and never use `isinstance` across copies.
+use, and never use `isinstance` across copies. The registry key also holds a digest of `native_device_tools.py`, so
+a copy with different code never takes a hub another copy made. A profile home with an older plugin copy keeps a
+private hub, and its phone tools answer `phone_unavailable` even though `/native/context` lists
+`native-device-tools-agents-v1` (see `docs/IPHONE_DEVICE_TOOLS.md`).
 
 ## Adding a feature for the app
 
