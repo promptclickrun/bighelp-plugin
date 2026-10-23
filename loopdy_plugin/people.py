@@ -25,7 +25,7 @@ import time
 import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from . import tool_session
 from .naming import TOOLSET
@@ -33,6 +33,9 @@ from .naming import TOOLSET
 logger = logging.getLogger("hermes.plugins.bighelp")
 
 CAPABILITY = "native-people-v1"
+# Chats per agent whose app has said which card components it draws; the least
+# recently noted go first.
+MAX_RENDER_SESSIONS = 2_048
 TOOL_NAME = "bighelp_people"
 SESSION_SOURCE = "bighelp"
 MAX_NAME = 40
@@ -116,6 +119,8 @@ class PeopleStore:
                     speaker TEXT NOT NULL, spoke REAL NOT NULL,
                     speakers TEXT NOT NULL DEFAULT '[]',
                     brief_owner TEXT, brief_name TEXT, updated REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS renders(
+                    session_id TEXT PRIMARY KEY, components TEXT NOT NULL, updated REAL NOT NULL);
             """)
 
     @contextmanager
@@ -153,6 +158,44 @@ class PeopleStore:
             db.execute("DELETE FROM sessions WHERE updated < ?", (now - _KEEP_SESSIONS_SECONDS,))
             db.execute("DELETE FROM people WHERE person_id NOT IN "
                        "(SELECT person_id FROM people ORDER BY updated DESC LIMIT ?)", (_MAX_PEOPLE,))
+
+    def set_renders(self, session_id: str, renders: Iterable[str], now: float | None = None) -> list[str]:
+        """The card components the app of ``session_id`` draws, as of its latest message.
+
+        Replaces what was noted before: an empty list (or an app that sends none)
+        means only the basic components. Names this plugin doesn't know are
+        dropped. Kept on disk because the card tool and this route run in two
+        copies of the plugin that share no memory.
+        """
+        if SESSION_ID.fullmatch(session_id) is None:
+            raise ValueError("invalid session")
+        from .card_objects import known
+        names = sorted(known(renders))
+        now = time.time() if now is None else now
+        with self._db() as db:
+            if names:
+                db.execute("INSERT INTO renders(session_id, components, updated) VALUES(?,?,?) "
+                           "ON CONFLICT(session_id) DO UPDATE SET components=excluded.components, "
+                           "updated=excluded.updated", (session_id, json.dumps(names), now))
+            else:
+                db.execute("DELETE FROM renders WHERE session_id=?", (session_id,))
+            db.execute("DELETE FROM renders WHERE updated < ?", (now - _KEEP_SESSIONS_SECONDS,))
+            db.execute("DELETE FROM renders WHERE rowid NOT IN (SELECT rowid FROM renders "
+                       "ORDER BY updated DESC, rowid DESC LIMIT ?)", (MAX_RENDER_SESSIONS,))
+        return names
+
+    def renders(self, session_id: str) -> frozenset[str]:
+        """The card components the chat's app said it draws; empty when it never said."""
+        with self._db() as db:
+            row = db.execute("SELECT components FROM renders WHERE session_id=?", (session_id,)).fetchone()
+        if row is None:
+            return frozenset()
+        try:
+            values = json.loads(row["components"])
+        except ValueError:
+            return frozenset()
+        from .card_objects import known
+        return known(values) if isinstance(values, list) else frozenset()
 
     def _name(self, db: sqlite3.Connection, person_id: str) -> str | None:
         row = db.execute("SELECT name FROM people WHERE person_id=?", (person_id,)).fetchone()
