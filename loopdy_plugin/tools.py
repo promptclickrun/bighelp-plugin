@@ -16,6 +16,7 @@ from .generative_ui import (
 )
 from .loopdy_cards import canonical_json as canonical_card_json
 from .loopdy_cards import render_card
+from . import card_objects, tool_session
 from .store import form_action_response
 
 
@@ -100,10 +101,14 @@ def _card_parameters() -> dict[str, Any]:
     }
 
 
-def _card_handler(now: Callable[[], datetime]):
-    def handle(payload, **_kwargs):
+def _card_handler(now: Callable[[], datetime], renders: card_objects.Renders):
+    def handle(payload, **kwargs):
+        document = card_input(without_notification_text(payload))
+        # Contact, place and music components only go to a chat whose app drew them before.
+        session_id = tool_session.session_id(kwargs, "HERMES_SESSION_ID")
+        objects = card_objects.require(document, session_id, renders)
         return canonical_card_json(rendered_card_delivery(
-            render_card(card_input(without_notification_text(payload)), now=now())))
+            render_card(document, now=now(), allow_objects=objects)))
 
     return handle
 
@@ -590,6 +595,7 @@ def register(
     profile: str | None = None,
     now: Callable[[], datetime] | None = None,
     request_id_factory: Callable[[], str] | None = None,
+    card_renders: card_objects.Renders | None = None,
 ):
     from .reactions import register as register_reactions
     from .secure_input import register as register_secure_input
@@ -657,11 +663,11 @@ def register(
                 "and tool_call bridge to invoke this exact renderer; do not substitute or "
                 "wrap another tool. The tool call alone does not display the card: include the returned "
                 "display_markdown exactly once in the assistant answer. In a scheduled job, do the same in the "
-                "run's final reply." + NOTIFICATION_TEXT_HELP
+                "run's final reply." + card_objects.TOOL_NOTE + NOTIFICATION_TEXT_HELP
             ),
             "parameters": _card_parameters(),
         },
-        handler=_card_handler(clock),
+        handler=_card_handler(clock, card_renders or card_objects.declared_for),
     )
     ctx.register_tool(
         name="bighelp_await_form_response",

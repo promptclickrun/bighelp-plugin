@@ -511,6 +511,10 @@ class _Speaking(_Body):
     sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     personId: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     name: str = Field(default="", max_length=400)
+    # The card components this chat's app draws (native-card-objects-v1). An older
+    # app sends none, which means the basic components only; names this plugin
+    # doesn't know yet are ignored.
+    renders: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]] | None = Field(default=None, max_length=8)
 
 
 def _speaking(agent_id: str, body: _Speaking) -> dict:
@@ -518,8 +522,12 @@ def _speaking(agent_id: str, body: _Speaking) -> dict:
     from .people import clean_name, store_for_profile
     if not profile_exists(agent_id):
         raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
-    store_for_profile(agent_id).note(body.sessionId, body.personId, body.name)
-    return {"agentId": agent_id, "sessionId": body.sessionId, "name": clean_name(body.name)}
+    store = store_for_profile(agent_id)
+    store.note(body.sessionId, body.personId, body.name)
+    renders = store.set_renders(body.sessionId, body.renders or ())
+    value = {"agentId": agent_id, "sessionId": body.sessionId, "name": clean_name(body.name)}
+    # Echoed only to an app that sent the list, so older apps get the answer they always got.
+    return value if body.renders is None else {**value, "renders": renders}
 
 
 @router.post("/people/speaking")

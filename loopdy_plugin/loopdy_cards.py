@@ -23,6 +23,7 @@ MAX_TABLE_ROWS = 50
 MAX_CHART_SERIES = 6
 MAX_CHART_POINTS = 120
 MAX_LIST_ITEMS = 50
+MAX_OBJECT_ENTRIES = 5
 
 _LOG = logging.getLogger(__name__)
 
@@ -50,8 +51,12 @@ _ELEMENT_TYPES = {
     "spacer",
     "image",
 }
+# Object components show one real person, place or song. They are leaves, and
+# a chat's app must have said it draws them (card_objects.py) before an agent
+# can use them, because older apps reject an unknown element type.
+OBJECT_TYPES = frozenset({"contact", "place", "music"})
 _CONTAINERS = {"card", "vstack", "hstack", "grid"}
-_LEAVES = _ELEMENT_TYPES - _CONTAINERS - {"list"}
+_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES) - _CONTAINERS - {"list"}
 _SEMANTICS = {
     "primary",
     "secondary",
@@ -175,6 +180,7 @@ def validate_card_input(
     now: datetime,
     allow_live_data_for_testing: bool = False,
     warn: bool = True,
+    allow_objects: bool = False,
 ) -> dict[str, object]:
     reference = _utc(now, code="invalid_clock")
     encoded = canonical_json(payload)
@@ -228,16 +234,18 @@ def validate_card_input(
         _identifier(element_id)
     source_ids = {source["id"] for source in sources}
     for element_id, element in elements.items():
-        _element(element_id, element, source_ids, warn=warn)
+        _element(element_id, element, source_ids, warn=warn, allow_objects=allow_objects)
 
     root = _identifier(value["root"])
     _validate_tree(root, elements)
     return value
 
 
-def render_card(payload: object, *, now: datetime) -> dict[str, object]:
+def render_card(
+    payload: object, *, now: datetime, allow_objects: bool = False
+) -> dict[str, object]:
     created = _utc(now, code="invalid_clock")
-    validated = validate_card_input(payload, now=created)
+    validated = validate_card_input(payload, now=created, allow_objects=allow_objects)
     content_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -289,7 +297,8 @@ def validate_card_result(payload: object, *, now: datetime) -> dict[str, object]
 
     card_input = {key: value[key] for key in input_keys if key in value}
     # render_card already warned about this document's unknown values.
-    validated = validate_card_input(card_input, now=created, warn=False)
+    # A rendered result was already allowed its objects when it was made.
+    validated = validate_card_input(card_input, now=created, warn=False, allow_objects=True)
     expected_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -366,6 +375,7 @@ def _element(
     source_ids: set[str],
     *,
     warn: bool = True,
+    allow_objects: bool = False,
 ) -> None:
     _object(
         value,
@@ -373,7 +383,13 @@ def _element(
         {"type", "props", "children"},
     )
     element_type = value["type"]
-    if element_type not in _ELEMENT_TYPES:
+    if element_type in OBJECT_TYPES and not allow_objects:
+        _raise(
+            "objects_unavailable",
+            f"Element {element_id}: contact, place and music components aren't available "
+            "here. Use basic components (text, list, table, metric).",
+        )
+    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES:
         _raise("unsupported_element", f"Element {element_id} has an unsupported type")
     props = value["props"]
     if not isinstance(props, dict):
@@ -486,6 +502,141 @@ def _element(
         _text(props["accessibility_label"])
         _optional_enum(props, "semantic", _SEMANTICS)
         _optional_enum(props, "scale", {"small", "medium", "large"})
+    elif element_type == "contact":
+        _contact(props)
+    elif element_type == "place":
+        _place(props)
+    elif element_type == "music":
+        _music(props)
+
+
+# Object component props are plain values, not bindings: they name one real
+# thing, and the app picks the buttons from them.
+_PHONE_CHARACTERS = re.compile(r"^[0-9 +()\-.]+$")
+_EMAIL = re.compile(
+    r"^[^\s@<>()\[\]\\,;:\"?&#%/]+@[\w-]+(?:\.[\w-]+)+$"
+)
+_ADDRESS_FIELDS = {"street", "city", "region", "postal_code", "country"}
+_MUSIC_KINDS = {"song", "album", "playlist", "artist"}
+_MUSIC_SOURCES = {"catalog", "library"}
+_MUSIC_HOST = "music.apple.com"
+
+
+def _string(value: object, maximum: int, what: str, *, allows_empty: bool = False) -> str:
+    # Object text is short and one line: names, labels and ids, not paragraphs.
+    text = _text(value, allows_empty=allows_empty)
+    if len(text) > maximum:
+        _raise("limit_exceeded", f"{what} is over {maximum} characters")
+    if any(ord(scalar) < 32 for scalar in text):
+        _raise("invalid_value", f"{what} must be one line")
+    return text
+
+
+def _contact(props: dict[str, object]) -> None:
+    _props(
+        props,
+        {"name", "subtitle", "phones", "emails", "address", "contact_id"},
+        {"name"},
+    )
+    _string(props["name"], 200, "Contact name")
+    if "subtitle" in props:
+        _string(props["subtitle"], 200, "Contact subtitle")
+    for key, check in (("phones", _phone), ("emails", _email)):
+        if key not in props:
+            continue
+        entries = props[key]
+        if not isinstance(entries, list) or len(entries) > MAX_OBJECT_ENTRIES:
+            _raise("limit_exceeded", f"Contact {key} are limited to {MAX_OBJECT_ENTRIES}")
+        for entry in entries:
+            # A label may be left out (or empty); the app then shows none.
+            _object(entry, {"label", "value"}, {"value"})
+            if "label" in entry:
+                _string(entry["label"], 40, "Contact label", allows_empty=True)
+            check(_string(entry["value"], 200, f"Contact {key[:-1]}"))
+    if "address" in props:
+        address = props["address"]
+        # Every part empty reads as no address, so an empty address is not an error.
+        _object(address, _ADDRESS_FIELDS, set())
+        for key, field in address.items():
+            _string(field, 100, f"Address {key}", allows_empty=True)
+    if "contact_id" in props:
+        _string(props["contact_id"], 512, "Contact id")
+
+
+def _phone(value: str) -> None:
+    # Letters would be dropped silently ("ext 5" would turn into a digit), so
+    # refuse them and let the agent write the number again.
+    if not _PHONE_CHARACTERS.fullmatch(value) or not any(c.isdigit() for c in value):
+        _raise(
+            "invalid_phone",
+            "A phone number may hold only digits, spaces and + ( ) - . characters",
+        )
+
+
+def _email(value: str) -> None:
+    if _EMAIL.fullmatch(value) is None or value.rsplit(".", 1)[-1].isdigit():
+        _raise("invalid_email", "An email address must look like name@example.com")
+
+
+def _place(props: dict[str, object]) -> None:
+    _props(
+        props,
+        {"name", "subtitle", "address", "latitude", "longitude", "span_meters"},
+        {"name", "latitude", "longitude"},
+    )
+    _string(props["name"], 200, "Place name")
+    if "subtitle" in props:
+        _string(props["subtitle"], 200, "Place subtitle")
+    if "address" in props:
+        _string(props["address"], 300, "Place address")
+    for key, low, high in (("latitude", -90, 90), ("longitude", -180, 180)):
+        value = props[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            _raise("invalid_value", f"Place {key} must be a number")
+        if not math.isfinite(value) or not low <= value <= high:
+            _raise("invalid_value", f"Place {key} must be from {low} to {high}")
+    if "span_meters" in props:
+        span = props["span_meters"]
+        if isinstance(span, bool) or not isinstance(span, (int, float)):
+            _raise("invalid_value", "Place span_meters must be a number")
+        if not math.isfinite(span) or not 200 <= span <= 50_000:
+            _raise("limit_exceeded", "Place span_meters must be from 200 to 50000")
+
+
+def _music(props: dict[str, object]) -> None:
+    _props(
+        props,
+        {"kind", "title", "artist", "music_id", "source", "url"},
+        {"kind", "title"},
+    )
+    _enum(props["kind"], _MUSIC_KINDS)
+    _string(props["title"], 200, "Music title")
+    if "artist" in props:
+        _string(props["artist"], 200, "Music artist")
+    if "music_id" in props:
+        _string(props["music_id"], 512, "Music id")
+    if "source" in props:
+        _enum(props["source"], _MUSIC_SOURCES)
+    if "url" in props:
+        _apple_music_url(_string(props["url"], 500, "Music url"))
+
+
+def _apple_music_url(value: str) -> None:
+    problem = "Music url must be an https://music.apple.com/ address"
+    if not value.isascii() or any(character.isspace() for character in value):
+        _raise("invalid_url", problem)
+    try:
+        parts = urlsplit(value)
+    except ValueError as error:
+        raise BighelpCardError("invalid_url", problem) from error
+    # The whole netloc must be the host: no user info, no port, no look-alike.
+    if (
+        parts.scheme != "https"
+        or parts.netloc.lower() != _MUSIC_HOST
+        or "\\" in value
+        or len(parts.path) < 2
+    ):
+        _raise("invalid_url", problem)
 
 
 def _background(value: object, *, warn: bool) -> None:

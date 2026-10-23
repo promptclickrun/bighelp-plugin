@@ -1,4 +1,5 @@
-"""bighelp's iPhone Health, Calendar, Reminders, Location and Appearance tools.
+"""bighelp's iPhone Health, Calendar, Reminders, Location, Appearance, Contacts, Photos, Geofence, Alarm,
+Music, Focus and Shortcuts tools.
 
 The phone runs each call over the native channel: native_device_tools.py takes it in
 Hermes' execution middleware, so the handlers here never run on a working host.
@@ -14,6 +15,7 @@ from .device_tool_contract import (
     HEALTH_TYPES,
     MAX_APPEARANCE_COLOR_LENGTH,
 )
+from .device_tool_arguments import KIND_OPERATIONS, tool_properties
 from .naming import TOOLSET
 
 
@@ -44,6 +46,10 @@ def _list_properties(ids_name: str) -> dict[str, Any]:
     else:
         for field in ("calendarID", "location", "url", "span", "occurrenceStart"):
             properties.pop(field, None)
+        # A place for iOS Reminders to watch: create or update; update can also take it away.
+        properties["locationTrigger"] = {
+            "type": "object", "description": "{name, latitude, longitude, proximity: arrive|leave, radiusMeters: 100-5000}"}
+        properties["clearLocationTrigger"] = {"type": "boolean", "enum": [True]}
     return properties
 
 
@@ -68,6 +74,93 @@ def _mutation_properties() -> dict[str, Any]:
     }
 
 
+def _compact(schema: Any, *, nested: bool = False) -> Any:
+    """Drop what the model doesn't need to read: these schemas go out with every request to the serving agent.
+    The host checks every bound itself (device_tool_arguments.py) and says which field was wrong, so formats,
+    patterns, long text limits and obvious minimums only cost bytes here."""
+    if isinstance(schema, list):
+        return [_compact(item, nested=nested) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    result = dict(schema)
+    for key in ("properties",):
+        if key in result:
+            result[key] = {name: _compact(value, nested=True) for name, value in result[key].items()}
+    if "items" in result:
+        result["items"] = _compact(result["items"], nested=True)
+    for key in ("minLength", "pattern", "format", "uniqueItems"):
+        result.pop(key, None)
+    if "enum" in result or result.get("maxLength", 0) > 64:
+        result.pop("maxLength", None)
+    if result.get("minItems", 2) <= 1:
+        del result["minItems"]
+    if result.get("type") == "integer" and result.get("minimum") == 1:
+        del result["minimum"]  # A count or limit; nobody asks for fewer than one.
+    if nested and result.get("type") == "object":
+        result.pop("additionalProperties", None)
+        if not result.get("required"):
+            result.pop("required", None)
+    return result
+
+
+def _list_of(description: str, maximum: int) -> dict[str, Any]:
+    return {"type": "array", "maxItems": maximum, "items": {"type": "object"}, "description": description}
+
+
+def _kind_schema(kind: str) -> dict[str, Any]:
+    """The schema of one tool whose operations are described in device_tool_arguments.py."""
+    properties: dict[str, Any] = {"operation": {"type": "string", "enum": list(KIND_OPERATIONS[kind])}}
+    properties.update(tool_properties(kind))
+    if kind == "contacts":
+        # Nested shapes are spelled out in words; the host still checks each one.
+        properties.update(
+            birthday={"type": "string", "description": "YYYY-MM-DD or --MM-DD"},
+            phones=_list_of("[{label, value}]", 10), emails=_list_of("[{label, value}]", 10),
+            urls=_list_of("[{label, value}]", 5),
+            addresses=_list_of("[{label, street, city, region, postalCode, country}]", 5),
+        )
+    return _strict_object(properties, ["operation"])
+
+
+# Short on purpose: the schema is sent on every request. skills/bighelp/SKILL.md has the detail.
+_ACCESS = " Needs {} on in Device access, app open."
+_CONTACTS = (
+    "Find, add, change or delete iPhone contacts. Change by the exact id and expectedRevision from list; in update "
+    "a list replaces the old one and an empty value clears a field. If a write is uncertain, list first."
+    + _ACCESS.format("Contacts")
+)
+_PHOTOS = (
+    "Browse and tidy iPhone Photos. get returns a file path to a small copy: view it with the vision tool. save "
+    "adds a picture or video from this host (absolute path, up to 50 MB). update and delete use exact ids; delete "
+    "asks the user (cancelled means no). Dates are ISO-8601. After outcome_unknown, read before retrying."
+    + _ACCESS.format("Photos")
+)
+_GEOFENCES = (
+    "Get a message in this chat when the user arrives at or leaves a place. create: name, latitude and longitude "
+    "or here: true, radiusMeters, on, note (what to do then), repeats (default: gone after the first event). "
+    "Only when asked. For a reminder at a place use iphone_reminders."
+    + _ACCESS.format("Arriving and leaving")
+)
+_ALARMS = (
+    "bighelp's own alarms and timers (iOS 26+; never the Clock app's). create takes a label and "
+    "exactly one of time, date (ISO-8601) or timerSeconds; update replaces the schedule." + _ACCESS.format("Alarms and timers")
+)
+_MUSIC = (
+    "See and control music. Pass id, type and source from search or library to play unchanged. Library changes "
+    "(createPlaylist, addToPlaylist, addToLibrary) only when asked. subscription_required means no Apple Music "
+    "subscription." + _ACCESS.format("Music")
+)
+_FOCUS = (
+    "Read the user's current Focus (active, name, note for agents) to respect it; it can't be changed. active "
+    "false may mean no bighelp filter." + _ACCESS.format("Focus")
+)
+_SHORTCUTS = (
+    "Run an Apple Shortcut the user allowed: list gives the only names you may run; run takes one and optional "
+    "input and waits up to a minute. Only when asked. outcome_unknown: it may have run; don't rerun, check first."
+    + _ACCESS.format("Shortcuts")
+)
+
+
 async def _unreachable_handler(payload: Any, **kwargs: Any) -> str:
     # Reached only when the native middleware did not take the call.
     raise ValueError("verified iPhone tool context is unavailable")
@@ -80,7 +173,8 @@ def register(ctx: Any) -> None:
             "end": {"type": "string", "format": "date-time"},
             "timeZone": {"type": "string", "minLength": 1, "maxLength": 128},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-            "types": {"type": "array", "minItems": 1, "maxItems": len(HEALTH_TYPES), "items": {"type": "string", "enum": list(HEALTH_TYPES)}},
+            "types": {"type": "array", "minItems": 1, "maxItems": len(HEALTH_TYPES), "items": {"type": "string"},
+                      "description": "HealthKit names such as step_count, heart_rate, sleep_analysis"},
         },
         ["start", "end", "timeZone"],
     )
@@ -99,44 +193,41 @@ def register(ctx: Any) -> None:
     definitions = (
         (
             "iphone_health",
-            "Read bounded raw HealthKit samples from an authenticated iPhone with Health permissions enabled and the phone available in the foreground. Inspect coverage and truncation; an empty or denied result does not prove zero values or full-period totals.",
+            "Read raw HealthKit samples from the iPhone (read-only, app in the foreground). Empty or denied does not prove zero.",
             health_schema,
-            _unreachable_handler,
         ),
         (
             "iphone_calendar",
-            "List calendar items on an authenticated iPhone with Calendar permission enabled, then use an exact returned id and expectedRevision for changes. For one recurring event, preserve occurrenceStart and span=thisEvent. If a write is uncertain, reconcile by reading before retrying and never blindly repeat it.",
+            "List iPhone calendar events, then change them by the exact id and expectedRevision from list. For one recurring event keep occurrenceStart and span=thisEvent. ISO-8601 dates with an offset. If a write is uncertain, read before retrying.",
             calendar_schema,
-            _unreachable_handler,
         ),
         (
             "iphone_reminders",
-            "List reminders on an authenticated iPhone with Reminders permission enabled, then use an exact returned id and expectedRevision for changes. If a write is uncertain, reconcile by reading before retrying and never blindly repeat it.",
+            "List iPhone reminders, then change them by the exact id and expectedRevision from list. For a place give locationTrigger on create or update; clearLocationTrigger true removes it. Dates are ISO-8601 with an offset. If a write is uncertain, read before retrying.",
             reminder_schema,
-            _unreachable_handler,
         ),
         (
             "iphone_location",
-            "Get where the user is right now from their iPhone: latitude, longitude, horizontal accuracy in meters, the time of the fix and the nearby address. Works only after the user turns on Location for this host in bighelp, while the app is open in the foreground. Call it only when the request needs where they are, like places nearby. If precise is false the user kept approximate location: treat it as a rough area of about horizontalAccuracyMeters and don't name a street.",
+            "Where the user is now, from their iPhone: latitude, longitude, accuracy in meters, time and nearby address. Needs Location on in bighelp, app open in the foreground; call it only when the request needs where they are. precise false means approximate: a rough area of about horizontalAccuracyMeters, no street.",
             location_schema,
-            _unreachable_handler,
         ),
         (
             "iphone_appearance",
-            "See or change how the user's bighelp app looks: light or dark mode and the chat color (their message "
-            "bubbles and buttons). Use it only when the user asks, like \"make it violet, dark mode\". "
-            "operation \"get\" returns the current mode and color and the color names the app knows. "
-            "operation \"set\" takes mode (system, light or dark) and/or color (one of those names, or #rrggbb), "
-            "applies them and returns what the app shows now. An unknown_color result means the name isn't the "
-            "app's: call get and pick one, or use #rrggbb. It works only while the user has this chat open in "
-            "bighelp, and is on unless they turned it off in Settings > Device access. They can change the look "
-            "back in Appearance.",
+            "Change how bighelp looks, only when the user asks: get shows the mode, color and the app's color names; "
+            "set takes mode (system, light or dark) and/or color (a name, or #rrggbb). unknown_color: call get and "
+            "pick a name. Works while this chat is open, unless turned off in Settings > Device access.",
             appearance_schema,
-            _unreachable_handler,
         ),
+        ("iphone_contacts", _CONTACTS, _kind_schema("contacts")),
+        ("iphone_photos", _PHOTOS, _kind_schema("photos")),
+        ("iphone_geofences", _GEOFENCES, _kind_schema("geofences")),
+        ("iphone_alarms", _ALARMS, _kind_schema("alarms")),
+        ("iphone_music", _MUSIC, _kind_schema("music")),
+        ("iphone_focus", _FOCUS, _kind_schema("focus")),
+        ("iphone_shortcuts", _SHORTCUTS, _kind_schema("shortcuts")),
     )
-    for name, description, schema, handler in definitions:
-        ctx.register_tool(name=name, toolset=TOOLSET, schema={"name": name, "description": description, "parameters": schema}, handler=handler, is_async=True)
+    for name, description, schema in definitions:
+        ctx.register_tool(name=name, toolset=TOOLSET, schema={"name": name, "description": description, "parameters": _compact(schema)}, handler=_unreachable_handler, is_async=True)
 
 
 __all__ = ["register"]

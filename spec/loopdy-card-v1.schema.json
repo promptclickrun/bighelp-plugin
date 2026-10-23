@@ -489,6 +489,109 @@
       "required": ["scene"],
       "additionalProperties": false
     },
+    "objectText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "contactProps": {
+      "description": "A person with Call, Message, Email and Contacts buttons. Only in a chat whose app draws it; otherwise the call is refused.",
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/objectText" },
+        "subtitle": { "$ref": "#/$defs/objectText" },
+        "phones": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string", "maxLength": 40 },
+              "value": {
+                "description": "Digits, spaces and + ( ) - . only.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[0-9 +()\\-.]+$"
+              }
+            },
+            "required": ["value"],
+            "additionalProperties": false
+          }
+        },
+        "emails": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string", "maxLength": 40 },
+              "value": { "type": "string", "minLength": 3, "maxLength": 200 }
+            },
+            "required": ["value"],
+            "additionalProperties": false
+          }
+        },
+        "address": {
+          "type": "object",
+          "properties": {
+            "street": { "type": "string", "maxLength": 100 },
+            "city": { "type": "string", "maxLength": 100 },
+            "region": { "type": "string", "maxLength": 100 },
+            "postal_code": { "type": "string", "maxLength": 100 },
+            "country": { "type": "string", "maxLength": 100 }
+          },
+          "additionalProperties": false
+        },
+        "contact_id": {
+          "description": "The id from iphone_contacts.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "placeProps": {
+      "description": "A spot on a map with Directions and Maps buttons. Only in a chat whose app draws it; otherwise the call is refused.",
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/objectText" },
+        "subtitle": { "$ref": "#/$defs/objectText" },
+        "address": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "span_meters": { "type": "number", "minimum": 200, "maximum": 50000 }
+      },
+      "required": ["name", "latitude", "longitude"],
+      "additionalProperties": false
+    },
+    "musicProps": {
+      "description": "A song, album, playlist or artist with Play and Music buttons. Only in a chat whose app draws it; otherwise the call is refused.",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["song", "album", "playlist", "artist"] },
+        "title": { "$ref": "#/$defs/objectText" },
+        "artist": { "$ref": "#/$defs/objectText" },
+        "music_id": {
+          "description": "The id from iphone_music.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": { "type": "string", "enum": ["catalog", "library"] },
+        "url": {
+          "description": "Only an https://music.apple.com/ address.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^https://music\\.apple\\.com/"
+        }
+      },
+      "required": ["kind", "title"],
+      "additionalProperties": false
+    },
     "element": {
       "oneOf": [
         {
@@ -632,6 +735,36 @@
           "properties": {
             "type": { "const": "image" },
             "props": { "$ref": "#/$defs/imageProps" },
+            "children": { "$ref": "#/$defs/leafChildren" }
+          },
+          "required": ["type", "props", "children"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "contact" },
+            "props": { "$ref": "#/$defs/contactProps" },
+            "children": { "$ref": "#/$defs/leafChildren" }
+          },
+          "required": ["type", "props", "children"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "place" },
+            "props": { "$ref": "#/$defs/placeProps" },
+            "children": { "$ref": "#/$defs/leafChildren" }
+          },
+          "required": ["type", "props", "children"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "music" },
+            "props": { "$ref": "#/$defs/musicProps" },
             "children": { "$ref": "#/$defs/leafChildren" }
           },
           "required": ["type", "props", "children"],

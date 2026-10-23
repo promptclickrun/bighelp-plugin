@@ -192,10 +192,12 @@ def _native_features(
             CAPABILITY as device_tools_capability,
             LOCATION_CAPABILITY as device_location_capability,
             APPEARANCE_CAPABILITY as device_appearance_capability,
+            KIND_CAPABILITIES as device_kind_capabilities,
             available as device_tools_available,
         )
         if profile is not None and device_tools_available(profile):
-            features.extend((device_tools_capability, device_location_capability, device_appearance_capability))
+            features.extend((device_tools_capability, device_location_capability, device_appearance_capability,
+                             *device_kind_capabilities.values()))
         else:
             reason = ("no unique lifecycle-owned middleware registration matches the "
                       "verified serving profile (missing profile/registration, "
@@ -204,10 +206,15 @@ def _native_features(
             skip(device_tools_capability, reason)
             skip(device_location_capability, reason)
             skip(device_appearance_capability, reason)
+            for feature in device_kind_capabilities.values():
+                skip(feature, reason)
     except ImportError:
-        skip("native-device-tools-v1", "native device-tool support is unimportable.")
-        skip("native-device-location-v1", "native device-tool support is unimportable.")
-        skip("native-device-appearance-v1", "native device-tool support is unimportable.")
+        reason = "native device-tool support is unimportable."
+        skip("native-device-tools-v1", reason)
+        skip("native-device-location-v1", reason)
+        skip("native-device-appearance-v1", reason)
+        for feature in ("contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts"):
+            skip(f"native-device-{feature}-v1", reason)
     from .room_activity import CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, activity_hub
     if activity_hub().available:
         features.extend((CAPABILITY, TYPING_CAPABILITY))
@@ -297,6 +304,12 @@ def _native_features(
         features.append(people_capability)
     else:
         skip(people_capability, "public profile helpers are unimportable.")
+    # The app's note on each turn is how a chat says it draws these, so they ride with it.
+    from .card_objects import CAPABILITY as card_objects_capability
+    if people_available():
+        features.append(card_objects_capability)
+    else:
+        skip(card_objects_capability, "public profile helpers are unimportable.")
     from .provider_usage import CAPABILITY as usage_capability, available as usage_available
     if usage_available():
         features.append(usage_capability)
