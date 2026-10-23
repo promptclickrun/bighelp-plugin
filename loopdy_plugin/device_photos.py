@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import mimetypes
 import os
@@ -67,6 +68,23 @@ def photos_directory(profile: str | None = None) -> Path:
 
 
 # photos.save -------------------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def profile_scope(profile: str):
+    """Run the checks of a save in the Hermes home of the agent that asked, so the gateway's delivery rules
+    are the ones that agent works under (the grant below is keyed to the same agent)."""
+    try:
+        from hermes_cli.profiles import get_profile_dir
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        home = get_profile_dir(profile)
+    except (ImportError, OSError, ValueError):
+        raise PhotoRefusal("files_unavailable") from None
+    token = set_hermes_home_override(home)
+    try:
+        yield
+    finally:
+        reset_hermes_home_override(token)
+
 
 def check_save_path(raw: Any) -> str:
     """The absolute path the phone should download, or a PhotoRefusal.

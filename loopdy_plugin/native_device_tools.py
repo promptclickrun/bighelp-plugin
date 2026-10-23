@@ -76,7 +76,16 @@ MAX_QUEUE = 128
 MAX_COMPLETED = 256
 MAX_LAPSES = MAX_CHANNELS
 MAX_FINISHED_CALLS = 512
+# One chat that waits for its phone can hold this many calls, so it can't make every other chat answer busy.
+MAX_PARKED_PER_CHAT = 32
 MAX_POLL_ITEMS = 8
+# The only operations whose outcome the agent may simply ask for again. Any other operation, and any
+# operation not listed here, can change something on the phone, so a lost answer is "outcome_unknown".
+PURE_READ_OPERATIONS = frozenset({
+    "health.read", "calendar.list", "reminders.list", "location.current", "appearance.get",
+    "contacts.list", "photos.list", "photos.albums", "photos.get", "geofences.list", "alarms.list",
+    "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
+})
 _UUID = r"\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z"
 _SESSION = r"\A[A-Za-z0-9_-]{1,180}\z"
 _PROFILE = r"\A[a-z0-9][a-z0-9_-]{0,63}\z"
@@ -164,10 +173,16 @@ def _grace(operation: str) -> int:
     return LONG_OPERATION_GRACE_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else 0
 
 
-def _unanswered(operation: str) -> str:
-    """What the agent hears when the phone never answered. A shortcut or a saved picture may have happened
-    anyway, so the agent must not run it again."""
-    return "outcome_unknown" if operation in DEVICE_TOOL_LONG_OPERATIONS else "phone_unavailable"
+def _unanswered(operation: str, delivered: bool = False) -> str:
+    """What the agent hears when the phone never answered.
+
+    A request the phone received (``delivered``) may have changed something unless it only reads, and a
+    shortcut or a saved picture may have happened anyway: the agent must not run those again. A request the
+    phone never received did nothing, so the agent may try again.
+    """
+    if operation in DEVICE_TOOL_LONG_OPERATIONS or (delivered and operation not in PURE_READ_OPERATIONS):
+        return "outcome_unknown"
+    return "phone_unavailable"
 
 
 def _failed_result(request_id: str | None, code: str, note: str | None = None) -> dict[str, Any]:
@@ -284,6 +299,9 @@ def _default_profile_session_validator(profile: str, session_id: str) -> bool:
     try:
         if not profile_exists(profile):
             return False
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    try:
         token = set_hermes_home_override(get_process_hermes_home())
         try:
             db_path = get_profile_dir(profile) / "state.db"
@@ -293,7 +311,8 @@ def _default_profile_session_validator(profile: str, session_id: str) -> bool:
         finally:
             reset_hermes_home_override(token)
     except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error):
-        return False
+        # A profile that has not had a chat yet has no store. Its running chat is still in Hermes' live map.
+        pass
 
     # A live gateway may have a runtime UI ID before its durable session row is
     # visible to a reader.  Hermes' own session gateway map is the only allowed
@@ -426,7 +445,8 @@ class NativeDeviceToolHub:
             _mark_completed(channel, request_id)
             if pending.delivered:
                 channel.ended_calls.append(pending.call)
-            _set_future(pending, _failed_result(request_id, _unanswered(pending.request["operation"])))
+            _set_future(pending, _failed_result(
+                request_id, _unanswered(pending.request["operation"], pending.delivered)))
         channel.pending.clear()
         self._forget_lapses(channel.profile, channel.session_id)
         if keep:
@@ -631,18 +651,19 @@ class NativeDeviceToolHub:
             while channel.requests and channel.requests[0][0] <= after:
                 channel.requests.popleft()
             rows = list(channel.requests)[:MAX_POLL_ITEMS]
-            for _sequence, request in rows:
+            # A call nobody waits for any more (its time ran out) is skipped, but still acknowledged by `next`,
+            # so the phone never runs a request whose agent was already told it did not arrive.
+            live = [(sequence, request) for sequence, request in rows if request["requestId"] in channel.pending]
+            for _sequence, request in live:
                 # From here the phone may have run it, even if the answer never comes back.
-                handed = channel.pending.get(request["requestId"])
-                if handed is not None:
-                    handed.delivered = True
+                channel.pending[request["requestId"]].delivered = True
             channel.lease_expires = self.clock() + self.lease_seconds
             return {
                 "channelId": channel.channel_id,
                 "next": rows[-1][0] if rows else after,
                 "requests": [
                     {"sequence": sequence, "request": request}
-                    for sequence, request in rows
+                    for sequence, request in live
                 ],
             }
 
@@ -678,7 +699,7 @@ class NativeDeviceToolHub:
             if self.clock() >= pending.request["expiresAt"] + _grace(parsed["operation"]):
                 _mark_completed(channel, request_id)
                 channel.ended_calls.append(pending.call)
-                _set_future(pending, _failed_result(request_id, _unanswered(parsed["operation"])))
+                _set_future(pending, _failed_result(request_id, _unanswered(parsed["operation"], True)))
                 raise NativeDeviceToolError("result_expired")
             _mark_completed(channel, request_id)
             channel.ended_calls.append(pending.call)
@@ -707,6 +728,8 @@ class NativeDeviceToolHub:
                     del self._parked[call]
                     _set_future(pending, _failed_result(pending.request["requestId"], "phone_unavailable"))
             self._lapses = [lapse for lapse in self._lapses if lapse.profile != profile]
+            for call in [call for call in self._finished if call[0] == profile]:
+                del self._finished[call]
 
     def close_all(self) -> None:
         """Retire every phone lease of every profile."""
@@ -714,6 +737,7 @@ class NativeDeviceToolHub:
             profiles = (
                 {channel.profile for channel in self.channels.values()}
                 | {call[0] for call in self._parked} | {lapse.profile for lapse in self._lapses}
+                | {call[0] for call in self._finished}
             )
             for profile in profiles:
                 self.close_profile(profile)
@@ -747,7 +771,9 @@ class NativeDeviceToolHub:
                 raise ValueError
             if operation == "photos.save":
                 # Checked here, before anything is queued: the phone gets only a path the host will serve.
-                arguments = {**arguments, "path": device_photos.check_save_path(arguments.get("path"))}
+                # In the asking agent's own home: the gateway's delivery rules are read from there.
+                with device_photos.profile_scope(profile):
+                    arguments = {**arguments, "path": device_photos.check_save_path(arguments.get("path"))}
             timeout = LONG_OPERATION_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else self.lease_seconds
             fingerprint = _fingerprint(operation, arguments)
             with self._lock:
@@ -785,7 +811,13 @@ class NativeDeviceToolHub:
                         sent_at=sent_at,
                         expires_at=sent_at + timeout,
                     )
-                    if len(channel.pending if channel is not None else self._parked) >= MAX_QUEUE:
+                    if channel is not None:
+                        crowded = len(channel.pending) >= MAX_QUEUE
+                    else:
+                        crowded = len(self._parked) >= MAX_QUEUE or sum(
+                            1 for other in self._parked if other[0] == profile and other[1] == session_id
+                        ) >= MAX_PARKED_PER_CHAT
+                    if crowded:
                         return _failed_result(request_id, "busy")
                     coordinate = channel.session_id if channel is not None else lapse.session_id
                     if operation == "photos.save":
@@ -845,7 +877,7 @@ class NativeDeviceToolHub:
             # It never reached a phone, so nothing happened and the agent may try again.
             result = _failed_result(request_id, "phone_unavailable")
         else:
-            result = _failed_result(request_id, _unanswered(operation))
+            result = _failed_result(request_id, _unanswered(operation, pending.delivered))
         if pending.channel is not None:
             _mark_completed(pending.channel, request_id)
             if pending.delivered:
@@ -1052,8 +1084,20 @@ HUB_PROTOCOL_VERSION = 1
 _HUB_REGISTRY_NAME = "_bighelp_device_tool_hubs"
 
 
-def _shared_hub(*, version: int = HUB_PROTOCOL_VERSION) -> NativeDeviceToolHub:
-    """The process-wide hub for this protocol version.
+def _source_digest() -> str:
+    """A fingerprint of this file, so a copy with different code never takes a hub another copy made."""
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:32]
+    except OSError:
+        from .version import PLUGIN_VERSION
+        return hashlib.sha256(PLUGIN_VERSION.encode("utf-8")).hexdigest()[:32]
+
+
+_SOURCE_DIGEST = _source_digest()
+
+
+def _shared_hub(*, version: int = HUB_PROTOCOL_VERSION, digest: str | None = None) -> NativeDeviceToolHub:
+    """The process-wide hub for this protocol version and this exact code.
 
     Hermes imports the plugin once for each profile it serves, and module globals are not shared between
     those copies. The hub is kept in a plain module registered in ``sys.modules`` so every copy finds the
@@ -1066,9 +1110,10 @@ def _shared_hub(*, version: int = HUB_PROTOCOL_VERSION) -> NativeDeviceToolHub:
         candidate.lock, candidate.hubs = threading.Lock(), {}
         registry = sys.modules.setdefault(_HUB_REGISTRY_NAME, candidate)
     with registry.lock:
-        hub = registry.hubs.get(version)
+        key = (version, digest or _SOURCE_DIGEST)
+        hub = registry.hubs.get(key)
         if hub is None:
-            hub = registry.hubs[version] = NativeDeviceToolHub(profile_validator=_default_profile_exists)
+            hub = registry.hubs[key] = NativeDeviceToolHub(profile_validator=_default_profile_exists)
         return hub
 
 
@@ -1224,7 +1269,8 @@ async def request(
     fields = body.model_dump()
     try:
         if operation == "connect":
-            value = _HUB.connect(owner, fields)
+            # It reads the profile's session store (SQLite), so it must not run on the event loop.
+            value = await asyncio.to_thread(_HUB.connect, owner, fields)
         elif operation == "poll":
             value = _HUB.poll(owner, fields)
         elif operation == "result":
