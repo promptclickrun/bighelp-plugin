@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import mimetypes
 import os
@@ -53,13 +54,37 @@ class PhotoRefusal(ValueError):
         self.code = code
 
 
-def photos_directory() -> Path:
-    """The folder pictures from photos.get are kept in: inside the Hermes home of the serving profile."""
-    from hermes_constants import get_process_hermes_home
-    return get_process_hermes_home() / "bighelp" / "phone-photos"
+def photos_directory(profile: str | None = None) -> Path:
+    """The folder pictures from photos.get are kept in: inside the Hermes home of the agent that asked.
+
+    With no profile it is the serving profile's, as before.
+    """
+    from hermes_constants import get_process_hermes_home, profile_name_for_home
+    home = get_process_hermes_home()
+    if profile and profile_name_for_home(home) != profile:
+        from hermes_cli.profiles import get_profile_dir
+        home = get_profile_dir(profile)
+    return home / "bighelp" / "phone-photos"
 
 
 # photos.save -------------------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def profile_scope(profile: str):
+    """Run the checks of a save in the Hermes home of the agent that asked, so the gateway's delivery rules
+    are the ones that agent works under (the grant below is keyed to the same agent)."""
+    try:
+        from hermes_cli.profiles import get_profile_dir
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        home = get_profile_dir(profile)
+    except (ImportError, OSError, ValueError):
+        raise PhotoRefusal("files_unavailable") from None
+    token = set_hermes_home_override(home)
+    try:
+        yield
+    finally:
+        reset_hermes_home_override(token)
+
 
 def check_save_path(raw: Any) -> str:
     """The absolute path the phone should download, or a PhotoRefusal.
