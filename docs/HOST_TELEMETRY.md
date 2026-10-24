@@ -17,20 +17,25 @@ waiting at once.
 | Command | `hermes bighelp telemetry off` (and `on`, and `status`) |
 | The bighelp app | Settings > Privacy > Share usage and diagnostics. The app tells each host it connects to |
 
-`hermes bighelp telemetry status` shows each switch, and where the field list is. `hermes bighelp telemetry on`
+`hermes bighelp telemetry status` shows each switch, and the link to this field list. `hermes bighelp telemetry on`
 clears the command's switch and the app's switch. It cannot beat `DO_NOT_TRACK`, `BIGHELP_TELEMETRY` or the Hermes
 setting, which are yours to set on the host. The app's switch can turn telemetry off or back on, but it never
 overrides one of those.
 
 The command's switch and the app's switch are kept in `plugin-data/loopdy/telemetry-settings.json` at the Hermes
-root. When telemetry goes off through either of them, the host's telemetry ID is deleted, and a new one is made if
-it is turned on again.
+root. If that file is there but the plugin can't read it, telemetry stays off. When telemetry goes off through
+either switch, the host's telemetry ID is deleted, and a new one is made if it is turned on again. When
+`DO_NOT_TRACK`, `BIGHELP_TELEMETRY` or the Hermes setting turns it off, an ID that already exists is deleted the
+next time the plugin starts.
+
+The first time the plugin starts with telemetry on, it writes one line to the Hermes log that says so and how to
+turn it off.
 
 ## Where the data goes
 
 1. The plugin sends a batch to `https://telemetry.bighelp.app/v1/batch`. That is a Cloudflare Worker.
-2. The Worker checks every value against the lists on this page and drops what does not fit. It does not store or
-   log the network address of the host.
+2. The Worker checks every value against the lists on this page and drops what does not fit. It is built not to
+   store or log the network address of the host.
 3. It forwards the batch to Microsoft Azure (Application Insights), where it is kept for 90 days.
 
 The address is fixed in the code. There is no setting to point it elsewhere.
@@ -54,8 +59,8 @@ Each event has a name, a time in Unix milliseconds, and only the values here:
 
 | Event | When | Values |
 | --- | --- | --- |
-| `host.started` | The Hermes process has been up for 30 seconds | None |
-| `turn.completed` | A turn ends | `durationMs`; `firstTokenMs` (when Hermes tells the plugin that the answer started); `toolCalls` (a count); `outcome` (`ok`, `failed` or `cancelled`); `provider`; `model`; `sessionSource` |
+| `host.started` | Any process that loads the plugin and runs for 30 seconds (so a short `hermes` command is not a host start) | None |
+| `turn.completed` | A turn ends. `outcome` comes from the flags Hermes gives when it ends the turn (`on_session_end`): `cancelled` if interrupted, `failed` if it failed or did not complete, else `ok` | `durationMs`; `firstTokenMs` (when Hermes tells the plugin that the answer started); `toolCalls` (a count); `outcome` (`ok`, `failed` or `cancelled`); `provider`; `model`; `sessionSource` |
 | `tool.completed` | A tool call ends | `tool`; `durationMs`; `outcome` (`ok` or `failed`) |
 | `alert.queued` | The plugin queues a notification | `eventType`; `queueMs` (how long it waits before the first try) |
 | `alert.sent` | A send to the notification service ends | `eventType`; `relayMs` (how long the service took to answer); `result`; `attempt` (a count) |
@@ -70,26 +75,29 @@ How each value is limited:
   a name that is not on it.
 - **`provider`** is the name of a well-known public AI provider (for example `anthropic`, `openai` or
   `openrouter`). Any other provider, for example a server on your own network, is `custom`.
-- **`model`** is the model ID only for a provider whose model IDs are its own public catalog. For every other
-  provider it is `custom`, and so is any model ID that could name a fine-tune, a deployment or an account.
-  Nothing is sent when Hermes does not say which provider answered.
+- **`model`** is sent only when the ID starts like one of the well-known public model families that the provider
+  serves (for example `claude-` for Anthropic, `gpt-` or `o3` for OpenAI, `gemini-` for Google). Providers that
+  group models as `vendor/model` (OpenRouter and a few more) may also send a `/`, with a well-known vendor in
+  front. Every other model ID is `custom`, and so is any ID with a `/` elsewhere, a tuned-model path, a
+  fine-tune or a name of your own. Nothing is sent when Hermes does not say which provider answered.
 - **`sessionSource`** is one of `bighelp`, `cli`, `cron`, `api`, `telegram`, `discord`, `slack`, `whatsapp`,
   `signal`, `email`, `webhook` or `other`.
 - **`eventType`** is one of `session.completed`, `session.failed`, `scheduled.completed`, `scheduled.failed`,
   `approval.required`, `clarification.required`, `subagent.completed`, `subagent.failed`, `wake` (a quiet push
   that asks the phone to renew a sign-in) or `liveactivity` (an update of a Live Activity).
-- **`result`** is `accepted` or `duplicate`, or the fixed code of a refusal (for example
-  `notification_remote_rejected`).
-- **`error`** has a code that is a lowercase word chain (for example `native_service_unavailable`) and a stage:
-  `native_route` or `notification_send`. Only failures on the host's side are reported, not mistakes of the app.
-  The same pair is reported at most once a minute.
+- **`result`** is `accepted` or `duplicate`, or one of the fixed error codes the plugin uses (for example
+  `notification_remote_rejected`). Anything else is `other`.
+- **`error`** has a `code` and a `stage` (`native_route` or `notification_send`). The code must be one of the fixed
+  codes in the plugin's own list (the codes it raises, for example `native_service_unavailable`); any other code is
+  `other`. Only failures on the host's side are reported, not mistakes of the app. The same pair is reported at most
+  once a minute.
 
 ## What is never collected
 
 Message text, prompts, replies, tool arguments or output, file names or paths, card contents, push tokens, names,
-emails, IP addresses, host names, host URLs, profile names, user names, chat or session IDs, and event IDs. No
-free text from Hermes reaches an event: every emitter takes typed values, and the plugin checks each one against a
-list in its code before it queues the event. `tests/test_host_telemetry.py` feeds realistic chat text, paths,
+emails, IP addresses, host names, host URLs, profile names, user names, chat or session IDs, and event IDs. Free
+text has no path into an event: every emitter takes typed values, and the plugin checks each one against a list in
+its code before it queues the event. A value that is not on a list becomes a fixed word or is left out. `tests/test_host_telemetry.py` feeds realistic chat text, paths,
 names, emails and addresses through every emitter and hook, and checks that none of it is in the batch.
 
 ## How it runs
@@ -99,14 +107,15 @@ names, emails and addresses through every emitter and hook, and checks that none
 - A background thread sends a batch every 60 seconds, or at once when 50 events wait. A batch holds at most 50
   events. A send has a timeout of 5 seconds. A send that fails is dropped without a message. After a `429` answer
   the thread waits (as long as the service says, else 2 minutes, doubling up to 1 hour) and keeps the events.
+- On a Hermes that doesn't send turn end flags at all, an answered turn counts as `ok` after 30 seconds.
 - A turn or a tool call never waits for it, and an error in it never reaches Hermes. When the process ends, the
-  plugin makes a last, short try to send what is left.
+  plugin makes one last try to send a single batch, on a separate thread that the exit waits for at most 1.5
+  seconds, so an unreachable service does not hold up the end of the process.
 - One Hermes process sends one stream, though the plugin is loaded more than once in a process. The copies share
   one queue, one thread and one set of timers.
 - The plugin reads turns and tool calls from Hermes' own plugin hooks (`pre_llm_call`, `post_llm_call`,
   `post_tool_call`, `on_session_end`). When Hermes has them, it also uses `pre_api_request` (which provider
   answered) and `on_stream_start` (when the answer started). On an older Hermes the plugin leaves those fields out.
-- A test run (`unittest` or `pytest`) never sends anything.
 
 ## The app's switch (`native-host-telemetry-v1`)
 
