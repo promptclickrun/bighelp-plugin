@@ -512,6 +512,10 @@ class ManagedNotificationTests(unittest.TestCase):
     def telemetry_events(self):
         from loopdy_plugin import host_telemetry
         heard = []
+        # A stream of its own: the once-a-minute repeat guard of errors must not carry over from another test.
+        streams = patch.dict(sys.modules, {host_telemetry._SHARED_STREAM: host_telemetry._new_stream()})
+        streams.start()
+        self.addCleanup(streams.stop)
         patcher = patch.object(host_telemetry, "_enqueue", lambda name, props: heard.append((name, props)))
         patcher.start()
         self.addCleanup(patcher.stop)
