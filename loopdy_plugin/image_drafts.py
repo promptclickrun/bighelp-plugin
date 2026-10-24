@@ -65,11 +65,8 @@ _SCAN_ROWS = 400
 _KEEP_SECONDS = 180 * 86_400
 
 DRAFT_ID = re.compile(r"d_[0-9a-f]{32}\Z")
-DECISION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
-REASONS = ("permission_denied", "destination_unavailable", "invalid_fields", "write_failed")
 OUTCOMES = ("saved", "failed", "outcome_unknown")
-STATES = ("awaiting_review", "applying", "saved", "failed", "outcome_unknown", "discarded", "replaced")
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "business_card": {
@@ -784,7 +781,8 @@ def _sources(session_id: str, image: Any) -> tuple[Path, list[str], Picture]:
     if image is None:
         image = 1
     if isinstance(image, bool) or not isinstance(image, int) or not 1 <= image <= MAX_PICTURES:
-        raise _ToolError("invalid_arguments", f"image is 1 (the newest picture the person sent here) to {MAX_PICTURES}.")
+        raise _ToolError("invalid_arguments",
+                         f"image is 1 (the newest picture the person sent here) to {MAX_PICTURES}.")
     db_path = current_home() / "state.db"
     lineage = session_lineage(db_path, session_id)
     pictures = person_pictures(db_path, lineage)
@@ -882,6 +880,9 @@ _RULES = (
     "create for something read from a picture; the phone refuses it (review_required)."
 )
 
+_BRIDGE = (" If Hermes has progressively disclosed this tool, run it through tool_search, tool_describe and "
+           "tool_call; never substitute another tool.")
+
 DRAFT_CONTACT_DESCRIPTION = (
     "Make a contact draft from a picture the person sent in this bighelp chat (a business card), for them to "
     "check and save in bighelp. Use it only when they asked for a contact; if they asked only about the picture, "
@@ -890,6 +891,7 @@ DRAFT_CONTACT_DESCRIPTION = (
     "image: 1 is the newest picture the person sent here, 2 the one before. replaces: the draft_id of an "
     "earlier draft in this chat that this one corrects. Nothing is saved until the person reviews it: put the "
     "returned display_markdown in your reply once and don't say it's saved."
+    + _BRIDGE
 )
 DRAFT_EVENT_DESCRIPTION = (
     "Make one calendar event draft from a picture the person sent in this bighelp chat (a poster or flyer), for "
@@ -900,11 +902,13 @@ DRAFT_EVENT_DESCRIPTION = (
     "not_in_image, or mark your guess guessed; mark a hard-to-read value unclear. Several events that "
     "disagree: ask the person instead. image, replaces and the reply work as for bighelp_draft_contact. "
     "Nothing is saved until the person reviews it."
+    + _BRIDGE
 )
 OFFER_DESCRIPTION = (
     "Ask the person, with two buttons, whether to make a contact or event from the picture they just sent with "
     "no words, or only describe it. Use it only when the picture looks like a business card or an event poster "
     "and Photo actions says to offer. Their tap comes back as their next message: end your turn and wait."
+    + _BRIDGE
 )
 
 
