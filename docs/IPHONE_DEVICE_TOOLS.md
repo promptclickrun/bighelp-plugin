@@ -151,6 +151,12 @@ Dates are ISO-8601 with an offset or `Z`. IDs are opaque strings of at most 512 
 Writes (create, update, delete, save, play and the like) are never repeated by the plugin. When the outcome is
 uncertain, the agent reads the current state before it tries again.
 
+In a chat that holds a picture the person sent (or a photo the agent read with `photos.get`), the phone
+refuses `contacts.create` and `calendar.create` with `failed` and code `review_required`: something read from a
+picture is saved only after the person reviews it. The plugin passes the code on and sets the result's
+`payload.note` to tell the agent to make a draft with `bighelp_draft_contact` or `bighelp_draft_event` instead
+and not to try the tool again. See [Photo actions](IMAGE_DRAFTS.md).
+
 ### Photos
 
 - `photos.get` returns the item's fields and, from the phone, a small JPEG (`image.data`, base64, at most 90 KB
