@@ -1,3 +1,4 @@
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 import json
 import os
 import re

@@ -426,4 +426,13 @@ def _native_features(
         features.append(image_drafts_capability)
     else:
         skip(image_drafts_capability, "public profile helpers are unimportable.")
+    try:
+        from .host_telemetry import CAPABILITY as telemetry_capability, available as telemetry_available
+    except ImportError:
+        skip("native-host-telemetry-v1", "host telemetry support is unimportable.")
+    else:
+        if telemetry_available():
+            features.append(telemetry_capability)
+        else:
+            skip(telemetry_capability, "host telemetry support is unavailable.")
     return profile, tuple(features)

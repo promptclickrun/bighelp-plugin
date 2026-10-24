@@ -1,4 +1,5 @@
 """Run against each supported Hermes checkout, without bypassing Plugin Doctor."""
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 from pathlib import Path
 import json
 import os

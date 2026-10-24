@@ -5,6 +5,7 @@ the loopdy platform, loopdy in plugins.enabled and in platform_toolsets, Link ke
 plugin files. Everything runs in a throwaway HOME and HERMES_HOME, with outbound connects refused.
 """
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import json
 import os

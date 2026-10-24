@@ -34,6 +34,16 @@ def _error_response(error: NativeAPIError) -> JSONResponse:
     }}, headers={"Cache-Control": "no-store"})
 
 
+def _report_error(status: int, code: str) -> None:
+    """Host telemetry hears of a failure on the host's side (5xx) by its fixed code. Nothing else."""
+    if status >= 500:
+        try:
+            from . import host_telemetry
+            host_telemetry.error(code=code, stage="native_route")
+        except Exception:
+            pass
+
+
 class _NativeRoute(APIRoute):
     def get_route_handler(self):
         handler = super().get_route_handler()
@@ -42,6 +52,7 @@ class _NativeRoute(APIRoute):
             try:
                 return await handler(request)
             except NativeAPIError as error:
+                _report_error(error.status, error.code)
                 response = _error_response(error)
                 request_id = request.headers.get("x-loopdy-request-id", "")
                 if len(request.headers.getlist("x-loopdy-request-id")) == 1 and _REQUEST_ID.fullmatch(request_id):
@@ -55,6 +66,7 @@ class _NativeRoute(APIRoute):
                 # text; the class name is fixed and safe to log.
                 logger.error("bighelp native request failed: native_service_unavailable (%s)",
                              type(error).__name__)
+                _report_error(503, "native_service_unavailable")
                 return _error_response(NativeAPIError(503, "native_service_unavailable",
                                                      "The native plugin service is unavailable."))
         return guarded
@@ -272,6 +284,48 @@ async def context(request: Request) -> Response:
         if chunk:
             raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
     return _response(owner.payload(), owner)
+
+
+class _TelemetryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: StrictBool
+
+
+async def _telemetry_request(request: Request) -> tuple[NativeContext, str]:
+    from .host_telemetry import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "host_telemetry_unavailable", "Host telemetry isn't available on this host.")
+    return owner, request_id
+
+
+@router.get("/telemetry")
+async def host_telemetry_state(request: Request) -> Response:
+    """Whether this host sends anonymous usage numbers (bighelp app: Settings > Privacy)."""
+    from . import host_telemetry
+    owner, request_id = await _telemetry_request(request)
+    if request.query_params:
+        raise NativeAPIError(422, "invalid_request", "Host telemetry takes no query or body.")
+    async for chunk in request.stream():
+        if chunk:
+            raise NativeAPIError(422, "invalid_request", "Host telemetry takes no query or body.")
+    return _response(await run_in_threadpool(host_telemetry.status), owner, request_id)
+
+
+@router.put("/telemetry")
+async def host_telemetry_set(request: Request) -> Response:
+    """The app's own switch. It can turn telemetry off or back on; env and config settings still win."""
+    from . import host_telemetry
+    owner, request_id = await _telemetry_request(request)
+    body = await _body(request, _TelemetryBody)
+    try:
+        value = await run_in_threadpool(host_telemetry.set_app_enabled, body.enabled)
+    except OSError:
+        raise NativeAPIError(503, "host_telemetry_unavailable", "Host telemetry can't be saved on this host.") from None
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
 
 
 _TEMPLATE_SUMMARY_KEYS = (

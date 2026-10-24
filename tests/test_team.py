@@ -4,6 +4,7 @@
 own helpers in a throwaway HERMES_HOME and read the hint back the way Hermes builds a prompt.
 """
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 from contextlib import closing, contextmanager
 import copy
