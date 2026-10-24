@@ -167,6 +167,9 @@ class _Lapse:
 
 _CONTRACT_PREFIX = "bighelp device tool "
 PHONE_UNAVAILABLE_NOTE = "bighelp isn't open on the phone right now. Ask the person to open bighelp, then try again."
+# The phone refuses contacts.create and calendar.create in a chat holding the person's picture (docs/IMAGE_DRAFTS.md).
+REVIEW_REQUIRED_NOTE = ("Something read from a picture is saved only after the person reviews it. Make a draft "
+                        "with bighelp_draft_contact or bighelp_draft_event instead. Don't try again with this tool.")
 
 
 def _grace(operation: str) -> int:
@@ -904,6 +907,9 @@ class NativeDeviceToolHub:
 
     def _for_agent(self, operation: str, result: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
         """What the agent reads. A photo from photos.get becomes a file on this host; the bytes end here."""
+        if result.get("status") == "failed" and result.get("code") == "review_required":
+            kept = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+            return {**result, "payload": {**kept, "note": REVIEW_REQUIRED_NOTE}}
         payload = result.get("payload")
         if operation != "photos.get" or not isinstance(payload, dict) or "image" not in payload:
             return result

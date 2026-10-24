@@ -993,6 +993,30 @@ class PhoneUnavailableNoteTests(unittest.TestCase):
         self.assertIn("Do not run it again", ndt._failed_result(None, "outcome_unknown")["payload"]["note"])
 
 
+class ReviewRequiredNoteTests(unittest.TestCase):
+    """The phone refuses contacts.create and calendar.create in a chat holding the person's picture."""
+
+    def refused(self, operation: str, payload: dict) -> dict:
+        result = {"version": 1, "type": "device.tool.result", "requestId": "r" * 32, "operation": operation,
+                  "status": "failed", "code": "review_required", "payload": payload}
+        return ndt.NativeDeviceToolHub._for_agent(None, operation, result)
+
+    def test_the_agent_is_told_to_use_the_draft_tools(self) -> None:
+        for operation in ("contacts.create", "calendar.create"):
+            with self.subTest(operation=operation):
+                result = self.refused(operation, {"note": "Use a draft.", "kind": "contact"})
+                self.assertEqual(("failed", "review_required"), (result["status"], result["code"]))
+                self.assertEqual("contact", result["payload"]["kind"])
+                note = result["payload"]["note"]
+                self.assertIn("bighelp_draft_contact", note)
+                self.assertIn("bighelp_draft_event", note)
+                self.assertIn("Don't try again", note)
+
+    def test_other_results_are_left_alone(self) -> None:
+        result = {"status": "failed", "code": "permission_denied", "payload": {}}
+        self.assertEqual(result, ndt.NativeDeviceToolHub._for_agent(None, "contacts.create", result))
+
+
 class AdvertisedFeatureTests(unittest.TestCase):
     def test_both_features_are_named(self) -> None:
         self.assertEqual(ndt.AGENTS_CAPABILITY, "native-device-tools-agents-v1")
