@@ -34,6 +34,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from . import host_telemetry
 from . import live_alerts
 from . import notification_channels
 from . import quiet_hours
@@ -1219,6 +1220,7 @@ class ManagedNotifications:
                     due = live_alerts.offer(db, grant["grantId"], event_id, due, self.clock())
                 db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref) VALUES(?,?,?,?,?,'pending',?,?)",
                            (event_id, grant["grantId"], "/events", raw, expires, due, reference))
+                host_telemetry.alert_queued(event_type=event_type, queue_ms=max(0, due - now) * 1000)
                 if not approval:
                     queued.append(event_id)
         self._wake.set()
@@ -1441,6 +1443,7 @@ class ManagedNotifications:
                 db.execute("DELETE FROM pending WHERE activity_id=? AND state='pending'", (row["activity_id"],))
                 db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref,activity_id) VALUES(?,?,?,?,?,'pending',?,?,?)", (update_id, row["grant_id"], "/live-activities/" + row["activity_id"] + "/updates", canonical_json_bytes(update), expires, due, row["session_ref"], row["activity_id"]))
                 db.execute("UPDATE activities SET work_turn=?,state=?,last_timestamp=?,last_signature=?,last_queued_at=? WHERE activity_id=?", (turn, "terminal_pending" if terminal else "active", timestamp, signature, due, row["activity_id"]))
+                host_telemetry.alert_queued(event_type="liveactivity", queue_ms=max(0, due - now) * 1000)
         self._wake.set()
 
     def producer_loaded(self, profile: str, *, start_worker: bool = True,
@@ -1657,6 +1660,7 @@ class ManagedNotifications:
                 db.execute("UPDATE pending SET state='failed' WHERE intent_id=? AND state='sending'", (row["intent_id"],))
                 db.execute("UPDATE approval_attention SET state='retired',reason='send_failed' WHERE event_id=? AND state='pending'", (row["intent_id"],))
             return
+        kind, started = _alert_kind(row), time.monotonic()
         try:
             approval = row["path"] == "/events" and json.loads(bytes(row["raw"])).get("eventType") == _APPROVAL_EVENT
             result = self._request("POST", row["grant_id"], row["path"], bytes(row["raw"]),
@@ -1664,6 +1668,9 @@ class ManagedNotifications:
             if result.get("status") not in ("accepted", "duplicate") or not isinstance(result.get("deliveryId"), str):
                 raise ManagedNotificationError("notification_delivery_unconfirmed", 503)
         except ManagedNotificationError as error:
+            host_telemetry.alert_sent(event_type=kind, relay_ms=(time.monotonic() - started) * 1000,
+                                      result=error.code, attempt=row["attempts"] + 1)
+            host_telemetry.error(code=error.code, stage="notification_send")
             if row["path"] == _SIGN_IN_WAKE_PATH:
                 # A wake is a nicety: one refused (a service without wakes answers 404)
                 # waits for the next interval and never retires the phone's alerts.
@@ -1681,10 +1688,23 @@ class ManagedNotifications:
                     if state == "failed":
                         db.execute("UPDATE approval_attention SET state='retired',reason='send_failed' WHERE event_id=? AND state='pending'", (row["intent_id"],))
             return
+        host_telemetry.alert_sent(event_type=kind, relay_ms=(time.monotonic() - started) * 1000,
+                                  result=result.get("status"), attempt=row["attempts"] + 1)
         with self._db() as db:
             db.execute("UPDATE pending SET state='accepted' WHERE intent_id=? AND state='sending'", (row["intent_id"],))
             if row["activity_id"] and json.loads(bytes(row["raw"])).get("phase") in ("completed", "failed"):
                 db.execute("UPDATE activities SET state='terminal_accepted' WHERE activity_id=? AND state='terminal_pending'", (row["activity_id"],))
+
+def _alert_kind(row) -> str:
+    """The kind of a queued send for host telemetry: an alert's event type, a wake or a Live Activity update."""
+    if row["path"] == "/events":
+        try:
+            value = json.loads(bytes(row["raw"])).get("eventType")
+        except ValueError:
+            return ""
+        return value if isinstance(value, str) else ""
+    return "wake" if row["path"] == _SIGN_IN_WAKE_PATH else "liveactivity"
+
 
 _instances: dict[str, ManagedNotifications] = {}
 _instances_lock = threading.Lock()

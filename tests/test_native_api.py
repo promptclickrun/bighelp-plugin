@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -200,6 +201,7 @@ class NativeAPITests(unittest.TestCase):
             expected.append("native-agent-plugin-links-v1")
         if people_available():
             expected.append("native-image-drafts-v1")
+        expected.append("native-host-telemetry-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
@@ -331,6 +333,124 @@ class NativeAPITests(unittest.TestCase):
         headers = self.headers()
         headers.pop("X-Loopdy-Request-ID")
         self.assertEqual(put(night, headers).status_code, 422)
+
+    def test_the_app_reads_and_sets_the_hosts_telemetry_switch(self):
+        from loopdy_plugin import host_telemetry
+        stream = host_telemetry._new_stream()
+        modules = patch.dict(sys.modules, {host_telemetry._SHARED_STREAM: stream})
+        modules.start()
+        self.addCleanup(modules.stop)
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ("DO_NOT_TRACK", "BIGHELP_TELEMETRY", "LOOPDY_TELEMETRY"):
+            os.environ.pop(name, None)
+        path = PREFIX + "/telemetry"
+
+        def state(headers=None):
+            return self.client.get(path, headers=self.headers() if headers is None else headers)
+
+        def put(payload, headers=None):
+            return self.client.put(path, headers=self.headers() if headers is None else headers, json=payload)
+
+        def shown(enabled, app, locked):
+            return {"version": 1, "enabled": enabled, "appEnabled": app, "lockedOff": locked}
+
+        headers = self.headers()
+        first = state(headers)
+        self.assertEqual((first.status_code, first.json()), (200, shown(True, True, False)))
+        self.assertEqual(first.headers["cache-control"], "no-store")
+        self.assertEqual(first.headers["x-loopdy-request-id"], headers["X-Loopdy-Request-ID"])
+        self.assertEqual(first.headers["etag"], headers["If-Match"])
+        off = put({"enabled": False}, headers=self.headers())
+        self.assertEqual((off.status_code, off.json()), (200, shown(False, False, False)))
+        self.assertEqual(off.headers["cache-control"], "no-store")
+        self.assertEqual(state().json(), shown(False, False, False))
+        self.assertEqual(put({"enabled": False}).json(), shown(False, False, False), "off twice is fine")
+        self.assertEqual(put({"enabled": True}).json(), shown(True, True, False))
+        # The app's switch does not beat the host owner's.
+        with patch.dict(os.environ, {"DO_NOT_TRACK": "1"}):
+            self.assertEqual(put({"enabled": True}).json(), shown(False, True, True))
+            self.assertEqual(state().json(), shown(False, True, True))
+        with patch.dict(os.environ, {"BIGHELP_TELEMETRY": "0"}):
+            self.assertEqual(state().json(), shown(False, True, True))
+        host_telemetry.set_cli_enabled(False)
+        self.assertEqual(state().json(), shown(False, True, False))
+        host_telemetry.set_cli_enabled(True)
+        # Off through the route drops what is waiting.
+        host_telemetry.tool_completed(tool="terminal", duration_ms=1, outcome="ok")
+        self.assertEqual(len(stream.events), 1)
+        self.assertEqual(put({"enabled": False}).json()["enabled"], False)
+        self.assertEqual(len(stream.events), 0)
+
+    def test_the_telemetry_route_follows_the_native_rules(self):
+        from loopdy_plugin import host_telemetry
+        modules = patch.dict(sys.modules, {host_telemetry._SHARED_STREAM: host_telemetry._new_stream()})
+        modules.start()
+        self.addCleanup(modules.stop)
+        path = PREFIX + "/telemetry"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(self.client.put(path, json={"enabled": False}).status_code, 401)
+        for method in ("get", "put"):
+            call = getattr(self.client, method)
+            kwargs = {"json": {"enabled": True}} if method == "put" else {}
+            headers = self.headers()
+            headers.pop("If-Match")
+            self.assertEqual(call(path, headers=headers, **kwargs).status_code, 428)
+            headers = self.headers()
+            headers["If-Match"] = '"stale"'
+            self.assertEqual(call(path, headers=headers, **kwargs).status_code, 412)
+            for bad_id in ("not-a-uuid", str(uuid.uuid4()).upper()):
+                headers = self.headers()
+                headers["X-Loopdy-Request-ID"] = bad_id
+                self.assertEqual(call(path, headers=headers, **kwargs).status_code, 422)
+            headers = self.headers()
+            refused = call(path + "?profile=x", headers=headers, **kwargs)
+            self.assertEqual(refused.status_code, 422)
+            self.assertEqual(refused.headers["x-loopdy-request-id"], headers["X-Loopdy-Request-ID"])
+            self.assertEqual(refused.headers["cache-control"], "no-store")
+        for body in ({}, {"enabled": "false"}, {"enabled": 0}, {"enabled": None}, {"enabled": False, "extra": 1},
+                     {"enabled": [False]}, [], "false"):
+            with self.subTest(body=body):
+                refused = self.client.put(path, headers=self.headers(), json=body)
+                self.assertEqual((refused.status_code, refused.json()["error"]["code"]), (422, "invalid_request"))
+        for content, kind in ((b"{not json", "application/json"), (b'{"enabled": false}', "text/plain"),
+                              (b'{"enabled": false, "enabled": true}', "application/json"),
+                              (b'{"enabled": NaN}', "application/json")):
+            headers = {**self.headers(), "Content-Type": kind}
+            self.assertEqual(self.client.put(path, headers=headers, content=content).status_code, 422)
+        self.assertEqual(self.client.request("GET", path, headers=self.headers(), content=b"{}").status_code, 422)
+        self.assertEqual(host_telemetry.status()["appEnabled"], True, "no bad request changed it")
+        self.assertEqual(self.client.post(path, headers=self.headers(), json={"enabled": False}).status_code, 405)
+
+    def test_the_telemetry_route_needs_the_capability(self):
+        from loopdy_plugin import host_telemetry
+        with patch.object(host_telemetry, "available", return_value=False):
+            self.assertNotIn("native-host-telemetry-v1", self.context().json()["features"])
+            refused = self.client.get(PREFIX + "/telemetry", headers=self.headers())
+        self.assertEqual((refused.status_code, refused.json()["error"]["code"]), (503, "host_telemetry_unavailable"))
+        self.assertIn("native-host-telemetry-v1", self.context().json()["features"])
+
+    def test_a_failure_on_the_hosts_side_is_reported_by_its_code_and_nothing_else(self):
+        from loopdy_plugin import host_telemetry
+        stream = host_telemetry._new_stream()
+        modules = patch.dict(sys.modules, {host_telemetry._SHARED_STREAM: stream})
+        modules.start()
+        self.addCleanup(modules.stop)
+        sender = patch.object(host_telemetry, "_ensure_sender", lambda stream: None)
+        sender.start()
+        self.addCleanup(sender.stop)
+        native_api._report_error(422, "invalid_request")
+        native_api._report_error(412, "context_changed")
+        self.assertEqual(len(stream.events), 0, "the app's own mistakes are not the host's errors")
+        native_api._report_error(503, "device_tools_unavailable")
+        with patch.object(host_telemetry, "status", side_effect=RuntimeError("alice@example.com /Users/alice")):
+            failed = self.client.get(PREFIX + "/telemetry", headers=self.headers())
+        self.assertEqual((failed.status_code, failed.json()["error"]["code"]), (503, "native_service_unavailable"))
+        sent = [(event["name"], event["p"]) for event in stream.events]
+        self.assertEqual(sent, [("error", {"code": "device_tools_unavailable", "stage": "native_route"}),
+                                ("error", {"code": "native_service_unavailable", "stage": "native_route"})])
+        self.assertNotIn("alice", json.dumps(sent))
 
     def test_people_speaking_records_who_writes_in_a_chat(self):
         from loopdy_plugin.people import available, store_for_profile
