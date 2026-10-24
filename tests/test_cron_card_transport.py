@@ -1,5 +1,6 @@
 """No-send regressions through Hermes delivery and bighelp's real adapter."""
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import asyncio
 import json

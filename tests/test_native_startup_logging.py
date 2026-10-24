@@ -1,5 +1,6 @@
 """Deterministic startup/context parity; no host configuration or service I/O."""
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 from contextlib import ExitStack
 import asyncio

@@ -1,5 +1,6 @@
 """Instant alerts for a device with bighelp open, push only as the fallback."""
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import asyncio
 import hashlib

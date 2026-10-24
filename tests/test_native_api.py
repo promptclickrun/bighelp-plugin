@@ -1,5 +1,6 @@
 """Native routes with real Hermes auth middleware and temporary local state."""
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 from dataclasses import replace
 import json
@@ -440,6 +441,11 @@ class NativeAPITests(unittest.TestCase):
         sender = patch.object(host_telemetry, "_ensure_sender", lambda stream: None)
         sender.start()
         self.addCleanup(sender.stop)
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ("DO_NOT_TRACK", "BIGHELP_TELEMETRY", "LOOPDY_TELEMETRY"):
+            os.environ.pop(name, None)
         native_api._report_error(422, "invalid_request")
         native_api._report_error(412, "context_changed")
         self.assertEqual(len(stream.events), 0, "the app's own mistakes are not the host's errors")

@@ -6,6 +6,7 @@ the job itself. Only phones that said they can open these links get them: an old
 the run's own session, as before.
 """
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import hashlib
 import json

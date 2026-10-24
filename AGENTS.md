@@ -205,13 +205,16 @@ private hub, and its phone tools answer `phone_unavailable` even though `/native
 ## Testing
 
 ```bash
-HERMES_HOME=/private/tmp/bighelp-test-home TMPDIR=/private/tmp \
+HERMES_HOME=/private/tmp/bighelp-test-home TMPDIR=/private/tmp BIGHELP_TELEMETRY=0 \
 PYTHONPATH=/path/to/hermes-agent:"$PWD":"$PWD/tests" \
   /path/to/hermes-agent/venv/bin/python -m unittest discover -s tests -v
 
 hermes plugins doctor . --ci
 ```
 
+- `BIGHELP_TELEMETRY=0` keeps host telemetry from posting during tests. A test module that registers the plugin or
+  runs `ManagedNotifications` also imports `telemetry_off` (`tests/telemetry_off.py`), which sets that variable and
+  swaps in a transport that sends nothing. `tests/test_host_telemetry.py` checks that every such module does.
 - Set `HERMES_HOME` before anything imports Hermes. On macOS use real, non-symlinked temp folders (`/private/tmp`,
   not `/tmp`) that aren't inside a Git checkout.
 - Use a separate clone of Hermes for tests, never the checkout a real install runs from.

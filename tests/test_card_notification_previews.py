@@ -5,6 +5,7 @@ way Hermes does, finishes the turn through the post_llm_call hook, sends it and 
 alert as the phone would.
 """
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import json
 import sqlite3

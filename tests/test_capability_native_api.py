@@ -1,5 +1,6 @@
 """Hermes helpers run inside one agent's profile, never the whole process."""
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import os
 import tempfile

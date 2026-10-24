@@ -1,4 +1,5 @@
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 import json
 import os
 from pathlib import Path
@@ -535,8 +536,8 @@ class ManagedNotificationTests(unittest.TestCase):
         self.fail_send = True
         self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-b",assistant_response=text)
         self.service.drain_pending()
-        self.assertEqual(heard[-2][0:2], ("alert.sent", {**heard[-2][1], "result": "synthetic_unavailable", "eventType": "session.completed", "attempt": 1}))
-        self.assertEqual(heard[-1], ("error", {"code": "synthetic_unavailable", "stage": "notification_send"}))
+        self.assertEqual(heard[-2][0:2], ("alert.sent", {**heard[-2][1], "result": "other", "eventType": "session.completed", "attempt": 1}))
+        self.assertEqual(heard[-1], ("error", {"code": "other", "stage": "notification_send"}))
         self.fail_send = False
         self.now += 120
         self.service.drain_pending()
