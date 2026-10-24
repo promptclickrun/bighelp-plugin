@@ -90,6 +90,9 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     # Who is writing in each bighelp chat, as the app reports it.
     from .people import register as register_people
     register_people(ctx)
+    # Photo actions: contact and event drafts from the person's pictures, saved only after their review.
+    from .image_drafts import register as register_image_drafts
+    register_image_drafts(ctx)
     # Teamwork (opt-in from the app): keeps every agent's team brief current as agents come and go.
     from .team import register as register_team
     register_team(ctx)
