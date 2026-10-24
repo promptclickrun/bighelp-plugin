@@ -120,6 +120,16 @@ class LiveVoiceProviderTests(unittest.TestCase):
                     self.assertIn(phrase, text)
             self.assertLess(len(instructions.encode("utf-8")), 16384)
 
+    def test_both_providers_hand_over_new_requests_while_earlier_work_runs(self):
+        # The app runs every delegated request at once, beside earlier ones.
+        from loopdy_plugin.live_voice_provider import DEFAULT_INSTRUCTIONS, PublicLiveProvider
+
+        for instructions in (DEFAULT_INSTRUCTIONS, PublicLiveProvider.default_instructions):
+            text = instructions.lower()
+            for phrase in ("side by side", "without waiting for earlier work", "keep talking"):
+                with self.subTest(phrase=phrase):
+                    self.assertIn(phrase, text)
+
     def test_subscription_instructions_cover_delegation_and_continued_turns(self):
         from loopdy_plugin.live_voice_provider import CodexLiveProvider, DEFAULT_INSTRUCTIONS
 
