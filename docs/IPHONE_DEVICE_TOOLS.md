@@ -151,11 +151,14 @@ Dates are ISO-8601 with an offset or `Z`. IDs are opaque strings of at most 512 
 Writes (create, update, delete, save, play and the like) are never repeated by the plugin. When the outcome is
 uncertain, the agent reads the current state before it tries again.
 
-In a chat that holds a picture the person sent (or a photo the agent read with `photos.get`), the phone
-refuses `contacts.create` and `calendar.create` with `failed` and code `review_required`: something read from a
-picture is saved only after the person reviews it. The plugin passes the code on and sets the result's
-`payload.note` to tell the agent to make a draft with `bighelp_draft_contact` or `bighelp_draft_event` instead
-and not to try the tool again. See [Photo actions](IMAGE_DRAFTS.md).
+In a chat that holds a picture the person sent (or a photo the agent read with `photos.get`),
+`contacts.create` and `calendar.create` fail with `failed` and code `review_required`: something read from a
+picture is saved only after the person reviews it. The host answers first, without sending the call to the
+phone, when the chat's history shows such a picture; the phone refuses it the same way. Either way the
+result's `payload.note` tells the agent to make a draft with `bighelp_draft_contact` or `bighelp_draft_event`
+instead and not to try the tool again. Every other operation, and a create in a chat without a picture,
+reaches the phone as before; when the history can't be read, the phone decides. See
+[Photo actions](IMAGE_DRAFTS.md).
 
 ### Photos
 
