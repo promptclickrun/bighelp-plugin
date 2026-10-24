@@ -188,6 +188,14 @@ def _unanswered(operation: str, delivered: bool = False) -> str:
     return "phone_unavailable"
 
 
+_REVIEWED_CREATES = frozenset({"contacts.create", "calendar.create"})
+
+
+def _holds_picture(profile: str, session_ids: list[str]) -> bool:
+    from .image_drafts import holds_picture
+    return holds_picture(profile, session_ids)
+
+
 def _failed_result(request_id: str | None, code: str, note: str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "version": 1,
@@ -200,6 +208,8 @@ def _failed_result(request_id: str | None, code: str, note: str | None = None) -
         note = "The phone did not answer, so it may have run. Do not run it again; check first."
     elif code == "phone_unavailable" and not note:
         note = PHONE_UNAVAILABLE_NOTE
+    elif code == "review_required":
+        note = REVIEW_REQUIRED_NOTE
     if note:
         result["payload"] = {"note": note}
     if request_id:
@@ -398,9 +408,12 @@ class NativeDeviceToolHub:
         profile_session_validator: Callable[[str, str], bool] | None = None,
         profile_validator: Callable[[str], bool] | None = None,
         photos_directory: Callable[[], Path] | None = None,
+        picture_chat: Callable[[str, list[str]], bool] | None = None,
     ) -> None:
         # Without one, pictures go to the Hermes home of the profile whose agent asked.
         self.photos_directory = photos_directory
+        # Whether a profile's chats hold a picture from the person (image_drafts.holds_picture).
+        self.picture_chat = picture_chat or _holds_picture
         self.clock = clock or time.time
         self.lease_seconds = max(20, min(LEASE_SECONDS, int(lease_seconds)))
         self.profile_session_validator = profile_session_validator or _default_profile_session_validator
@@ -762,6 +775,10 @@ class NativeDeviceToolHub:
                 return _failed_result(None, "phone_unavailable")
         except Exception:
             return _failed_result(None, "phone_unavailable")
+        if operation in _REVIEWED_CREATES and self._holds_picture(profile, session_id):
+            # Something read from a picture is saved only after the person reviews it: answered here, so the
+            # call never reaches the phone, whose own fence says the same (docs/IMAGE_DRAFTS.md).
+            return _failed_result(None, "review_required")
         call: _Call = (profile, session_id, turn_id, tool_call_id)
         capability = operation.split(".", 1)[0]
         try:
@@ -895,6 +912,14 @@ class NativeDeviceToolHub:
             channel.pending.pop(pending.request["requestId"], None)
         if self._parked.get(pending.call) is pending:
             del self._parked[pending.call]
+
+    def _holds_picture(self, profile: str, session_id: str) -> bool:
+        try:
+            return bool(self.picture_chat(profile, self._stored_ids(session_id)))
+        except Exception as exc:
+            # An unreadable history doesn't block a create: the phone's own fence decides.
+            logger.warning("bighelp picture fence skipped: %s", type(exc).__name__)
+            return False
 
     def _stored_ids(self, *session_ids: str) -> list[str]:
         """These session coordinates and the stored sessions Hermes' live map pairs them with."""
