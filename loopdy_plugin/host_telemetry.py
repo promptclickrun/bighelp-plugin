@@ -3,9 +3,9 @@
 It is on by default and has an off switch (see ``docs/HOST_TELEMETRY.md``). It sends only numbers,
 codes and values from fixed lists: how long turns and tool calls take, which built-in tool ran, how
 alerts fared, and a few facts about the install. No chat, prompt, tool argument, file name, path,
-profile name, user name, host name, email or address is ever read into an event. Every emitter takes
-typed values and checks them against the allowlists below before anything is queued, so there is no
-way for free text to reach a batch.
+profile name, user name, host name, email or address is read into an event. Every emitter takes
+typed values and checks them against the allowlists below before anything is queued, and free text
+has no path into a batch: a value that is not on a list becomes a fixed word or is left out.
 
 Events wait in a bounded in-memory queue (the oldest drop first). A daemon thread posts them every 60
 seconds or 50 events. A failed post is dropped without a word and a 429 backs off. Nothing here
@@ -44,20 +44,22 @@ DOC_PATH = "docs/HOST_TELEMETRY.md"
 DOC_URL = "https://github.com/promptclickrun/bighelp-plugin/blob/main/" + DOC_PATH
 
 FLUSH_SECONDS = 60
+SETTINGS_REFRESH_SECONDS = 5.0
+TURN_FALLBACK_SECONDS = 30
 START_DELAY_SECONDS = 30
 BATCH_EVENTS = 50
 MAX_QUEUE = 500
 TIMEOUT_SECONDS = 5
 EXIT_TIMEOUT_SECONDS = 3
+EXIT_JOIN_SECONDS = 1.5
 _POSTS_PER_FLUSH = 3
-_SETTINGS_TTL = 5.0
 _MAX_BACKOFF = 3_600
 _DEFAULT_BACKOFF = 120
 _ERROR_REPEAT_SECONDS = 60
 _MAX_TURNS = 256
 _TURN_LIFETIME = 3_600
 _MAX_SEEN_TOOLS = 512
-_MAX_CONFIG_BYTES = 1_000_000
+_MAX_CONFIG_BYTES = 262_144
 
 logger = logging.getLogger("hermes.plugins.bighelp.telemetry")
 
@@ -89,25 +91,90 @@ SESSION_SOURCES = frozenset({
 _SOURCE_ALIASES = {"loopdy": "bighelp", "tui": "cli", "desktop": "cli", "acp": "cli", "api_server": "api"}
 OS_FAMILIES = frozenset({"linux", "macos", "windows", "other"})
 AGENT_COUNTS = frozenset({"1", "2-5", "6-20", "21+"})
+# The fixed error codes this plugin raises or logs (NativeAPIError, ManagedNotificationError, LiveAlertError and
+# QuietHoursError). A code that is not here is reported as "other". tests/test_host_telemetry.py checks the list
+# against the source, so a new code can't go missing without a failing test.
+KNOWN_CODES = frozenset("""
+activity_capacity activity_not_found activity_reset_required activity_unavailable agent_not_found
+agent_talk_unavailable agents_activity_unavailable attachment_unavailable attachments_unavailable
+board_files_unavailable board_item_unavailable board_unavailable catalog_too_large
+chat_activity_unavailable composio_unavailable context_changed context_required device_tools_unavailable
+diff_unsupported directory_too_large file_changed file_not_found file_too_large git_unavailable
+host_restart_unavailable host_telemetry_unavailable invalid_path invalid_request invalid_template
+live_alerts_busy live_alerts_not_enrolled live_alerts_unavailable media_unavailable
+my_templates_unavailable native_context_unavailable native_identity_invalid native_identity_required
+native_service_unavailable notification_activity_conflict notification_activity_limit
+notification_activity_unconfirmed notification_agent_avatar_invalid notification_agent_avatar_required
+notification_agent_avatar_too_large notification_agent_avatar_unavailable notification_attention_retired
+notification_clarification_producer_unavailable notification_clarification_turn_unavailable
+notification_coordinate_invalid notification_default_avatar_unavailable
+notification_delivery_unconfirmed notification_enrollment_changed notification_enrollment_conflict
+notification_enrollment_inactive notification_enrollment_limit notification_event_unknown
+notification_grant_expired notification_grant_identity_mismatch notification_grant_invalid
+notification_identity_invalid notification_path_invalid notification_platform_unavailable
+notification_preferences_invalid notification_private_storage_required
+notification_recipient_key_invalid notification_redirect_rejected notification_remote_rejected
+notification_response_invalid notification_response_too_large notification_rich_content_required
+notification_scope_forbidden notification_service_unavailable notification_session_forbidden
+notification_session_limit notification_session_not_subscribed notification_session_unavailable
+notification_session_unknown notification_work_unobserved operation_not_found path_outside_workspace
+payload_too_large people_unavailable plugin_links_unavailable plugins_busy profile_not_found
+project_git_unavailable project_metadata_unavailable project_unavailable quiet_hours_invalid
+quiet_hours_time_zone_invalid quiet_hours_unavailable request_disconnected room_state_invalid
+room_unavailable scope_changed secure_traversal_unavailable sensitive_data_blocked
+session_metadata_unavailable session_unavailable sign_in_host_unavailable status_changed
+team_unavailable template_conflict templates_unavailable unknown_device_tool_operation unknown_operation
+unsafe_workspace_path unsupported_operation usage_activity_unavailable usage_unavailable
+workflows_unavailable workspace_changed workspace_config_invalid workspace_files_unavailable
+workspace_hermes_folder workspace_identity_changed workspace_identity_unavailable workspace_in_container
+workspace_not_configured workspace_on_remote workspace_unavailable workspace_unreadable
+workspace_windows_unsupported
+""".split())
+RESULT_WORDS = frozenset({"accepted", "duplicate"})
 # Where an error can come from. A code is accepted from these places only.
 ERROR_STAGES = frozenset({"native_route", "notification_send"})
 EVENT_NAMES = frozenset({
     "host.started", "turn.completed", "tool.completed", "alert.queued", "alert.sent", "error",
 })
 
-# Providers whose model IDs are their own public catalog: the model is reported with the provider.
-_PUBLIC_MODEL_PROVIDERS = frozenset({
-    "anthropic", "openai", "openai-api", "openai-codex", "gemini", "google", "openrouter", "nous",
-    "deepseek", "xai", "zai", "kimi-coding", "minimax", "mistral", "groq", "copilot", "perplexity",
-    "cohere", "opencode-zen", "opencode-go", "ai-gateway", "stepfun",
+# A model ID is sent only when it starts like one of a known public family of models and the provider
+# serves that family. Everything else is "custom": a person's own fine-tune, deployment or local model
+# keeps its name private whatever it looks like.
+_FAMILIES = {
+    "claude": r"claude-", "openai": r"(?:gpt-|chatgpt-|codex-|o[134](?:-|$))", "gemini": r"(?:gemini-|gemma-)",
+    "llama": r"llama-", "mistral": r"(?:mistral-|mixtral-|codestral|ministral-|magistral-|devstral-|pixtral-)",
+    "deepseek": r"deepseek-", "qwen": r"qwen", "grok": r"grok-", "hermes": r"(?:hermes-|deephermes-)",
+    "kimi": r"kimi-", "glm": r"glm-", "minimax": r"minimax-", "command": r"command-", "sonar": r"sonar",
+    "step": r"step-",
+}
+_ALL_FAMILIES = tuple(_FAMILIES)
+# Aggregators that name models "vendor/model". Elsewhere a "/" in a model ID is never sent.
+_AGGREGATORS = frozenset({"openrouter", "nous", "ai-gateway", "groq", "opencode-zen", "opencode-go"})
+_VENDORS = frozenset({
+    "anthropic", "openai", "google", "meta-llama", "meta", "mistralai", "deepseek", "deepseek-ai", "qwen",
+    "x-ai", "xai", "nousresearch", "moonshotai", "z-ai", "minimax", "cohere", "perplexity", "amazon",
+    "microsoft", "nvidia",
 })
-# Public services where a model ID can name a person's own fine-tune, deployment or account: only
-# the provider is reported, and the model is "custom".
-_PUBLIC_PROVIDERS = _PUBLIC_MODEL_PROVIDERS | frozenset({
+_PROVIDER_FAMILIES = {
+    "anthropic": ("claude",), "openai": ("openai",), "openai-api": ("openai",), "openai-codex": ("openai",),
+    "gemini": ("gemini",), "google": ("gemini",), "deepseek": ("deepseek",), "xai": ("grok",),
+    "zai": ("glm",), "kimi-coding": ("kimi",), "minimax": ("minimax",), "mistral": ("mistral",),
+    "perplexity": ("sonar",), "cohere": ("command",), "stepfun": ("step",),
+    "copilot": ("openai", "claude", "gemini", "grok"),
+    "openrouter": _ALL_FAMILIES, "nous": _ALL_FAMILIES, "ai-gateway": _ALL_FAMILIES, "groq": _ALL_FAMILIES,
+    "opencode-zen": _ALL_FAMILIES, "opencode-go": _ALL_FAMILIES,
+}
+_FAMILY_PATTERNS = {
+    provider: re.compile(r"(?:" + "|".join(_FAMILIES[family] for family in families) + r")[a-z0-9._:-]*\Z")
+    for provider, families in _PROVIDER_FAMILIES.items()
+}
+# Public services whose model IDs can name a person (a fine-tune, a deployment, an account): the provider is
+# named and the model is "custom".
+_PUBLIC_PROVIDERS = frozenset(_PROVIDER_FAMILIES) | frozenset({
     "huggingface", "together", "fireworks", "deepinfra", "nvidia", "bedrock", "vertex", "alibaba",
     "qwen-oauth", "kilocode", "nebius",
 })
-_PRIVATE_MODEL_MARKERS = ("ft:", "arn:", "projects/", "endpoints/", "deployments/", "accounts/", "::")
+_PRIVATE_MODEL_MARKERS = ("ft:", "arn:", "projects/", "endpoints/", "deployments/", "accounts/", "tunedmodels/", "::")
 
 # Hermes' built-in tools (its toolsets, past and present). Anything else is "mcp" or "custom".
 _HERMES_TOOLS = frozenset("""
@@ -157,6 +224,11 @@ def _pattern(value: Any, pattern: re.Pattern) -> str | None:
     return value if isinstance(value, str) and pattern.match(value) else None
 
 
+def _known(value: Any, allowed: frozenset) -> str:
+    """The value when it is on the list, else the fixed word "other"."""
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
 def classify_tool(name: Any) -> str:
     """A built-in Hermes or bighelp tool by name; "mcp" for an MCP server's; otherwise "custom"."""
     if not isinstance(name, str):
@@ -177,23 +249,36 @@ def classify_source(value: Any) -> str:
     return key if key in SESSION_SOURCES else "other"
 
 
+def _model_allowed(provider: str, candidate: str) -> bool:
+    pattern = _FAMILY_PATTERNS.get(provider)
+    if pattern is None or _MODEL.match(candidate) is None:
+        return False
+    if any(marker in candidate for marker in _PRIVATE_MODEL_MARKERS):
+        return False
+    name = candidate
+    if "/" in candidate:
+        if provider not in _AGGREGATORS or candidate.count("/") != 1:
+            return False
+        vendor, name = candidate.split("/")
+        if vendor not in _VENDORS:
+            return False
+    return pattern.match(name) is not None
+
+
 def classify_route(provider: Any, model: Any) -> tuple[str | None, str | None]:
     """(provider, model) safe to send: a known public provider by name, else "custom".
 
-    A model is reported only for a provider whose model IDs are a public catalog. Nothing is
-    reported when Hermes didn't say which provider answered."""
+    A model is reported only when it is in a known public family for that provider (see ``_FAMILIES``).
+    Nothing is reported when Hermes didn't say which provider answered."""
     if not isinstance(provider, str) or not provider.strip():
         return None, None
     key = provider.strip().lower()
     if key not in _PUBLIC_PROVIDERS:
         return "custom", "custom"
-    if key not in _PUBLIC_MODEL_PROVIDERS or not isinstance(model, str):
+    if not isinstance(model, str):
         return key, "custom"
     candidate = model.strip().lower()
-    if (_MODEL.match(candidate) is None or candidate.count("/") > 1
-            or any(marker in candidate for marker in _PRIVATE_MODEL_MARKERS)):
-        return key, "custom"
-    return key, candidate
+    return key, candidate if _model_allowed(key, candidate) else "custom"
 
 
 def agent_bucket(count: int) -> str:
@@ -236,6 +321,8 @@ def _new_stream() -> types.ModuleType:
     stream.context_at = 0.0
     stream.sent_batches = 0
     stream.stopped = False
+    stream.flags_seen = False
+    stream.notice_logged = False
     return stream
 
 
@@ -333,19 +420,31 @@ def _flags_path() -> Path:
 
 
 def _read_flags() -> dict[str, bool]:
-    """The CLI and app switches. A missing file, key or a bad value means "on"."""
-    flags = {"cli": True, "app": True}
+    """The CLI and app switches. No file means both on. A file that is there but can't be read as
+    exactly what this plugin writes counts as off: a switch someone set must never fail open."""
+    on = {"cli": True, "app": True}
+    off = {"cli": False, "app": False}
+    path = _flags_path()
     try:
-        path = _flags_path()
-        if path.stat().st_size > 4_096:
-            return flags
+        info = path.stat()
+    except FileNotFoundError:
+        return on
+    except OSError:
+        return off
+    try:
+        if info.st_size > 4_096:
+            return off
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return flags
-    if isinstance(value, dict):
-        for key in flags:
-            if value.get(key) is False:
-                flags[key] = False
+        return off
+    if not isinstance(value, dict):
+        return off
+    flags = {}
+    for key in on:
+        flag = value.get(key, True)
+        if not isinstance(flag, bool):
+            return off
+        flags[key] = flag
     return flags
 
 
@@ -366,13 +465,24 @@ def _write_flags(flags: dict[str, bool]) -> None:
             pass
 
 
-def _file_settings(stream: types.ModuleType, *, fresh: bool = False) -> dict[str, bool]:
-    now = time.monotonic()
-    if fresh or stream.settings is None or now - stream.settings_at > _SETTINGS_TTL:
-        flags = _read_flags()
-        stream.settings = {**flags, "config": not _config_off(stream)}
-        stream.settings_at = now
+def _refresh_settings(stream: types.ModuleType) -> dict[str, bool]:
+    flags = _read_flags()
+    stream.settings = {**flags, "config": not _config_off(stream)}
+    stream.settings_at = time.monotonic()
     return stream.settings
+
+
+def _file_settings(stream: types.ModuleType, *, fresh: bool = False) -> dict[str, bool]:
+    """The switches kept in files. Once the sender thread runs, it alone keeps them fresh, so a hook
+    (which runs on a turn's path) never reads a file. Before that, the first caller reads them."""
+    settings = stream.settings
+    if fresh or settings is None:
+        return _refresh_settings(stream)
+    if time.monotonic() - stream.settings_at > SETTINGS_REFRESH_SECONDS:
+        thread = stream.thread
+        if thread is None or not thread.is_alive():
+            return _refresh_settings(stream)
+    return settings
 
 
 def sources(*, fresh: bool = False) -> dict[str, bool]:
@@ -490,8 +600,7 @@ def describe() -> dict[str, Any]:
             "hermes bighelp telemetry": "off" if not switches["cli"] else "not off",
             "bighelp app": "off" if not switches["app"] else "not off",
         },
-        "fields": DOC_PATH,
-        "fieldsUrl": DOC_URL,
+        "fields": DOC_URL,
     }
 
 
@@ -690,17 +799,18 @@ def alert_sent(*, event_type: Any = None, relay_ms: Any = None, result: Any = No
     _emit("alert.sent", {
         "eventType": event_type,
         "relayMs": _number(relay_ms, MAX_MS),
-        "result": _pattern(result, _CODE) or "other",
+        "result": _known(result, RESULT_WORDS | KNOWN_CODES),
         "attempt": _number(attempt, MAX_COUNT),
     })
 
 
 def error(*, code: Any = None, stage: Any = None) -> None:
-    """A fixed error code the plugin already logs, and the fixed stage it came from. The same pair is
-    reported once a minute at most."""
+    """A fixed error code the plugin already logs, and the fixed stage it came from. A code that isn't
+    on the plugin's list is reported as "other". The same pair is reported once a minute at most."""
     try:
-        if _pattern(code, _CODE) is None or stage not in ERROR_STAGES:
+        if not isinstance(code, str) or stage not in ERROR_STAGES:
             return
+        code = _known(code, KNOWN_CODES)
         stream = _stream()
         now = time.monotonic()
         with stream.lock:
@@ -722,20 +832,8 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def _under_test_runner() -> bool:
-    """True when this process is a test runner: tests never reach the network."""
-    main = sys.modules.get("__main__")
-    spec = getattr(main, "__spec__", None)
-    name = getattr(spec, "name", "") or ""
-    if name in ("unittest.__main__", "pytest.__main__"):
-        return True
-    return os.path.basename(sys.argv[0] if sys.argv else "") in ("pytest", "py.test")
-
-
 def _post(body: bytes, timeout: float) -> tuple[int, int | None]:
     """Posts one batch. Returns (HTTP status, Retry-After seconds); status 0 when it never got there."""
-    if _under_test_runner():
-        return 0, None
     request = Request(ENDPOINT, data=body, method="POST", headers={
         "Content-Type": "application/json",
         "User-Agent": "bighelp-plugin",
@@ -768,13 +866,13 @@ def _put_back(stream: types.ModuleType, batch: list[dict[str, Any]]) -> None:
         stream.events.extend(combined[-MAX_QUEUE:])
 
 
-def flush(*, timeout: float = TIMEOUT_SECONDS) -> int:
-    """Posts what is waiting, in batches of 50, at most three batches. Returns how many events went.
+def flush(*, timeout: float = TIMEOUT_SECONDS, posts: int = _POSTS_PER_FLUSH) -> int:
+    """Posts what is waiting, in batches of 50, at most `posts` (three) batches. Returns how many events went.
     Never raises."""
     sent = 0
     try:
         stream = _stream()
-        for _ in range(_POSTS_PER_FLUSH):
+        for _ in range(posts):
             if not enabled():
                 clear_queue()
                 return sent
@@ -811,10 +909,14 @@ def flush(*, timeout: float = TIMEOUT_SECONDS) -> int:
 def _run(stream: types.ModuleType) -> None:
     last = time.monotonic()
     while True:
-        stream.wake.wait(max(0.0, FLUSH_SECONDS - (time.monotonic() - last)))
+        stream.wake.wait(max(0.0, min(SETTINGS_REFRESH_SECONDS, FLUSH_SECONDS - (time.monotonic() - last))))
         stream.wake.clear()
         if stream.stopped or sys.modules.get(_SHARED_STREAM) is not stream:
             return
+        try:
+            _refresh_settings(stream)
+        except Exception:
+            pass
         if not enabled():
             last = time.monotonic()
             continue
@@ -829,10 +931,16 @@ def _run(stream: types.ModuleType) -> None:
 
 
 def _flush_at_exit() -> None:
+    """One last batch, on a thread of its own that exit doesn't wait for beyond a moment: a host that
+    can't reach the service must not hold up the end of the process."""
     try:
         stream = _stream()
-        if stream.events and enabled():
-            flush(timeout=EXIT_TIMEOUT_SECONDS)
+        if not stream.events or not enabled():
+            return
+        worker = threading.Thread(target=flush, kwargs={"timeout": EXIT_TIMEOUT_SECONDS, "posts": 1},
+                                  name="bighelp-host-telemetry-exit", daemon=True)
+        worker.start()
+        worker.join(EXIT_JOIN_SECONDS)
     except Exception:
         pass
 
@@ -868,17 +976,12 @@ def _turn_state(stream: types.ModuleType, key: str, *, create: bool = False) -> 
                                     or now - next(iter(stream.turns.values()))["start"] > _TURN_LIFETIME):
                 stream.turns.popitem(last=False)
             state = {"start": now, "first_token": None, "tools": 0, "provider": None, "model": None,
-                     "source": None}
+                     "source": None, "answered": False}
             stream.turns[key] = state
         return state
 
 
-def _finish_turn(key: str, outcome: str, payload: dict[str, Any]) -> None:
-    stream = _stream()
-    with stream.lock:
-        state = stream.turns.pop(key, None)
-    if state is None:
-        return
+def _report_turn(state: dict[str, Any], outcome: str, payload: dict[str, Any]) -> None:
     turn_completed(
         duration_ms=(time.monotonic() - state["start"]) * 1000,
         first_token_ms=state["first_token"],
@@ -888,6 +991,27 @@ def _finish_turn(key: str, outcome: str, payload: dict[str, Any]) -> None:
         model=state["model"],
         session_source=state["source"] or payload.get("platform"),
     )
+
+
+def _finish_turn(key: str, outcome: str, payload: dict[str, Any]) -> None:
+    stream = _stream()
+    with stream.lock:
+        state = stream.turns.pop(key, None)
+    if state is not None:
+        _report_turn(state, outcome, payload)
+
+
+def _finish_unflagged(key: str, state: dict[str, Any]) -> None:
+    """The fallback for a Hermes that doesn't say how turns end: an answered turn nobody ended is ok."""
+    try:
+        stream = _stream()
+        with stream.lock:
+            if stream.flags_seen or stream.turns.get(key) is not state:
+                return
+            del stream.turns[key]
+        _report_turn(state, "ok", {})
+    except Exception:
+        logger.debug("bighelp telemetry unavailable")
 
 
 def on_pre_llm_call(**payload: Any) -> None:
@@ -904,7 +1028,10 @@ def on_pre_llm_call(**payload: Any) -> None:
         # turn) starts afresh, so a turn that never ended can't lend its start to the next.
         if existing is not None and turn and existing.get("turn") == turn:
             return
-        stream.turns.pop(key, None)
+        stale = stream.turns.pop(key, None)
+    if stale is not None and stale["answered"] and not stream.flags_seen:
+        # A Hermes that never says how a turn ended: an answered turn that a new one replaces was fine.
+        _report_turn(stale, "ok", {})
     state = _turn_state(stream, key, create=True)
     state["turn"] = turn
     state["source"] = payload.get("platform")
@@ -936,11 +1063,13 @@ def on_post_tool_call(**payload: Any) -> None:
     stream = _stream()
     call_id = payload.get("tool_call_id")
     if isinstance(call_id, str) and call_id:
-        # Hermes loads the plugin again for each profile: the same call can reach two copies.
+        # Hermes loads the plugin again for each profile: the same call can reach two copies. A call ID
+        # is only unique within its session.
+        seen = (_session_key(payload), call_id)
         with stream.lock:
-            if call_id in stream.seen_tools:
+            if seen in stream.seen_tools:
                 return
-            stream.seen_tools[call_id] = True
+            stream.seen_tools[seen] = True
             while len(stream.seen_tools) > _MAX_SEEN_TOOLS:
                 stream.seen_tools.popitem(last=False)
     state = _turn_state(stream, _session_key(payload))
@@ -969,16 +1098,33 @@ def _tool_outcome(payload: dict[str, Any]) -> str:
 
 
 def on_post_llm_call(**payload: Any) -> None:
-    if enabled():
-        _finish_turn(_session_key(payload), "ok", payload)
+    """Hermes fires this whenever there is a final response, a failed turn included, and before
+    on_session_end. It only marks the turn as answered; on_session_end says how it ended."""
+    if not enabled():
+        return
+    key = _session_key(payload)
+    stream = _stream()
+    with stream.lock:
+        state = stream.turns.get(key)
+        if state is None:
+            return
+        state["answered"] = True
+        pending = not stream.flags_seen
+    if pending:
+        timer = threading.Timer(TURN_FALLBACK_SECONDS, _finish_unflagged, args=(key, state))
+        timer.daemon = True
+        timer.start()
 
 
 def on_session_end(**payload: Any) -> None:
     if not enabled() or not any(name in payload for name in ("completed", "failed", "interrupted")):
         return
+    _stream().flags_seen = True
     if payload.get("interrupted"):
         outcome = "cancelled"
     elif payload.get("failed"):
+        outcome = "failed"
+    elif "completed" in payload and not payload.get("completed"):
         outcome = "failed"
     else:
         outcome = "ok"
@@ -994,6 +1140,29 @@ def _guarded(callback: Callable[..., None]) -> Callable[..., None]:
         return None
     observe.__name__ = getattr(callback, "__name__", "observe")
     return observe
+
+
+NOTICE = ("bighelp host telemetry is on: anonymous timings and counts, never text, paths or names. "
+          "Turn it off with `hermes bighelp telemetry off`, BIGHELP_TELEMETRY=0 or DO_NOT_TRACK=1. "
+          "Fields: " + DOC_URL)
+
+
+def _on_start() -> None:
+    """When the plugin starts: forget the ID if telemetry is off, and say once that it is on."""
+    if not enabled():
+        # An ID made before the switch went off (by an environment variable, the config or DO_NOT_TRACK,
+        # which can't delete it themselves) is gone at the next start.
+        _forget_identity()
+        return
+    marker = _data_dir() / "telemetry-notice"
+    if marker.exists():
+        return
+    logger.info(NOTICE)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("1", encoding="ascii")
+    except OSError:
+        pass
 
 
 def register(ctx: Any) -> None:
@@ -1015,6 +1184,7 @@ def register(ctx: Any) -> None:
                 hooks[name] = callback
         for name, callback in hooks.items():
             ctx.register_hook(name, _guarded(callback))
+        _on_start()
         announce_host_started()
     except Exception:
         logger.warning("bighelp telemetry unavailable")

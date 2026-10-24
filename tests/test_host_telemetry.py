@@ -1,5 +1,6 @@
 """Host telemetry: nothing private in a batch, every off switch, the queue, and one stream per process."""
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import getpass
 import importlib
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -138,6 +140,7 @@ class PrivacyTests(TelemetryCase):
         "alice-laptop.local", "Quarterly layoff plan", "my-secret-profile", "sk-live-abc123",
         "ft:gpt-4o:acme-corp:alice::A1b2", "https://internal.example.com/api/v1",
         "chat-8f3a-private-session", "acme-private-llm", "C:\\Users\\alice\\notes.txt",
+        "alice_payroll", "tunedModels/alice-payroll-bot-1", "acme-internal-llama", "my-company-chat",
     )
 
     def feed_everything(self):
@@ -148,7 +151,7 @@ class PrivacyTests(TelemetryCase):
                                  provider=self.SECRETS[10], model=self.SECRETS[7], session_source=email)
         telemetry.turn_completed(duration_ms=path, first_token_ms=text, tool_calls=email, outcome=text,
                                  provider="openrouter", model=self.SECRETS[7], session_source=self.SECRETS[9])
-        telemetry.turn_completed(provider="anthropic", model="anthropic/claude-sonnet-4.6", session_source="telegram")
+        telemetry.turn_completed(provider="anthropic", model="claude-sonnet-4.6", session_source="telegram")
         telemetry.tool_completed(tool=path, duration_ms=4, outcome="ok")
         telemetry.tool_completed(tool=self.SECRETS[5], duration_ms=email, outcome=text)
         telemetry.tool_completed(tool={"path": path}, duration_ms=None, outcome="failed")
@@ -158,6 +161,12 @@ class PrivacyTests(TelemetryCase):
         telemetry.alert_sent(event_type=email, relay_ms=40, result="accepted", attempt=1)
         telemetry.error(code=email, stage="native_route")
         telemetry.error(code=path, stage="notification_send")
+        # A value that looks like a code but isn't one of the plugin's.
+        telemetry.error(code="alice_payroll", stage="native_route")
+        telemetry.alert_sent(event_type="wake", relay_ms=1, result="alice_payroll", attempt=1)
+        telemetry.turn_completed(provider="gemini", model="tunedModels/alice-payroll-bot-1")
+        telemetry.turn_completed(provider="openai", model="acme-internal-llama")
+        telemetry.turn_completed(provider="cohere", model="my-company-chat")
         telemetry.error(code="native_service_unavailable", stage=text)
         # The same through Hermes' hooks, with realistic payloads.
         hooks = {}
@@ -204,9 +213,15 @@ class PrivacyTests(TelemetryCase):
         tools = [event["p"]["tool"] for event in self.events() if event["name"] == "tool.completed"]
         self.assertEqual(set(tools) - {"terminal"}, {"custom"})
         providers = {event["p"].get("provider") for event in self.events() if event["name"] == "turn.completed"}
-        self.assertLessEqual(providers, {None, "custom", "openrouter", "anthropic"})
+        self.assertLessEqual(providers, {None, "custom", "openrouter", "anthropic", "gemini", "openai", "cohere"})
         models = {event["p"].get("model") for event in self.events() if event["name"] == "turn.completed"}
-        self.assertLessEqual(models, {None, "custom", "anthropic/claude-sonnet-4.6"})
+        self.assertLessEqual(models, {None, "custom", "claude-sonnet-4.6"})
+        for event in self.events():
+            if event["name"] == "error":
+                self.assertEqual(event["p"]["code"], "other" if event["p"]["code"] not in telemetry.KNOWN_CODES else event["p"]["code"])
+            if event["name"] == "alert.sent":
+                self.assertIn(event["p"]["result"], telemetry.RESULT_WORDS | telemetry.KNOWN_CODES | {"other"})
+        self.assertIn("other", [event["p"]["result"] for event in self.events() if event["name"] == "alert.sent"])
 
     def test_a_value_out_of_range_or_of_the_wrong_type_is_left_out(self):
         telemetry.turn_completed(duration_ms=-1, first_token_ms=True, tool_calls=2.5, outcome="ok")
@@ -215,12 +230,15 @@ class PrivacyTests(TelemetryCase):
         telemetry.tool_completed(tool="read_file", duration_ms="12", outcome="maybe")
         telemetry.error(code="UPPER", stage="native_route")
         telemetry.error(code="x" * 65, stage="native_route")
-        telemetry.error(code="fine_code", stage="a_stage_nobody_has")
+        telemetry.error(code="native_service_unavailable", stage="a_stage_nobody_has")
+        telemetry.error(code=None, stage="native_route")
         self.assertEqual(self.queued(), [
             ("turn.completed", {"toolCalls": 2, "outcome": "ok", "sessionSource": "other"}),
             ("turn.completed", {"sessionSource": "other"}),
             ("alert.sent", {"eventType": "wake", "result": "other"}),
             ("tool.completed", {"tool": "read_file"}),
+            # A code that isn't on the plugin's list is "other"; the second one is the same pair, so it waits.
+            ("error", {"code": "other", "stage": "native_route"}),
         ])
 
     def test_tools_are_named_only_when_they_are_built_in_or_bighelp(self):
@@ -232,6 +250,33 @@ class PrivacyTests(TelemetryCase):
         for name in ("my_private_tool", "bighelp_not_ours", "READ_FILE", "", None, 7, "terminal ", "../etc/passwd"):
             self.assertEqual(telemetry.classify_tool(name), "custom")
 
+    def test_the_known_codes_are_the_codes_this_plugin_raises(self):
+        found = set()
+        patterns = (r'NativeAPIError\(\s*[^,"]+,\s*"([a-z0-9_]+)"', r'ManagedNotificationError\(\s*"([a-z0-9_]+)"',
+                    r'LiveAlertError\(\s*[^,"]+,\s*"([a-z0-9_]+)"', r'QuietHoursError\(\s*"([a-z0-9_]+)"')
+        for path in (ROOT / "loopdy_plugin").glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for pattern in patterns:
+                found.update(re.findall(pattern, text))
+        found.discard("voice_provider_")
+        self.assertGreater(len(found), 100)
+        self.assertEqual(sorted(found - telemetry.KNOWN_CODES), [], "add new codes to KNOWN_CODES")
+        for code in telemetry.KNOWN_CODES:
+            self.assertRegex(code, r"^[a-z0-9_]{1,64}$")
+        for code in ("alice_payroll", "alice@example.com", "", "OTHER", "voice_provider_" + "x", None, 7):
+            telemetry.error(code=code, stage="native_route") if isinstance(code, str) else None
+        codes = {props["code"] for name, props in self.queued() if name == "error"}
+        self.assertEqual(codes, {"other"})
+        self.stream.events.clear()
+        self.stream.error_last.clear()
+        telemetry.error(code="notification_remote_rejected", stage="notification_send")
+        telemetry.alert_sent(event_type="wake", result="notification_remote_rejected")
+        telemetry.alert_sent(event_type="wake", result="accepted")
+        telemetry.alert_sent(event_type="wake", result="duplicate")
+        telemetry.alert_sent(event_type="wake", result="alice_payroll")
+        self.assertEqual([props.get("code") or props["result"] for _, props in self.queued()],
+                         ["notification_remote_rejected"] * 2 + ["accepted", "duplicate", "other"])
+
     def test_every_tool_this_plugin_registers_is_known(self):
         text = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
         provided = re.findall(r"^  - ((?:bighelp|iphone)_[a-z_]+)$", text, re.M)
@@ -241,21 +286,35 @@ class PrivacyTests(TelemetryCase):
         for name in telemetry._HERMES_TOOLS | telemetry._BIGHELP_TOOLS:
             self.assertRegex(name, r"^[a-z][a-z0-9_]{0,63}$")
 
-    def test_a_provider_is_named_only_when_it_is_public_and_a_model_only_from_a_public_catalog(self):
+    def test_a_provider_is_named_only_when_it_is_public_and_a_model_only_from_a_known_family(self):
         route = telemetry.classify_route
-        self.assertEqual(route("anthropic", "Anthropic/Claude-Sonnet-4.6"), ("anthropic", "anthropic/claude-sonnet-4.6"))
+        self.assertEqual(route("anthropic", "Claude-Sonnet-4.6"), ("anthropic", "claude-sonnet-4.6"))
         self.assertEqual(route("openrouter", "openai/gpt-5:free"), ("openrouter", "openai/gpt-5:free"))
+        self.assertEqual(route("openrouter", "anthropic/claude-sonnet-4.6"), ("openrouter", "anthropic/claude-sonnet-4.6"))
+        self.assertEqual(route("nous", "nousresearch/hermes-4-405b"), ("nous", "nousresearch/hermes-4-405b"))
         self.assertEqual(route("openai-codex", "gpt-5-codex"), ("openai-codex", "gpt-5-codex"))
+        self.assertEqual(route("openai", "o3-mini"), ("openai", "o3-mini"))
+        self.assertEqual(route("gemini", "gemini-2.5-pro"), ("gemini", "gemini-2.5-pro"))
+        self.assertEqual(route("deepseek", "deepseek-chat"), ("deepseek", "deepseek-chat"))
+        self.assertEqual(route("xai", "grok-4"), ("xai", "grok-4"))
+        self.assertEqual(route("cohere", "command-r-plus"), ("cohere", "command-r-plus"))
         # A public service whose model IDs can name a person: provider only.
         self.assertEqual(route("huggingface", "alice/my-model"), ("huggingface", "custom"))
         self.assertEqual(route("bedrock", "arn:aws:bedrock:us-east-1:123456789012:x"), ("bedrock", "custom"))
         # Private or self-hosted: nothing but the word.
         for provider in ("custom", "custom:my-server", "lmstudio", "ollama", "acme-private-llm", "azure-foundry", "http://10.0.0.7"):
             self.assertEqual(route(provider, "llama-3-private"), ("custom", "custom"))
-        # A model that could name a fine-tune, a deployment or an account.
-        for model in ("ft:gpt-4o:acme::abc", "a/b/c", "accounts/alice/models/x", "projects/p/models/m", "x" * 80,
-                      "model with space", "model@host", None, 7):
-            self.assertEqual(route("openai", model), ("openai", "custom"), model)
+        # Not in a known family of that provider, a "/" outside the aggregators, a vendor nobody knows.
+        for provider, model in (
+            ("gemini", "tunedModels/alice-payroll-bot-1"), ("openai", "acme-internal-llama"),
+            ("cohere", "my-company-chat"), ("anthropic", "anthropic/claude-sonnet-4.6"),
+            ("anthropic", "gpt-5"), ("openai", "claude-sonnet-4.6"), ("openai", "o5-private"), ("openai", "o1x"),
+            ("openrouter", "alice/claude-clone"), ("openrouter", "anthropic/alice-payroll"),
+            ("openrouter", "anthropic/claude/extra"), ("openrouter", "tunedModels/claude-1"),
+            ("openai", "ft:gpt-4o:acme::abc"), ("groq", "accounts/alice/models/x"), ("openai", "x" * 80),
+            ("openai", "gpt-5 with space"), ("openai", "gpt-5@host"), ("openai", None), ("openai", 7),
+        ):
+            self.assertEqual(route(provider, model), (provider, "custom"), (provider, model))
         self.assertEqual(route(None, "gpt-5"), (None, None))
         self.assertEqual(route("", "gpt-5"), (None, None))
         self.assertEqual(route(7, "gpt-5"), (None, None))
@@ -302,12 +361,19 @@ class HookTests(TelemetryCase):
         for callback in hooks[name]:
             callback(**payload)
 
-    def turn(self, hooks, *, outcome=None, tools=2, session="s-1"):
-        self.call(hooks, "pre_llm_call", session_id=session, user_message="hi", model="anthropic/claude-sonnet-4.6",
+    OK = {"completed": True, "failed": False, "interrupted": False}
+    FAILED = {"completed": False, "failed": True, "interrupted": False}
+    CANCELLED = {"completed": False, "failed": False, "interrupted": True}
+
+    def turn(self, hooks, *, outcome=OK, tools=2, session="s-1"):
+        """A turn in the order Hermes fires it: post_llm_call whenever there is a final response (also
+        for a turn that failed), then on_session_end with the flags. outcome=None is a Hermes that sends
+        no flags at all."""
+        self.call(hooks, "pre_llm_call", session_id=session, user_message="hi", model="claude-sonnet-4.6",
                   platform="bighelp")
         if "pre_api_request" in hooks:
             self.call(hooks, "pre_api_request", session_id=session, provider="anthropic",
-                      model="anthropic/claude-sonnet-4.6")
+                      model="claude-sonnet-4.6")
         if "on_stream_start" in hooks:
             time.sleep(0.002)
             self.call(hooks, "on_stream_start", session_id=session)
@@ -315,9 +381,8 @@ class HookTests(TelemetryCase):
             self.call(hooks, "post_tool_call", session_id=session, tool_name="read_file", tool_call_id=f"c{number}",
                       duration_ms=7 + number, status="ok")
         time.sleep(0.002)
-        if outcome is None:
-            self.call(hooks, "post_llm_call", session_id=session, assistant_response="done")
-        else:
+        self.call(hooks, "post_llm_call", session_id=session, assistant_response="done")
+        if outcome is not None:
             self.call(hooks, "on_session_end", session_id=session, **outcome)
 
     def test_a_turn_reports_its_timing_tools_route_and_source(self):
@@ -331,27 +396,70 @@ class HookTests(TelemetryCase):
         turn = self.queued()[2][1]
         self.assertEqual({key: turn[key] for key in ("outcome", "toolCalls", "provider", "model", "sessionSource")},
                          {"outcome": "ok", "toolCalls": 2, "provider": "anthropic",
-                          "model": "anthropic/claude-sonnet-4.6", "sessionSource": "bighelp"})
+                          "model": "claude-sonnet-4.6", "sessionSource": "bighelp"})
         self.assertGreaterEqual(turn["durationMs"], turn["firstTokenMs"])
         self.assertGreater(turn["firstTokenMs"], 0)
-
-    def test_a_turn_ends_once_whichever_hook_arrives_first(self):
-        hooks = self.register()
-        self.turn(hooks)
-        self.call(hooks, "on_session_end", session_id="s-1", completed=True, failed=False, interrupted=False)
-        self.call(hooks, "post_llm_call", session_id="s-1")
-        self.assertEqual(self.names_queued().count("turn.completed"), 1)
 
     def names_queued(self):
         return [name for name, _ in self.queued()]
 
-    def test_failed_and_cancelled_turns(self):
+    def outcomes(self):
+        return [props["outcome"] for name, props in self.queued() if name == "turn.completed"]
+
+    def test_a_failed_turn_is_failed_though_hermes_fires_post_llm_call_first(self):
+        # Hermes' real order for a turn that ends badly: pre_llm_call, post_llm_call (there is a final
+        # response, an error message or not), then on_session_end(failed=True).
         hooks = self.register()
-        self.turn(hooks, outcome={"completed": False, "failed": True, "interrupted": False}, tools=0, session="a")
-        self.turn(hooks, outcome={"completed": False, "failed": False, "interrupted": True}, tools=0, session="b")
-        self.turn(hooks, outcome={"completed": True, "failed": False, "interrupted": False}, tools=0, session="c")
-        self.assertEqual([props["outcome"] for name, props in self.queued() if name == "turn.completed"],
-                         ["failed", "cancelled", "ok"])
+        self.call(hooks, "pre_llm_call", session_id="s", turn_id="t", platform="bighelp", model="gpt-5")
+        self.call(hooks, "post_llm_call", session_id="s", turn_id="t", assistant_response="I couldn't finish that.")
+        self.assertEqual(self.outcomes(), [], "answered is not ended")
+        self.call(hooks, "on_session_end", session_id="s", turn_id="t", completed=False, failed=True, interrupted=False)
+        self.assertEqual(self.outcomes(), ["failed"])
+
+    def test_a_turn_ends_once_and_by_its_flags(self):
+        hooks = self.register()
+        self.turn(hooks, outcome=self.OK)
+        self.call(hooks, "on_session_end", session_id="s-1", completed=True, failed=False, interrupted=False)
+        self.call(hooks, "post_llm_call", session_id="s-1")
+        self.assertEqual(self.outcomes(), ["ok"])
+
+    def test_ok_failed_and_cancelled_turns(self):
+        hooks = self.register()
+        self.turn(hooks, outcome=self.FAILED, tools=0, session="a")
+        self.turn(hooks, outcome=self.CANCELLED, tools=0, session="b")
+        self.turn(hooks, outcome=self.OK, tools=0, session="c")
+        # Not completed, and neither flag says why: that is a failure, not a success.
+        self.turn(hooks, outcome={"completed": False, "failed": False, "interrupted": False}, tools=0, session="d")
+        self.turn(hooks, outcome={"completed": False}, tools=0, session="e")
+        self.turn(hooks, outcome={"failed": False, "interrupted": False}, tools=0, session="f")
+        self.turn(hooks, outcome={"completed": True, "interrupted": True}, tools=0, session="g")
+        self.assertEqual(self.outcomes(), ["failed", "cancelled", "ok", "failed", "failed", "ok", "cancelled"])
+
+    def test_a_hermes_that_sends_no_flags_still_gets_its_answered_turns_counted(self):
+        hooks = self.register()
+        with patch.object(telemetry, "TURN_FALLBACK_SECONDS", 0.05):
+            self.turn(hooks, outcome=None, tools=1, session="legacy")
+            self.assertEqual(self.outcomes(), [])
+            deadline = time.monotonic() + 3
+            while not self.outcomes() and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(self.outcomes(), ["ok"])
+        # A new turn also settles an answered one that nothing ended.
+        self.turn(hooks, outcome=None, tools=0, session="again")
+        self.call(hooks, "pre_llm_call", session_id="again", platform="bighelp")
+        self.assertEqual(self.outcomes(), ["ok", "ok"])
+
+    def test_once_hermes_has_sent_flags_an_answered_turn_waits_for_them(self):
+        hooks = self.register()
+        self.turn(hooks, outcome=self.OK, tools=0, session="first")
+        self.assertTrue(self.stream.flags_seen)
+        with patch.object(telemetry, "TURN_FALLBACK_SECONDS", 0.05):
+            self.call(hooks, "pre_llm_call", session_id="slow", platform="cli")
+            self.call(hooks, "post_llm_call", session_id="slow", assistant_response="x")
+            time.sleep(0.2)
+            self.assertEqual(self.outcomes(), ["ok"], "only the first turn; the slow one is still open")
+            self.call(hooks, "on_session_end", session_id="slow", completed=False, failed=True, interrupted=False)
+        self.assertEqual(self.outcomes(), ["ok", "failed"])
 
     def test_an_exit_with_no_turn_or_no_outcome_reports_nothing(self):
         hooks = self.register()
@@ -378,6 +486,12 @@ class HookTests(TelemetryCase):
         for registered in (hooks, again):
             self.call(registered, "post_tool_call", session_id="s", tool_name="terminal", tool_call_id="same", duration_ms=3)
         self.assertEqual(self.names_queued(), ["tool.completed"])
+
+    def test_a_call_id_is_only_unique_within_its_session(self):
+        hooks = self.register()
+        for session in ("one", "two", "one"):
+            self.call(hooks, "post_tool_call", session_id=session, tool_name="terminal", tool_call_id="call_1", duration_ms=3)
+        self.assertEqual(self.names_queued(), ["tool.completed", "tool.completed"])
 
     def test_a_broken_hook_call_never_raises(self):
         hooks = self.register()
@@ -462,6 +576,54 @@ class SwitchTests(TelemetryCase):
                 self.stream.settings = None
                 self.assertTrue(telemetry.enabled())
 
+    def test_a_hook_never_reads_a_file_once_the_sender_runs_and_the_sender_keeps_the_switches_fresh(self):
+        reads = []
+        real = telemetry._read_flags
+
+        def counting():
+            reads.append(threading.current_thread().name)
+            return real()
+        self.stream.thread = SimpleNamespace(is_alive=lambda: True)
+        with patch.object(telemetry, "_read_flags", counting):
+            self.assertTrue(telemetry.enabled())
+            self.assertEqual(len(reads), 1, "the first call reads once")
+            self.stream.settings_at = -1000.0
+            for _ in range(50):
+                self.assertTrue(telemetry.enabled())
+                self.emit()
+            self.assertEqual(len(reads), 1, "a stale cache is left for the sender thread")
+            # With no sender, a stale cache is read by the caller (nothing else would).
+            self.stream.thread = None
+            self.assertTrue(telemetry.enabled())
+            self.assertEqual(len(reads), 2)
+
+    def test_the_sender_thread_picks_up_a_switch_changed_by_another_process(self):
+        sender = types.SimpleNamespace()
+        self.stream.thread = None
+        with patch.object(telemetry, "SETTINGS_REFRESH_SECONDS", 0.05):
+            self.assertTrue(telemetry.enabled())
+            thread = threading.Thread(target=telemetry._run, args=(self.stream,), daemon=True)
+            self.stream.thread = thread
+            thread.start()
+            self.emit()
+            directory = self.home / "plugin-data" / "loopdy"
+            directory.mkdir(parents=True)
+            (directory / "telemetry-settings.json").write_text(json.dumps({"cli": False, "app": True}))
+            deadline = time.monotonic() + 3
+            while self.stream.events and time.monotonic() < deadline:
+                time.sleep(0.02)
+        self.assertEqual(self.queued(), [])
+        self.assertFalse(telemetry.enabled())
+        del sender
+
+    def test_a_huge_config_file_is_not_read(self):
+        config = self.home / "config.yaml"
+        config.write_text("bighelp:\n  telemetry: false\n" + "# pad\n" * 60_000, encoding="utf-8")
+        self.assertGreater(config.stat().st_size, telemetry._MAX_CONFIG_BYTES)
+        self.assertLess(telemetry._MAX_CONFIG_BYTES, 500_000)
+        self.stream.settings = None
+        self.assertTrue(telemetry.enabled())
+
     def test_the_config_of_a_profile_this_process_runs_as_counts_too(self):
         profile = self.home / "profiles" / "work"
         profile.mkdir(parents=True)
@@ -498,9 +660,19 @@ class SwitchTests(TelemetryCase):
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.stream.settings = None
         self.assertFalse(telemetry.enabled())
-        path.write_text("{not json")
+        for damaged in ("{not json", "[]", "null", '{"app": "no"}', '{"cli": 0}', "x" * 5000, ""):
+            path.write_text(damaged)
+            self.stream.settings = None
+            self.assertFalse(telemetry.enabled(), f"a settings file that can't be read counts as off: {damaged[:10]!r}")
+        path.write_text('{"app": true}')
         self.stream.settings = None
-        self.assertTrue(telemetry.enabled(), "a damaged file means on, not a crash")
+        self.assertTrue(telemetry.enabled(), "a missing key is on")
+        path.unlink()
+        self.stream.settings = None
+        self.assertTrue(telemetry.enabled(), "no file at all is on")
+        path.mkdir()
+        self.stream.settings = None
+        self.assertFalse(telemetry.enabled(), "a file that can't be opened counts as off")
 
     def test_another_process_turning_it_off_is_seen_and_drops_the_queue(self):
         self.emit()
@@ -558,8 +730,8 @@ class CliTests(TelemetryCase):
         self.assertTrue(shown["enabled"])
         self.assertEqual(set(shown["sources"]), {"DO_NOT_TRACK", "BIGHELP_TELEMETRY", "config bighelp.telemetry",
                                                  "hermes bighelp telemetry", "bighelp app"})
-        self.assertEqual(shown["fields"], "docs/HOST_TELEMETRY.md")
-        self.assertTrue(shown["fieldsUrl"].endswith("/docs/HOST_TELEMETRY.md"))
+        self.assertEqual(shown["fields"], "https://github.com/promptclickrun/bighelp-plugin/blob/main/docs/HOST_TELEMETRY.md")
+        self.assertNotIn("fieldsUrl", shown)
         with patch.dict(os.environ, {"DO_NOT_TRACK": "1"}):
             shown = self.run_cli()
         self.assertFalse(shown["enabled"])
@@ -615,6 +787,7 @@ class RegistrationTests(TelemetryCase):
         context.hooks["post_tool_call"](tool_name="terminal", tool_call_id="c1", session_id="s", duration_ms=4, status="ok")
         context.hooks["pre_llm_call"](session_id="s", platform="bighelp", model="gpt-5")
         context.hooks["post_llm_call"](session_id="s", assistant_response="Done.")
+        context.hooks["on_session_end"](session_id="s", completed=True, failed=False, interrupted=False)
         self.assertEqual([name for name, _ in self.queued()], ["tool.completed", "turn.completed"])
 
     def test_both_command_names_take_telemetry(self):
@@ -683,6 +856,51 @@ class IdentityTests(TelemetryCase):
         self.assertEqual(self.sent[0]["id"], telemetry.telemetry_id())
         self.assertRegex(self.sent[0]["session"], UUID4)
         self.assertNotEqual(self.sent[0]["session"], self.sent[0]["id"])
+
+
+class StartTests(TelemetryCase):
+    def register(self):
+        context = SimpleNamespace(register_hook=lambda name, callback: None)
+        with patch.object(telemetry, "announce_host_started"):
+            telemetry.register(context)
+
+    def test_the_first_start_with_telemetry_on_says_so_once(self):
+        with self.assertLogs("hermes.plugins.bighelp.telemetry", level="INFO") as logs:
+            self.register()
+        self.assertEqual([record.getMessage() for record in logs.records], [telemetry.NOTICE])
+        self.assertEqual(logs.records[0].levelname, "INFO")
+        for needle in ("hermes bighelp telemetry off", "BIGHELP_TELEMETRY=0", "DO_NOT_TRACK=1", telemetry.DOC_URL):
+            self.assertIn(needle, telemetry.NOTICE)
+        self.assertTrue((self.home / "plugin-data" / "loopdy" / "telemetry-notice").exists())
+        with self.assertNoLogs("hermes.plugins.bighelp.telemetry", level="INFO"):
+            self.register()
+
+    def test_nothing_is_said_when_it_is_off(self):
+        with patch.dict(os.environ, {"DO_NOT_TRACK": "1"}), self.assertNoLogs("hermes.plugins.bighelp.telemetry", level="INFO"):
+            self.register()
+        self.assertFalse((self.home / "plugin-data" / "loopdy" / "telemetry-notice").exists())
+
+    def test_an_id_made_before_an_environment_variable_config_or_do_not_track_is_deleted_at_the_next_start(self):
+        for name, change in (("DO_NOT_TRACK", {"DO_NOT_TRACK": "1"}), ("env", {"BIGHELP_TELEMETRY": "off"}),
+                             ("old env", {"LOOPDY_TELEMETRY": "0"})):
+            with self.subTest(name), patch.dict(os.environ, change):
+                path = self.home / "plugin-data" / "loopdy" / "telemetry-id"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("0b1ff5c3-8f2e-4d6a-9b7c-3f1e2d4c5b6a")
+                self.register()
+                self.assertFalse(path.exists())
+        config = self.home / "config.yaml"
+        config.write_text("bighelp:\n  telemetry: false\n", encoding="utf-8")
+        path = self.home / "plugin-data" / "loopdy" / "telemetry-id"
+        path.write_text("0b1ff5c3-8f2e-4d6a-9b7c-3f1e2d4c5b6a")
+        self.stream.settings = None
+        self.register()
+        self.assertFalse(path.exists())
+
+    def test_the_id_is_kept_while_telemetry_is_on(self):
+        value = telemetry.telemetry_id()
+        self.register()
+        self.assertEqual(telemetry.telemetry_id(), value)
 
 
 class QueueTests(TelemetryCase):
@@ -808,12 +1026,25 @@ class QueueTests(TelemetryCase):
         self.assertEqual(self.queued(), [("error", {"code": "native_service_unavailable", "stage": "native_route"}),
                                          ("error", {"code": "notification_remote_rejected", "stage": "notification_send"})])
 
-    def test_the_real_transport_never_reaches_the_network_in_a_test_run(self):
+    def test_no_test_run_can_post(self):
+        # The default transport is the no-op the shared helper installed, whatever stream a test uses.
+        self.assertIs(telemetry._post, telemetry_off.discard)
+        self.assertEqual(os.environ.get("BIGHELP_TELEMETRY"), None, "this test class clears it to test the module")
         telemetry.set_transport(None)
         with patch.object(telemetry, "build_opener", side_effect=AssertionError("network")):
             telemetry.tool_completed(tool="terminal", duration_ms=1, outcome="ok")
             self.assertEqual(telemetry.flush(), 0)
-        self.assertEqual(telemetry._post(b"{}", 1), (0, None))
+        self.assertEqual(self.queued(), [])
+
+    def test_every_test_module_that_could_start_a_sender_uses_the_helper(self):
+        needle = re.compile(r"ManagedNotifications\(|get_managed_notifications|registration import register"
+                            r"|registration\.register\(")
+        missing = []
+        for path in sorted((ROOT / "tests").glob("test_*.py")):
+            text = path.read_text(encoding="utf-8")
+            if needle.search(text) and "import telemetry_off" not in text and path.name != "test_publish_release.py":
+                missing.append(path.name)
+        self.assertEqual(missing, [])
 
     def test_the_real_transport_posts_json_to_the_fixed_endpoint_and_follows_no_redirect(self):
         seen = {}
@@ -835,9 +1066,8 @@ class QueueTests(TelemetryCase):
                 super().open(request, timeout)
                 return Response()
 
-        with patch.object(telemetry, "_under_test_runner", return_value=False), \
-                patch.object(telemetry, "build_opener", return_value=Opener2()) as build:
-            self.assertEqual(telemetry._post(b'{"a":1}', 5), (202, None))
+        with patch.object(telemetry, "build_opener", return_value=Opener2()) as build:
+            self.assertEqual(telemetry_off.REAL_POST(b'{"a":1}', 5), (202, None))
         self.assertEqual(seen, {"url": "https://telemetry.bighelp.app/v1/batch", "method": "POST", "timeout": 5,
                                 "body": b'{"a":1}', "type": "application/json"})
         self.assertIsInstance(build.call_args.args[0], telemetry._NoRedirect)
@@ -851,13 +1081,13 @@ class QueueTests(TelemetryCase):
             def open(self, request, timeout): raise self.error
 
         limited = HTTPError(telemetry.ENDPOINT, 429, "slow", {"Retry-After": "45"}, None)
-        with patch.object(telemetry, "_under_test_runner", return_value=False):
-            with patch.object(telemetry, "build_opener", return_value=Failing(limited)):
-                self.assertEqual(telemetry._post(b"{}", 5), (429, 45))
-            with patch.object(telemetry, "build_opener", return_value=Failing(HTTPError(telemetry.ENDPOINT, 503, "x", {}, None))):
-                self.assertEqual(telemetry._post(b"{}", 5), (503, None))
-            with patch.object(telemetry, "build_opener", return_value=Failing(OSError("alice@example.com"))):
-                self.assertEqual(telemetry._post(b"{}", 5), (0, None))
+        post = telemetry_off.REAL_POST
+        with patch.object(telemetry, "build_opener", return_value=Failing(limited)):
+            self.assertEqual(post(b"{}", 5), (429, 45))
+        with patch.object(telemetry, "build_opener", return_value=Failing(HTTPError(telemetry.ENDPOINT, 503, "x", {}, None))):
+            self.assertEqual(post(b"{}", 5), (503, None))
+        with patch.object(telemetry, "build_opener", return_value=Failing(OSError("alice@example.com"))):
+            self.assertEqual(post(b"{}", 5), (0, None))
 
 
 class SenderTests(TelemetryCase):
@@ -926,6 +1156,45 @@ class SenderTests(TelemetryCase):
         self.stream.muted = True
         telemetry._flush_at_exit()
         self.assertEqual(len(timeouts), 1)
+
+    def test_a_blackholed_endpoint_cannot_hold_up_the_exit(self):
+        release = threading.Event()
+        calls = []
+
+        def blackhole(body, timeout):
+            calls.append(json.loads(body))
+            release.wait(30)
+            return 0, None
+        telemetry.set_transport(blackhole)
+        with patch.object(telemetry, "_ensure_sender", lambda stream: None):
+            for number in range(120):
+                telemetry.tool_completed(tool="terminal", duration_ms=number, outcome="ok")
+        started = time.monotonic()
+        with patch.object(telemetry, "FLUSH_SECONDS", 3600):
+            telemetry._flush_at_exit()
+        elapsed = time.monotonic() - started
+        release.set()
+        self.assertLess(elapsed, telemetry.EXIT_JOIN_SECONDS + 1.0)
+        self.assertGreaterEqual(elapsed, telemetry.EXIT_JOIN_SECONDS - 0.2)
+        self.assertEqual(len(calls), 1, "one batch at most")
+        self.assertEqual(len(calls[0]["events"]), 50)
+
+    def test_a_real_process_exits_promptly_with_a_blackholed_endpoint(self):
+        script = (
+            "import sys, time, threading\n"
+            "from loopdy_plugin import host_telemetry as t\n"
+            "t.set_transport(lambda body, timeout: (time.sleep(60), (0, None))[1])\n"
+            "t.tool_completed(tool='terminal', duration_ms=1, outcome='ok')\n"
+            "print('queued', flush=True)\n"
+        )
+        environment = {key: value for key, value in os.environ.items() if not key.startswith(("BIGHELP_", "LOOPDY_", "DO_NOT"))}
+        environment["HERMES_HOME"] = str(self.home)
+        environment["PYTHONPATH"] = os.pathsep.join([str(ROOT), *sys.path[1:]])
+        started = time.monotonic()
+        done = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True, text=True, timeout=30)
+        elapsed = time.monotonic() - started
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "queued"), done.stderr[-400:])
+        self.assertLess(elapsed, 8.0)
 
     def test_an_exit_with_telemetry_off_sends_nothing(self):
         telemetry.tool_completed(tool="terminal", duration_ms=1, outcome="ok")
