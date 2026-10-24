@@ -696,7 +696,8 @@ def draft_message(key: str, value: object) -> str:
     if not text.strip():
         _raise("invalid_value", f"Message {key} is only spaces")
     rest = _PLACEHOLDER.sub("", text)
-    if "{{" in rest or "}}" in rest:
+    # The app refuses a brace next to a placeholder ({{{name}}}), so the host does too.
+    if "{{" in rest or "}}" in rest or "{{{" in text or "}}}" in text:
         _raise("invalid_placeholder", f"Message {key} has an unbalanced placeholder")
     unknown = sorted(set(_PLACEHOLDER.findall(text)) - DRAFT_PLACEHOLDERS[key])
     if unknown:
@@ -738,13 +739,21 @@ def draft_props(element_type: str, props: dict[str, object]) -> None:
         _draft_marks(element_type, fields, props["marks"])
 
 
+def _draft_line(value: object, maximum: int, what: str) -> str:
+    """One line of draft text that says something: spaces alone are no value."""
+    text = _string(value, maximum, what)
+    if not text.strip():
+        _raise("invalid_value", f"{what} is only spaces; leave it out instead")
+    return text
+
+
 def _contact_draft_fields(fields: object) -> None:
     _object(fields, _CONTACT_FIELDS, set())
     if not fields:
         _raise("missing_field", "A contact draft needs at least one field")
     for key in _CONTACT_TEXT_FIELDS:
         if key in fields:
-            _string(fields[key], 200, key)
+            _draft_line(fields[key], 200, key)
     for key, check in (("phones", _phone), ("emails", _email)):
         if key not in fields:
             continue
@@ -762,7 +771,7 @@ def _contact_draft_fields(fields: object) -> None:
         if not address:
             _raise("missing_field", "Leave postal_address out when there's no address")
         for key, part in address.items():
-            _string(part, 100, f"Address {key}")
+            _draft_line(part, 100, f"Address {key}")
 
 
 def _event_draft_fields(fields: object) -> None:
@@ -770,7 +779,7 @@ def _event_draft_fields(fields: object) -> None:
     if not fields:
         _raise("missing_field", "An event draft needs at least one field")
     if "title" in fields:
-        _string(fields["title"], 200, "title")
+        _draft_line(fields["title"], 200, "title")
     for key, maximum in (("location", 500), ("notes", 2_000)):
         if key in fields:
             text = _text(fields[key])
@@ -796,7 +805,11 @@ def _event_draft_fields(fields: object) -> None:
     if ends is not None and (begins is None or ends <= begins):
         _raise("invalid_time_range", "end must come after start")
     if "time_zone" in fields:
-        _draft_time_zone(fields["time_zone"])
+        zone = _draft_time_zone(fields["time_zone"])
+        for key in ("start", "end"):
+            if zone is not None and key in fields and not _offset_matches(fields[key], zone):
+                _raise("invalid_time_zone", f"{key}'s offset isn't {fields['time_zone']}'s at that time; "
+                                            "give the offset the zone has then")
 
 
 def _draft_time(value: object, key: str) -> datetime:
@@ -820,14 +833,14 @@ def _draft_date(value: object) -> date:
 _ZONE_DATA: bool | None = None
 
 
-def _draft_time_zone(value: object) -> None:
+def _draft_time_zone(value: object) -> Any:
+    """The zone, or None on a host that can't look names up (it keeps the shape check)."""
     global _ZONE_DATA
     if not isinstance(value, str) or len(value) > 64 or not _TIME_ZONE.fullmatch(value):
         _raise("invalid_time_zone", "time_zone must be an IANA name like America/Los_Angeles")
     import zoneinfo
     try:
-        zoneinfo.ZoneInfo(value)
-        return
+        return zoneinfo.ZoneInfo(value)
     except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
         pass
     if _ZONE_DATA is None:
@@ -835,6 +848,13 @@ def _draft_time_zone(value: object) -> None:
         _ZONE_DATA = bool(zoneinfo.available_timezones())
     if _ZONE_DATA:
         _raise("invalid_time_zone", "time_zone must be an IANA name like America/Los_Angeles")
+    return None
+
+
+def _offset_matches(value: object, zone: Any) -> bool:
+    """Whether an RFC 3339 time's own offset is the one ``zone`` has at that instant (B15)."""
+    stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return stamp.utcoffset() == stamp.astimezone(zone).utcoffset()
 
 
 def _draft_marks(element_type: str, fields: dict[str, object], marks: object) -> None:

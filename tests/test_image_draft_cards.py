@@ -163,6 +163,8 @@ class DraftCardTests(unittest.TestCase):
             ("failed", "No {{reason}", "invalid_placeholder"),
             ("failed", "No {{reason}} }}", "invalid_placeholder"),
             ("saved", "{{ name }}", "invalid_placeholder"),
+            ("review", "x{{{destination}}}", "invalid_placeholder"),
+            ("saved", "{{name}}}", "invalid_placeholder"),
             ("review", "   ", "invalid_value"),
             ("review", "", "limit_exceeded"),
             ("review", "x" * 501, "limit_exceeded"),
@@ -181,7 +183,8 @@ class DraftCardTests(unittest.TestCase):
             "limit_exceeded": [{"given_name": "n" * 201}, {"phones": [phone] * 6}, {"phones": []},
                                {"phones": [{"label": "l" * 41, "value": "555"}]},
                                {"postal_address": {"city": "c" * 101}}, {"given_name": ""}],
-            "invalid_value": [{"given_name": "Riley\nMoss"}],
+            "invalid_value": [{"given_name": "Riley\nMoss"}, {"given_name": "   "}, {"organization": " \t "},
+                              {"postal_address": {"city": "  "}}, {"job_title": "\u00a0"}],
             "invalid_phone": [{"phones": [{"value": "call me"}]}, {"phones": [{"value": "555 0142 ext 9"}]}],
             "invalid_email": [{"emails": [{"value": "riley at example"}]}],
             "unknown_field": [{"notes": "Met at a fair"}, {"name": "Riley Moss"},
@@ -197,7 +200,12 @@ class DraftCardTests(unittest.TestCase):
         timed = {"title": "Night Market", "start": "2030-06-15T18:00:00-07:00",
                  "end": "2030-06-15T19:00:00-07:00", "time_zone": "America/Los_Angeles"}
         validate(with_fields(event(), timed))
-        validate(with_fields(event(), {**timed, "end": "2030-06-16T02:00:00Z"}))
+        # Without a time zone any offset will do; with one, each offset must be the zone's (B15).
+        validate(with_fields(event(), {**{k: v for k, v in timed.items() if k != "time_zone"},
+                                       "end": "2030-06-16T02:00:00Z"}))
+        with self.assertRaises(BighelpCardError) as caught:
+            validate(with_fields(event(), {**timed, "end": "2030-06-16T02:00:00Z"}))
+        self.assertEqual("invalid_time_zone", caught.exception.code)
         validate(with_fields(event(), {"title": "Night Market", "start": "2030-06-15T18:00:00-07:00"}))
         validate(with_fields(event(), {"title": "Night Market", "all_day": True, "start_date": "2030-06-15"}))
         validate(with_fields(event(), {"title": "Night Market", "all_day": True,
