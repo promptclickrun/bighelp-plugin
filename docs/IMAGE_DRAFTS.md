@@ -21,8 +21,9 @@ Three tools, in the `bighelp` toolset:
 | `bighelp_draft_event` | `fields`, `marks`, `image`, `replaces` | An `event_draft` card (one event) |
 | `bighelp_offer_photo_action` | `preset` (`business_card` or `event_poster`), `question` (one line, ≤ 300) | A selection card that asks first |
 
-- `image` is 1 for the newest picture the person sent in this chat, 2 for the one before, up to 10.
-  Default 1. The agent never names a file.
+- The source is a picture in this chat: a picture the person sent, or a photo the agent read from their
+  library with `iphone_photos` `get` in this chat. `image` is 1 for the newest of them, 2 for the one before,
+  up to 10. Default 1. The agent never names a file.
 - `replaces` is the `draft_id` of an earlier draft of the same kind in this chat. A draft still awaiting
   review becomes `replaced`. A decided one can't be replaced (`draft_decided`).
 - The draft tools return the usual `loopdy.card_delivery` (`schema`, `version`, `card`,
@@ -37,7 +38,7 @@ Three tools, in the `bighelp` toolset:
 | Code | When |
 | --- | --- |
 | `drafts_unavailable` | The chat's app didn't list the draft object in `renders` (an older bighelp: the message says to update it), or the call isn't in a chat with the person |
-| `no_source_image` | No picture from the person at that position, or the file is gone or isn't a picture |
+| `no_source_image` | No picture at that position (the person's, or a library photo this chat read), or the file is gone or isn't a picture |
 | `offer_off` | The offer tool, when the person turned offers off for that preset |
 | `draft_not_found`, `draft_decided` | A bad `replaces` |
 | `invalid_arguments` | Unknown arguments, a bad `image`, `replaces`, `preset` or `question` |
@@ -87,7 +88,14 @@ plugin reads both, in plain or JSON-list content:
   `@image:<path>` line per picture (the path quoted with backticks or quotes when it holds spaces).
 - `agent/image_routing.py` `build_native_content_parts`: `[Image attached at: <path>]`.
 
-Pictures are counted newest first; in one message, the last one listed is the newest. The chosen file must
+Photos the agent read from the person's library with `iphone_photos` `get` count too. The plugin writes each
+one to `bighelp/phone-photos/<sha256 prefix>.jpg` in the agent's Hermes home and notes which chats read it in
+`bighelp/phone-photos-fetched.sqlite3` beside that folder (owner-only; the chat, the file name and when, at
+most 500 rows, none older than the folder's 7 days). Only those notes for this chat and the chats it
+continues count, and only files still in the folder: a picture the folder pruned is skipped.
+
+Pictures and library photos are counted together, newest first by when each entered the chat (the message's
+time, or when the photo was read); in one message, the last one listed is the newest. The chosen file must
 be an absolute path to a regular file (symlinks resolved), 1 byte to 25 MB, outside Hermes' denied paths,
 and a JPEG, PNG, GIF, WebP or HEIC/HEIF by its first bytes. The card carries `image_id` (the first 32 hex
 characters of the file's SHA-256) and `mime_type`, never the path.
@@ -250,4 +258,6 @@ sent it, `replacedBy` for `replaced`. `updatedAt` is UTC, to the second.
 - `decisionId` is a lowercase UUID the app makes for each Save tap. `fieldsHash` is the SHA-256 (hex) of the
   canonical JSON of the reviewed fields.
 - The source route reads only the draft's own picture, a piece at a time, after checking that the file has
-  the same path, size and modification time as when the draft was made.
+  the same path, size and modification time as when the draft was made. A file with a new modification time
+  still serves when its size and SHA-256 prefix match the draft's `image_id` (`iphone_photos` `get` touches a
+  picture it reads again).

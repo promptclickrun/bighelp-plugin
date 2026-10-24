@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from loopdy_plugin import image_drafts, people
+from loopdy_plugin import device_photos, image_drafts, people
 from loopdy_plugin.generative_ui import extract_rendered_envelope
 from loopdy_plugin.image_drafts import DraftError, ImageDraftStore, Picture
 from loopdy_plugin.people import PeopleStore
@@ -284,6 +284,72 @@ class DraftToolTests(HostCase):
                     self.assertIn(words, description)
         self.assertIn("year, a time zone or an end time", self.context.schemas["bighelp_draft_event"]["description"])
         self.assertNotIn("path", json.dumps(self.context.schemas["bighelp_draft_contact"]["parameters"]))
+
+
+def phone_jpeg(seed: int) -> bytes:
+    """A JPEG's headers around filler, whole enough for photos.get's checks (as in test_iphone_device_capabilities)."""
+    frame = b"\xff\xc0\x00\x11\x08" + (512).to_bytes(2, "big") + (768).to_bytes(2, "big") \
+        + b"\x03\x01\x11\x00\x02\x11\x01\x03\x11\x01"
+    scan = b"\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00\x3f\x00"
+    body = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + frame + scan
+    return body + bytes((n * seed) % 251 for n in range(1_500)) + b"\xff\xd9"
+
+
+class PhoneLibraryPhotoTests(HostCase):
+    """A photo the agent read with iphone_photos get in this chat is a picture of this chat too."""
+
+    def fetch(self, seed: int, session: str = CHAT) -> str:
+        """What the hub does with a photos.get answer: store the picture, then note which chat read it."""
+        import base64
+        directory = self.home / "bighelp" / "phone-photos"
+        self.clock += 10
+        picture = device_photos.store_picture({"data": base64.b64encode(phone_jpeg(seed)).decode()}, directory,
+                                              now=time.time())
+        device_photos.record_fetched(directory, [session], picture["path"], now=self.clock)
+        return picture["path"]
+
+    def image_id(self, data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()[:32]
+
+    def test_a_photo_read_in_this_chat_is_a_source_and_its_bytes_are_served(self) -> None:
+        path = self.fetch(7)
+        props = self.props(self.draft_contact())
+        self.assertEqual({"image_id": self.image_id(phone_jpeg(7)), "mime_type": "image/jpeg"}, props["source"])
+        row = self.store.source(props["draft_id"], [CHAT])
+        self.assertEqual(path, row["source_path"])
+        self.assertEqual(phone_jpeg(7), __import__("base64").b64decode(image_drafts.read_source(row, 0)["data"]))
+        # photos.get fetching the same picture again only touches it: still the draft's picture.
+        self.fetch(7)
+        self.assertEqual("image/jpeg", image_drafts.read_source(self.store.source(props["draft_id"], [CHAT]), 0)
+                         ["mimeType"])
+
+    def test_a_photo_read_in_another_chat_is_not(self) -> None:
+        self.fetch(7, session=OTHER_CHAT)
+        self.assertEqual("no_source_image", self.draft_contact()["error"])
+
+    def test_pictures_and_library_photos_count_together_newest_first(self) -> None:
+        self.send([self.picture("upload_first.jpg", JPEG + b"first")])
+        self.fetch(11)
+        self.send([self.picture("upload_last.jpg", JPEG + b"last")])
+        self.assertEqual(self.image_id(JPEG + b"last"), self.props(self.draft_contact())["source"]["image_id"])
+        self.assertEqual(self.image_id(phone_jpeg(11)), self.props(self.draft_contact(image=2))["source"]["image_id"])
+        self.assertEqual(self.image_id(JPEG + b"first"), self.props(self.draft_contact(image=3))["source"]["image_id"])
+        self.assertEqual("no_source_image", self.draft_contact(image=4)["error"])
+
+    def test_a_pruned_library_photo_is_skipped(self) -> None:
+        self.send([self.picture("upload_card.jpg")])
+        gone = self.fetch(13)
+        os.remove(gone)
+        self.assertEqual(self.image_id(JPEG), self.props(self.draft_contact())["source"]["image_id"])
+        self.assertEqual("no_source_image", self.draft_contact(image=2)["error"])
+
+    def test_a_compacted_chat_keeps_the_photos_it_read(self) -> None:
+        self.fetch(17)
+        continued = "20261024_121500_cont01"
+        self.db.create_session(continued, "bighelp", parent_session_id=CHAT)
+        self.people.set_renders(continued, ["contact_draft"])
+        result = self.call("bighelp_draft_contact", {"fields": contact_fields()}, session=continued)
+        self.assertEqual(self.image_id(phone_jpeg(17)), self.props(result)["source"]["image_id"])
 
 
 class OfferToolTests(HostCase):

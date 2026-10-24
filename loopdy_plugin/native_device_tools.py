@@ -851,7 +851,7 @@ class NativeDeviceToolHub:
                 # across either execution path without cross-loop awaits.
                 shared_result = asyncio.wrap_future(pending.future, loop=asyncio.get_running_loop())
                 result = await asyncio.wait_for(asyncio.shield(shared_result), timeout=remaining)
-                return self._for_agent(operation, result, profile)
+                return self._for_agent(operation, result, profile, session_id)
             except asyncio.TimeoutError:
                 with self._lock:
                     result = self._give_up(pending)
@@ -905,7 +905,8 @@ class NativeDeviceToolHub:
                 ids.append(stored_id)
         return ids
 
-    def _for_agent(self, operation: str, result: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
+    def _for_agent(self, operation: str, result: dict[str, Any], profile: str | None = None,
+                   session_id: str | None = None) -> dict[str, Any]:
         """What the agent reads. A photo from photos.get becomes a file on this host; the bytes end here."""
         if result.get("status") == "failed" and result.get("code") == "review_required":
             kept = result.get("payload") if isinstance(result.get("payload"), dict) else {}
@@ -926,6 +927,12 @@ class NativeDeviceToolHub:
             # Only a fixed code is logged: the picture's bytes and its path are the user's.
             logger.warning("bighelp phone photo not stored: %s", getattr(exc, "code", type(exc).__name__))
             return _failed_result(result.get("requestId"), getattr(exc, "code", "photo_unavailable"))
+        if session_id:
+            try:
+                # The chat that read it may make a photo draft from it (image_drafts.py).
+                device_photos.record_fetched(directory, self._stored_ids(session_id), picture["path"])
+            except (OSError, sqlite3.Error) as exc:
+                logger.warning("bighelp phone photo not recorded: %s", type(exc).__name__)
         return {**result, "payload": {**rest, "image": picture}}
 
 

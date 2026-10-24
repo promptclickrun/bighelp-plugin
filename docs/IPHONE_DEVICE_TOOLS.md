@@ -165,6 +165,8 @@ and not to try the tool again. See [Photo actions](IMAGE_DRAFTS.md).
   owner-only), and gives the agent `image: {format, width, height, path}` so it can look at the picture with its
   vision tool. The folder keeps the newest 50 pictures from the last 7 days. A picture that isn't a JPEG within the
   limits is `photo_unreadable`. `photos.get` never gives the agent picture data, even in a failed result.
+  The plugin also notes which chat read the picture (`bighelp/phone-photos-fetched.sqlite3`), so that chat's
+  agent can make a contact or event draft from it ([Photo actions](IMAGE_DRAFTS.md)).
 - `photos.save` takes a file on the host. The plugin checks it the way `attachments/resolve` checks files an agent
   sends: the gateway's delivery policy decides which files an agent may send, the file must be a picture or video,
   and it can be at most 50 MB. Refusals are `invalid_arguments`, `unsupported_media` (including kinds the gateway doesn't deliver, such as

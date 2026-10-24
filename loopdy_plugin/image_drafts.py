@@ -595,9 +595,9 @@ def picture_paths(text: str) -> list[str]:
     return paths
 
 
-def person_pictures(db_path: Path, lineage: list[str]) -> list[str]:
-    """Pictures the person sent in this chat, newest first: only their own messages, never a tool's or
-    the agent's, and never a path anyone typed into a tool call."""
+def _person_pictures(db_path: Path, lineage: list[str]) -> list[tuple[float, str]]:
+    """`(when, path)` of pictures the person sent in this chat, newest first: only their own messages, never a
+    tool's or the agent's, and never a path anyone typed into a tool call."""
     if not db_path.is_file() or not lineage:
         return []
     uri = db_path.resolve().as_uri() + "?mode=ro"
@@ -609,15 +609,32 @@ def person_pictures(db_path: Path, lineage: list[str]) -> list[str]:
         if "display_kind" in columns:
             # Hermes' own notes and wakes are stored as user rows; a steer is the person typing mid-turn.
             conditions.append("(display_kind IS NULL OR display_kind = 'steer')")
-        rows = db.execute(f"SELECT content FROM messages WHERE {' AND '.join(conditions)} "
+        rows = db.execute(f"SELECT timestamp, content FROM messages WHERE {' AND '.join(conditions)} "
                           "ORDER BY timestamp DESC, id DESC LIMIT ?", (*lineage, _SCAN_ROWS)).fetchall()
-    pictures: list[str] = []
-    for (content,) in rows:
+    pictures: list[tuple[float, str]] = []
+    for timestamp, content in rows:
         for path in reversed(picture_paths(_message_text(content))):
-            if path not in pictures:
-                pictures.append(path)
-            if len(pictures) >= MAX_PICTURES:
-                return pictures
+            pictures.append((float(timestamp or 0), path))
+    return pictures
+
+
+def chat_pictures(home: Path, lineage: list[str]) -> list[str]:
+    """The pictures this chat holds, newest first by when each entered it: the person's own, and the photos
+    the agent read from their library with iphone_photos in this chat (device_photos keeps which chat read
+    which). A phone photo the folder already pruned is skipped. Never a path from the agent."""
+    from . import device_photos
+    entries = _person_pictures(home / "state.db", lineage)
+    try:
+        entries += device_photos.fetched_pictures(home / "bighelp" / "phone-photos", lineage)
+    except (OSError, sqlite3.Error) as error:
+        logger.debug("bighelp phone photos unreadable: %s", type(error).__name__)
+    # sorted() keeps each message's own order for ties, so its last picture stays the newest.
+    pictures: list[str] = []
+    for _when, path in sorted(entries, key=lambda entry: entry[0], reverse=True):
+        if path not in pictures:
+            pictures.append(path)
+        if len(pictures) >= MAX_PICTURES:
+            break
     return pictures
 
 
@@ -694,9 +711,13 @@ def read_source(row: Any, offset: int) -> dict[str, Any]:
         path = Path(row["source_path"])
         resolved = path.resolve(strict=True)
         status = os.stat(resolved)
-        if (str(resolved) != row["source_path"] or not stat.S_ISREG(status.st_mode)
-                or f"{status.st_size}:{status.st_mtime_ns}" != row["source_stamp"] or _denied(resolved)):
+        if str(resolved) != row["source_path"] or not stat.S_ISREG(status.st_mode) or _denied(resolved):
             raise unavailable
+        if f"{status.st_size}:{status.st_mtime_ns}" != row["source_stamp"]:
+            # photos.get touches a picture it fetches again; the same bytes are still the draft's picture.
+            again = inspect_picture(str(resolved))
+            if again is None or again.image_id != row["image_id"] or again.size != row["source_bytes"]:
+                raise unavailable
         total = status.st_size
         if offset >= total:
             raise DraftError(422, "invalid_request", "The offset is past the end of the picture.")
@@ -782,12 +803,14 @@ def _sources(session_id: str, image: Any) -> tuple[Path, list[str], Picture]:
         image = 1
     if isinstance(image, bool) or not isinstance(image, int) or not 1 <= image <= MAX_PICTURES:
         raise _ToolError("invalid_arguments",
-                         f"image is 1 (the newest picture the person sent here) to {MAX_PICTURES}.")
-    db_path = current_home() / "state.db"
+                         f"image is 1 (the newest picture in this chat) to {MAX_PICTURES}.")
+    home = current_home()
+    db_path = home / "state.db"
     lineage = session_lineage(db_path, session_id)
-    pictures = person_pictures(db_path, lineage)
+    pictures = chat_pictures(home, lineage)
     if len(pictures) < image:
-        raise _ToolError("no_source_image", "There's no picture from the person in this chat"
+        raise _ToolError("no_source_image", "There's no picture from the person, or photo you read with "
+                         "iphone_photos, in this chat"
                          + ("" if image == 1 or not pictures else f" at position {image}") + ".")
     picture = inspect_picture(pictures[image - 1])
     if picture is None:
@@ -884,18 +907,18 @@ _BRIDGE = (" If Hermes has progressively disclosed this tool, run it through too
            "tool_call; never substitute another tool.")
 
 DRAFT_CONTACT_DESCRIPTION = (
-    "Make a contact draft from a picture the person sent in this bighelp chat (a business card), for them to "
-    "check and save in bighelp. Use it only when they asked for a contact; if they asked only about the picture, "
+    "Make a contact draft from a picture in this bighelp chat (a business card): one the person sent, or a "
+    "photo you read from their library with iphone_photos in this chat. They check and save it in bighelp. Use it only when they asked for a contact; if they asked only about the picture, "
     "just answer. " + _RULES + " Leave out what isn't in the picture. Mark a value you inferred as guessed and "
     "one that is hard to read as unclear (marks: field paths like given_name, phones.0, postal_address.city). "
-    "image: 1 is the newest picture the person sent here, 2 the one before. replaces: the draft_id of an "
+    "image: 1 is the newest picture in this chat, 2 the one before. replaces: the draft_id of an "
     "earlier draft in this chat that this one corrects. Nothing is saved until the person reviews it: put the "
     "returned display_markdown in your reply once and don't say it's saved."
     + _BRIDGE
 )
 DRAFT_EVENT_DESCRIPTION = (
-    "Make one calendar event draft from a picture the person sent in this bighelp chat (a poster or flyer), for "
-    "them to check and add in bighelp. Use it only when they asked for an event; if they asked only about the "
+    "Make one calendar event draft from a picture in this bighelp chat (a poster or flyer): one the person "
+    "sent, or a photo you read from their library with iphone_photos in this chat. They check and add it in bighelp. Use it only when they asked for an event; if they asked only about the "
     "picture, just answer. " + _RULES + " A timed event takes start and end (RFC 3339 with an offset) and "
     "time_zone (an IANA name); an all-day one takes all_day true, start_date and an end_date that is the day "
     "after the last day. Never guess a year, a time zone or an end time silently: leave it out and mark it "

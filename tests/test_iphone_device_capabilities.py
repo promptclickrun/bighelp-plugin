@@ -712,6 +712,16 @@ class PhotoResultTests(ChannelCase):
         self.assertNotIn(encoded[:60], everything)
         self.assertNotIn("data", picture)
 
+    async def test_the_chat_that_read_a_picture_is_noted_for_photo_drafts(self):
+        raw = _jpeg()
+        result = await self.get(_photo_payload(raw))
+        path = result["payload"]["image"]["path"]
+        self.assertEqual([path], [found for _when, found in device_photos.fetched_pictures(self.pictures,
+                                                                                            ["stored-session"])])
+        self.assertEqual([], device_photos.fetched_pictures(self.pictures, ["another-session"]))
+        record = self.pictures.parent / "phone-photos-fetched.sqlite3"
+        self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
+
     async def test_the_same_picture_keeps_one_file(self):
         raw = _jpeg()
         first = await self.get(_photo_payload(raw))
