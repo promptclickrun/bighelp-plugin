@@ -24,6 +24,9 @@ Only the [latest release](https://github.com/promptclickrun/bighelp-plugin/relea
   returned to the app or printed by `hermes bighelp status`.
 - **Notifications are sealed.** With current app builds, only the recipient phone can read an alert's text and
   picture. See [Notifications](docs/NOTIFICATIONS.md).
+- **Host telemetry is anonymous and has an off switch.** It sends timings, counts and fixed codes, never text,
+  paths, names or addresses. Turn it off with `DO_NOT_TRACK=1`, `BIGHELP_TELEMETRY=0` or
+  `hermes bighelp telemetry off`. See [Host telemetry](docs/HOST_TELEMETRY.md).
 - **Phone tools are opt-in.** iPhone Calendar, Reminders and Location tools work only after the user enables them,
   and only while bighelp is open on that chat. See [iPhone tools](docs/IPHONE_DEVICE_TOOLS.md).
 
