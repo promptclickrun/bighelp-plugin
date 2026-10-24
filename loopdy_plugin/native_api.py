@@ -1038,7 +1038,7 @@ def _image_drafts(kind: str, operation: str, body: BaseModel) -> dict:
         if operation == "states":
             return {"drafts": store.states(body.draftIds, lineage)}
         if operation == "source":
-            return image_drafts.read_source(store.source(body.draftId, lineage), body.offset)
+            return image_drafts.read_source(store.source(body.draftId, lineage), body.offset, home)
         if operation == "claim":
             return store.claim(body.draftId, lineage, decision_id=body.decisionId, fields_hash=body.fieldsHash,
                                destination=body.destination)
