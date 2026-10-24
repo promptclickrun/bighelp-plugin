@@ -112,7 +112,8 @@ Colors are limited to `primary`, `secondary`, `positive`, `warning`, `negative`,
 RGB values, font names, font sizes, frames, coordinates, blur radii, arbitrary
 SF Symbol names, or SwiftUI modifiers. Version 1 images are bundled symbols or
 assets only; remote image decoding is not supported. Object components
-(`contact`, `place`, `music`) are described below.
+(`contact`, `place`, `music`) and drafts (`contact_draft`, `event_draft`) are
+described below.
 
 ## Object components
 
@@ -175,6 +176,18 @@ app sends it when `/native/context` lists `native-card-objects-v1`).
   is rendered in any chat and would bypass this check.
 - `/native/context` lists `native-card-objects-v1` together with
   `native-people-v1`, since the chat's note is how the list arrives.
+
+### Drafts
+
+`contact_draft` and `event_draft` (feature `native-image-drafts-v1`) show a
+contact or an event that an agent read from the person's picture, for the person
+to check and save in bighelp. Only `bighelp_draft_contact` and
+`bighelp_draft_event` make them: `bighelp_render_card` and card templates refuse
+them (`drafts_tool_only`), and the card tool's parameters don't list them. A
+draft is the root and only element of its card. A chat's app lists them in
+`renders` like the objects above, and the draft tools refuse a chat that didn't
+(`drafts_unavailable`). Props, limits and the review flow are in
+[Photo actions](IMAGE_DRAFTS.md).
 
 ## Weather backgrounds
 

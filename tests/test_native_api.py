@@ -198,6 +198,8 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.plugin_links import available as plugin_links_available
         if plugin_links_available():
             expected.append("native-agent-plugin-links-v1")
+        if people_available():
+            expected.append("native-image-drafts-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

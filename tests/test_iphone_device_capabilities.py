@@ -536,6 +536,78 @@ class ChannelGatingTests(ChannelCase):
         self.assertEqual(self.hub.poll(self.owner, fields, after=0)["requests"], [])
 
 
+class HostPictureFenceTests(ChannelCase):
+    """contacts.create and calendar.create from a chat holding a picture stop at the host (docs/IMAGE_DRAFTS.md)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.picture_chats: set[str] = {"stored-session"}
+        self.asked: list[tuple[str, list[str]]] = []
+
+        def holds(profile: str, sessions: list[str]) -> bool:
+            self.asked.append((profile, list(sessions)))
+            return bool(self.picture_chats & set(sessions))
+
+        self.hub = NativeDeviceToolHub(clock=lambda: self.now, profile_session_validator=lambda profile, session: True,
+                                       photos_directory=lambda: self.pictures, picture_chat=holds)
+        self.channel_fields = self.fields(["contacts", "calendar"])
+        self.hub.connect(self.owner, self.channel_fields)
+        self.after = 0
+
+    def polled(self) -> list[dict]:
+        polled = self.hub.poll(self.owner, self.channel_fields, after=self.after)
+        self.after = polled["next"]
+        return [row["request"] for row in polled["requests"]]
+
+    async def test_a_create_in_a_picture_chat_never_reaches_the_phone(self):
+        calendar = {"title": "Night Market", "start": DATE, "end": LATER, "timeZone": "UTC"}
+        for number, (operation, arguments) in enumerate((("contacts.create", GOOD["contacts.create"][0]),
+                                                        ("calendar.create", calendar))):
+            with self.subTest(operation=operation):
+                result = await self.call(operation, arguments, f"call-{number}")
+                self.assertEqual(("failed", "review_required"), (result["status"], result["code"]))
+                self.assertIn("bighelp_draft_contact", result["payload"]["note"])
+                self.assertEqual([], self.polled())
+        self.assertEqual("default", self.asked[0][0])
+        self.assertIn("stored-session", self.asked[0][1])
+
+    async def test_other_operations_in_a_picture_chat_still_reach_the_phone(self):
+        for number, operation in enumerate(("contacts.list", "contacts.update", "contacts.delete")):
+            with self.subTest(operation=operation):
+                task = self.call(operation, GOOD[operation][0], f"call-{number}")
+                await asyncio.sleep(0)
+                [request] = self.polled()
+                self.assertEqual(operation, request["operation"])
+                self.answer(self.channel_fields, request, {"ok": True})
+                self.assertEqual("completed", (await task)["status"])
+
+    async def test_a_create_in_a_plain_chat_still_reaches_the_phone(self):
+        self.picture_chats.clear()
+        task = self.call("contacts.create", GOOD["contacts.create"][0])
+        await asyncio.sleep(0)
+        [request] = self.polled()
+        self.assertEqual("contacts.create", request["operation"])
+        self.answer(self.channel_fields, request, {"ok": True})
+        self.assertEqual("completed", (await task)["status"])
+
+    async def test_an_unreadable_history_lets_the_phone_decide(self):
+        import sqlite3
+
+        def broken(_profile, _sessions):
+            raise sqlite3.DatabaseError("file is not a database")
+
+        self.hub.picture_chat = broken
+        with self.assertLogs("hermes.plugins.bighelp", level="WARNING") as logs:
+            task = self.call("contacts.create", GOOD["contacts.create"][0])
+            await asyncio.sleep(0)
+            [request] = self.polled()
+        self.assertEqual("contacts.create", request["operation"])
+        self.assertIn("DatabaseError", logs.output[0])
+        self.assertNotIn("not a database", logs.output[0])
+        self.answer(self.channel_fields, request, {"ok": True})
+        self.assertEqual("completed", (await task)["status"])
+
+
 class TimeoutTests(ChannelCase):
     async def test_only_shortcuts_run_and_photos_save_wait_sixty_seconds(self):
         image = Path(self.temporary.name) / "ok.png"
@@ -711,6 +783,16 @@ class PhotoResultTests(ChannelCase):
         self.assertNotIn(encoded, everything)
         self.assertNotIn(encoded[:60], everything)
         self.assertNotIn("data", picture)
+
+    async def test_the_chat_that_read_a_picture_is_noted_for_photo_drafts(self):
+        raw = _jpeg()
+        result = await self.get(_photo_payload(raw))
+        path = result["payload"]["image"]["path"]
+        self.assertEqual([path], [found for _when, found in device_photos.fetched_pictures(self.pictures,
+                                                                                            ["stored-session"])])
+        self.assertEqual([], device_photos.fetched_pictures(self.pictures, ["another-session"]))
+        record = self.pictures.parent / "phone-photos-fetched.sqlite3"
+        self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
 
     async def test_the_same_picture_keeps_one_file(self):
         raw = _jpeg()

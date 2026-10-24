@@ -1,0 +1,40 @@
+{
+  "schema": "loopdy.card",
+  "version": 1,
+  "title": "Contact draft: Riley Moss",
+  "spoken_summary": "A contact draft for Riley Moss to review in bighelp. Nothing is saved yet.",
+  "data_sources": [],
+  "root": "draft",
+  "elements": {
+    "draft": {
+      "type": "contact_draft",
+      "props": {
+        "draft_id": "d_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "preset": "business_card",
+        "source": { "image_id": "5f0c3a9e1b7d4c2a8e6f0b1d3c5a7e9f", "mime_type": "image/jpeg", "width": 1200, "height": 800 },
+        "config_revision": 1,
+        "messages": {
+          "review": "Check the details before saving to {{destination}}.",
+          "missing_fields": "Please check: {{fields}}.",
+          "saved": "Saved {{name}} to {{destination}}.",
+          "failed": "That didn't save. {{reason}}",
+          "outcome_unknown": "It's not clear the contact saved. Check Contacts before you try again."
+        },
+        "fields": {
+          "given_name": "Riley",
+          "family_name": "Moss",
+          "organization": "Sample Studio",
+          "job_title": "Designer",
+          "phones": [{ "label": "work", "value": "+1 555 0142" }],
+          "emails": [{ "label": "work", "value": "riley@example.com" }],
+          "postal_address": { "street": "1 Sample Street", "city": "Sampleton", "country": "Exampleland" }
+        },
+        "marks": [
+          { "field": "job_title", "reason": "unclear" },
+          { "field": "postal_address.country", "reason": "guessed" }
+        ]
+      },
+      "children": []
+    }
+  }
+}
