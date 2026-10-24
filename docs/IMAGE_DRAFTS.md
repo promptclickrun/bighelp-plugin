@@ -229,6 +229,16 @@ Defaults:
 | `discarded` | The person discarded it | none |
 | `replaced` | A newer draft (`replacedBy`) corrects it | none |
 
+A claim never leaves a draft stuck. A draft `applying` for more than 15 minutes (`STALE_CLAIM_SECONDS`, 900)
+without a `finish` becomes `outcome_unknown` the first time anything reads it (`states`, `source`, `claim`,
+`finish`, `discard`, `reopen`, or the agent's next turn): the phone that claimed it may have been lost,
+erased or cut off mid-Save. The draft keeps its `decisionId`, gets no `reason`, and the agent hears the same
+"not clear it saved" note as for an explicit `outcome_unknown`. The person checks Contacts or Calendar; only
+their "It's not there" (`reopen`, sent with the `decisionId` from the host's view) puts the draft back, and
+nothing is ever retried by itself. A `finish` from the claiming decision is still accepted afterwards, since
+that phone knows what it wrote; a claim from another decision gets `409 draft_decided`. A stale draft is
+still never evicted while it is `applying`.
+
 The store keeps at most 500 drafts per agent: past that, decided drafts go first, then ones awaiting
 review, then unsure ones, the least recently changed first. A draft being applied is never dropped (so the
 store may hold more while many are). Drafts not changed for 180 days go too, except one being applied. For each draft it keeps the chat, the picture's path,

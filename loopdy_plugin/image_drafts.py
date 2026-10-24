@@ -63,6 +63,10 @@ MAX_LINEAGE = 16
 MAX_NOTES_PER_TURN = 10
 _SCAN_ROWS = 400
 _KEEP_SECONDS = 180 * 86_400
+# A Save that hasn't finished after this long (the phone was lost, erased or cut off mid-write) reads as
+# outcome_unknown: the person checks Contacts or Calendar, and only their reopen puts it back. Nothing is
+# retried by itself.
+STALE_CLAIM_SECONDS = 900
 
 DRAFT_ID = re.compile(r"d_[0-9a-f]{32}\Z")
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
@@ -396,6 +400,19 @@ class ImageDraftStore:
                        "AND state != 'applying' ORDER BY CASE state WHEN 'awaiting_review' THEN 1 "
                        "WHEN 'outcome_unknown' THEN 2 ELSE 0 END, updated, draft_id LIMIT ?)", (keep, extra))
 
+    def _expire(self, db: sqlite3.Connection) -> None:
+        """Turn Saves left unfinished past STALE_CLAIM_SECONDS into outcome_unknown, keeping their decision."""
+        now = self._now()
+        for row in db.execute("SELECT * FROM drafts WHERE state = 'applying' AND updated <= ?",
+                              (now - STALE_CLAIM_SECONDS,)).fetchall():
+            db.execute("UPDATE drafts SET state='outcome_unknown', reason=NULL, verified=NULL, note=?, updated=? "
+                       "WHERE draft_id=?", (_note(row["kind"], row["draft_id"], row["label"], "outcome_unknown",
+                                                  row["destination"], None, None), now, row["draft_id"]))
+
+    def _stale_claims(self, db: sqlite3.Connection) -> bool:
+        return db.execute("SELECT 1 FROM drafts WHERE state = 'applying' AND updated <= ? LIMIT 1",
+                          (self._now() - STALE_CLAIM_SECONDS,)).fetchone() is not None
+
     def _owned(self, db: sqlite3.Connection, draft_id: str, lineage: Iterable[str]) -> sqlite3.Row:
         row = db.execute("SELECT * FROM drafts WHERE draft_id = ?", (draft_id,)).fetchone()
         if row is None or row["session_id"] not in set(lineage):
@@ -425,13 +442,18 @@ class ImageDraftStore:
         lineage = set(lineage)
         wanted = list(dict.fromkeys(draft_ids))
         with self._db() as db:
+            stale = self._stale_claims(db)
+        with self._db(write=stale) as db:
+            if stale:
+                self._expire(db)
             rows = {row["draft_id"]: row for row in db.execute(
                 f"SELECT * FROM drafts WHERE draft_id IN ({','.join('?' for _ in wanted)})", wanted)} if wanted else {}
         return [self._view(rows[draft_id]) for draft_id in wanted
                 if draft_id in rows and rows[draft_id]["session_id"] in lineage]
 
     def source(self, draft_id: str, lineage: Iterable[str]) -> sqlite3.Row:
-        with self._db() as db:
+        with self._db(write=True) as db:
+            self._expire(db)
             return self._owned(db, draft_id, lineage)
 
     def _change(self, db: sqlite3.Connection, row: sqlite3.Row, **values: Any) -> dict[str, Any]:
@@ -443,6 +465,7 @@ class ImageDraftStore:
     def claim(self, draft_id: str, lineage: Iterable[str], *, decision_id: str, fields_hash: str,
               destination: str) -> dict[str, Any]:
         with self._db(write=True) as db:
+            self._expire(db)
             row = self._owned(db, draft_id, lineage)
             state = row["state"]
             if state == "awaiting_review":
@@ -460,6 +483,7 @@ class ImageDraftStore:
     def finish(self, draft_id: str, lineage: Iterable[str], *, decision_id: str, outcome: str,
                destination: str | None, reason: str | None, verified: bool | None) -> dict[str, Any]:
         with self._db(write=True) as db:
+            self._expire(db)
             row = self._owned(db, draft_id, lineage)
             state = row["state"]
             mine = row["decision_id"] == decision_id
@@ -479,6 +503,7 @@ class ImageDraftStore:
 
     def discard(self, draft_id: str, lineage: Iterable[str]) -> dict[str, Any]:
         with self._db(write=True) as db:
+            self._expire(db)
             row = self._owned(db, draft_id, lineage)
             state = row["state"]
             if state == "discarded":
@@ -493,6 +518,7 @@ class ImageDraftStore:
 
     def reopen(self, draft_id: str, lineage: Iterable[str], *, decision_id: str) -> dict[str, Any]:
         with self._db(write=True) as db:
+            self._expire(db)
             row = self._owned(db, draft_id, lineage)
             state = row["state"]
             if state == "awaiting_review":
@@ -512,9 +538,11 @@ class ImageDraftStore:
         query = (f"SELECT draft_id, note FROM drafts WHERE note IS NOT NULL AND session_id IN "
                  f"({','.join('?' for _ in lineage)}) ORDER BY updated, draft_id LIMIT ?")
         with self._db() as db:
-            if not db.execute(query, (*lineage, 1)).fetchone():
+            stale = self._stale_claims(db)
+            if not stale and not db.execute(query, (*lineage, 1)).fetchone():
                 return []  # the usual turn: nothing to tell, and no write
         with self._db(write=True) as db:
+            self._expire(db)
             rows = db.execute(query, (*lineage, MAX_NOTES_PER_TURN)).fetchall()
             for row in rows:
                 db.execute("UPDATE drafts SET note=NULL WHERE draft_id=?", (row["draft_id"],))

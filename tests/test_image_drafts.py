@@ -706,6 +706,50 @@ class StateMachineTests(unittest.TestCase):
         self.finish("saved")
         self.conflict("draft_decided", self.store.reopen, decision_id=DECISION)
 
+    def test_a_claim_left_too_long_reads_as_unsure(self) -> None:  # STALE_CLAIM_SECONDS
+        self.assertEqual(900, image_drafts.STALE_CLAIM_SECONDS)
+        self.claim()
+        self.clock[0] += 14 * 60
+        self.assertEqual("applying", self.store.states([self.draft], [CHAT])[0]["state"], "14 minutes is still fresh")
+        self.assertEqual([], self.store.take_notes([CHAT]))
+        self.clock[0] += 61
+        [view] = self.store.states([self.draft], [CHAT])
+        self.assertEqual(("outcome_unknown", "outcome_unknown", DECISION),
+                         (view["state"], view["outcome"], view["decisionId"]))
+        self.assertNotIn("reason", view)
+        self.assertEqual(self.clock[0], self.store.source(self.draft, [CHAT])["updated"], "the change is kept")
+        [note] = self.store.take_notes([CHAT])
+        self.assertIn(f"It's not clear the contact draft {self.draft} saved", note)
+        self.conflict("draft_decided", self.store.claim, decision_id=OTHER_DECISION, fields_hash=HASH,
+                      destination="x")
+        self.assertEqual("saved", self.finish("saved", verified=True)["state"], "the claiming phone may still finish")
+
+    def test_each_operation_sees_a_stale_claim_as_unsure(self) -> None:
+        operations = (
+            lambda: self.store.claim(self.draft, [CHAT], decision_id=DECISION, fields_hash=HASH, destination="x"),
+            lambda: self.finish("outcome_unknown"),
+            lambda: self.store.reopen(self.draft, [CHAT], decision_id=DECISION),
+            lambda: self.store.discard(self.draft, [CHAT]),
+        )
+        expected = ("outcome_unknown", "outcome_unknown", "awaiting_review", "discarded")
+        for operation, state in zip(operations, expected):
+            with self.subTest(state=state):
+                self.store.reopen(self.draft, [CHAT], decision_id=DECISION)
+                self.claim()
+                self.clock[0] += image_drafts.STALE_CLAIM_SECONDS + 1
+                self.assertEqual(state, operation()["state"])
+                if state == "discarded":
+                    break
+        notes = self.store.take_notes([CHAT])
+        self.assertTrue(any("isn't clear whether it saved earlier" in note for note in notes), notes)
+
+    def test_the_hook_hears_about_a_stale_claim(self) -> None:
+        self.claim()
+        self.clock[0] += image_drafts.STALE_CLAIM_SECONDS + 1
+        [note] = self.store.take_notes([CHAT])
+        self.assertIn("It's not clear", note)
+        self.assertEqual("outcome_unknown", self.store.states([self.draft], [CHAT])[0]["state"])
+
     def test_a_draft_belongs_to_its_chat(self) -> None:
         for operation, kwargs in ((self.store.claim, {"decision_id": DECISION, "fields_hash": HASH, "destination": "x"}),
                                   (self.store.discard, {}), (self.store.reopen, {"decision_id": DECISION})):
