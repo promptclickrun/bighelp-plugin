@@ -1,0 +1,39 @@
+{
+  "schema": "loopdy.card",
+  "version": 1,
+  "title": "Event draft: Night Market",
+  "spoken_summary": "An event draft for Night Market to review in bighelp. Nothing is saved yet.",
+  "data_sources": [],
+  "root": "draft",
+  "elements": {
+    "draft": {
+      "type": "event_draft",
+      "props": {
+        "draft_id": "d_8a7b6c5d4e3f20112233445566778899",
+        "preset": "event_poster",
+        "source": { "image_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "mime_type": "image/png" },
+        "config_revision": 1,
+        "messages": {
+          "review": "Check the date and time before adding it to {{destination}}.",
+          "missing_fields": "Please check: {{fields}}.",
+          "saved": "Added {{name}} to {{destination}}.",
+          "failed": "That didn't save. {{reason}}",
+          "outcome_unknown": "It's not clear the event saved. Check Calendar before you try again."
+        },
+        "fields": {
+          "title": "Night Market",
+          "location": "Harbor Hall",
+          "all_day": false,
+          "start": "2030-06-15T18:00:00-07:00",
+          "end": "2030-06-15T19:00:00-07:00",
+          "time_zone": "America/Los_Angeles"
+        },
+        "marks": [
+          { "field": "time_zone", "reason": "guessed" },
+          { "field": "end", "reason": "unclear" }
+        ]
+      },
+      "children": []
+    }
+  }
+}

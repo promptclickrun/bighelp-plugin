@@ -6,7 +6,7 @@ import json
 import logging
 import math
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
@@ -55,8 +55,11 @@ _ELEMENT_TYPES = {
 # a chat's app must have said it draws them (card_objects.py) before an agent
 # can use them, because older apps reject an unknown element type.
 OBJECT_TYPES = frozenset({"contact", "place", "music"})
+# Drafts the person reviews before anything is saved (docs/IMAGE_DRAFTS.md). Only the
+# draft tools make them, each alone in its card, and a chat's app must draw them too.
+DRAFT_TYPES = frozenset({"contact_draft", "event_draft"})
 _CONTAINERS = {"card", "vstack", "hstack", "grid"}
-_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES) - _CONTAINERS - {"list"}
+_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES | DRAFT_TYPES) - _CONTAINERS - {"list"}
 _SEMANTICS = {
     "primary",
     "secondary",
@@ -181,6 +184,7 @@ def validate_card_input(
     allow_live_data_for_testing: bool = False,
     warn: bool = True,
     allow_objects: bool = False,
+    allow_drafts: bool = False,
 ) -> dict[str, object]:
     reference = _utc(now, code="invalid_clock")
     encoded = canonical_json(payload)
@@ -234,18 +238,23 @@ def validate_card_input(
         _identifier(element_id)
     source_ids = {source["id"] for source in sources}
     for element_id, element in elements.items():
-        _element(element_id, element, source_ids, warn=warn, allow_objects=allow_objects)
+        _element(element_id, element, source_ids, warn=warn, allow_objects=allow_objects,
+                 allow_drafts=allow_drafts)
 
     root = _identifier(value["root"])
     _validate_tree(root, elements)
+    drafts = [element_id for element_id, element in elements.items() if element["type"] in DRAFT_TYPES]
+    if drafts and (len(elements) != 1 or drafts != [root]):
+        _raise("invalid_children", "A draft is the only element in its card")
     return value
 
 
 def render_card(
-    payload: object, *, now: datetime, allow_objects: bool = False
+    payload: object, *, now: datetime, allow_objects: bool = False, allow_drafts: bool = False
 ) -> dict[str, object]:
     created = _utc(now, code="invalid_clock")
-    validated = validate_card_input(payload, now=created, allow_objects=allow_objects)
+    validated = validate_card_input(payload, now=created, allow_objects=allow_objects,
+                                    allow_drafts=allow_drafts)
     content_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -297,8 +306,9 @@ def validate_card_result(payload: object, *, now: datetime) -> dict[str, object]
 
     card_input = {key: value[key] for key in input_keys if key in value}
     # render_card already warned about this document's unknown values.
-    # A rendered result was already allowed its objects when it was made.
-    validated = validate_card_input(card_input, now=created, warn=False, allow_objects=True)
+    # A rendered result was already allowed its objects (and drafts) when it was made.
+    validated = validate_card_input(card_input, now=created, warn=False, allow_objects=True,
+                                    allow_drafts=True)
     expected_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -376,6 +386,7 @@ def _element(
     *,
     warn: bool = True,
     allow_objects: bool = False,
+    allow_drafts: bool = False,
 ) -> None:
     _object(
         value,
@@ -389,7 +400,13 @@ def _element(
             f"Element {element_id}: contact, place and music components aren't available "
             "here. Use basic components (text, list, table, metric).",
         )
-    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES:
+    if element_type in DRAFT_TYPES and not allow_drafts:
+        _raise(
+            "drafts_tool_only",
+            f"Element {element_id}: contact and event drafts come only from bighelp_draft_contact "
+            "and bighelp_draft_event.",
+        )
+    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES | DRAFT_TYPES:
         _raise("unsupported_element", f"Element {element_id} has an unsupported type")
     props = value["props"]
     if not isinstance(props, dict):
@@ -508,6 +525,8 @@ def _element(
         _place(props)
     elif element_type == "music":
         _music(props)
+    elif element_type in DRAFT_TYPES:
+        draft_props(element_type, props)
 
 
 # Object component props are plain values, not bindings: they name one real
@@ -637,6 +656,221 @@ def _apple_music_url(value: str) -> None:
         or len(parts.path) < 2
     ):
         _raise("invalid_url", problem)
+
+
+# Drafts: what an agent read from the person's picture, for the person to check and save
+# themselves (docs/IMAGE_DRAFTS.md). The plugin sets the ids, the picture and the messages;
+# the agent's arguments become `fields` and `marks`.
+DRAFT_PRESETS = {"contact_draft": "business_card", "event_draft": "event_poster"}
+DRAFT_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif"})
+DRAFT_MESSAGE_KEYS = ("review", "missing_fields", "saved", "failed", "outcome_unknown")
+# The placeholders each message may hold; the app fills each in once, never recursively.
+DRAFT_PLACEHOLDERS = {
+    "review": frozenset({"destination"}),
+    "missing_fields": frozenset({"fields"}),
+    "saved": frozenset({"name", "destination"}),
+    "failed": frozenset({"reason"}),
+    "outcome_unknown": frozenset(),
+}
+DRAFT_MARK_REASONS = frozenset({"unclear", "guessed", "not_in_image", "conflicting"})
+MAX_DRAFT_MARKS = 20
+MAX_DRAFT_MESSAGE = 500
+_DRAFT_ID = re.compile(r"^d_[0-9a-f]{32}$")
+_PLACEHOLDER = re.compile(r"\{\{([^{}]*)\}\}")
+_CONTACT_TEXT_FIELDS = ("given_name", "family_name", "organization", "job_title")
+_CONTACT_FIELDS = {*_CONTACT_TEXT_FIELDS, "phones", "emails", "postal_address"}
+_EVENT_COMMON_FIELDS = {"title", "location", "notes", "all_day"}
+_EVENT_TIMED_FIELDS = {"start", "end", "time_zone"}
+_EVENT_DAY_FIELDS = {"start_date", "end_date"}
+_LIST_PATH = re.compile(r"^(phones|emails)\.(0|[1-9][0-9]*)$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIME_ZONE = re.compile(r"^[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*$")
+_MAX_REVISION = 9_007_199_254_740_991
+
+
+def draft_message(key: str, value: object) -> str:
+    """One review message: plain text, 1-500 characters, only its own placeholders."""
+    text = _text(value)
+    if len(text) > MAX_DRAFT_MESSAGE:
+        _raise("limit_exceeded", f"Message {key} is over {MAX_DRAFT_MESSAGE} characters")
+    if not text.strip():
+        _raise("invalid_value", f"Message {key} is only spaces")
+    rest = _PLACEHOLDER.sub("", text)
+    if "{{" in rest or "}}" in rest:
+        _raise("invalid_placeholder", f"Message {key} has an unbalanced placeholder")
+    unknown = sorted(set(_PLACEHOLDER.findall(text)) - DRAFT_PLACEHOLDERS[key])
+    if unknown:
+        allowed = ", ".join("{{" + name + "}}" for name in sorted(DRAFT_PLACEHOLDERS[key])) or "none"
+        _raise("invalid_placeholder", f"Message {key} may use only these placeholders: {allowed}")
+    return text
+
+
+def draft_props(element_type: str, props: dict[str, object]) -> None:
+    _props(
+        props,
+        {"draft_id", "preset", "source", "config_revision", "messages", "fields", "marks"},
+        {"draft_id", "preset", "source", "config_revision", "messages", "fields"},
+    )
+    if not isinstance(props["draft_id"], str) or not _DRAFT_ID.fullmatch(props["draft_id"]):
+        _raise("invalid_value", "draft_id must be d_ and 32 lowercase hex characters")
+    if props["preset"] != DRAFT_PRESETS[element_type]:
+        _raise("invalid_value", f"A {element_type} has preset {DRAFT_PRESETS[element_type]}")
+    source = props["source"]
+    _object(source, {"image_id", "mime_type", "width", "height"}, {"image_id", "mime_type"})
+    if not isinstance(source["image_id"], str) or not _HASH_32.fullmatch(source["image_id"]):
+        _raise("invalid_value", "The picture's image_id must be 32 lowercase hex characters")
+    _enum(source["mime_type"], set(DRAFT_IMAGE_TYPES))
+    for key in ("width", "height"):
+        if key in source and not 1 <= _integer(source[key]) <= 65_535:
+            _raise("invalid_value", f"The picture's {key} is out of range")
+    if not 1 <= _integer(props["config_revision"]) <= _MAX_REVISION:
+        _raise("invalid_value", "config_revision must be a positive integer")
+    messages = props["messages"]
+    _object(messages, set(DRAFT_MESSAGE_KEYS), set(DRAFT_MESSAGE_KEYS))
+    for key in DRAFT_MESSAGE_KEYS:
+        draft_message(key, messages[key])
+    fields = props["fields"]
+    if element_type == "contact_draft":
+        _contact_draft_fields(fields)
+    else:
+        _event_draft_fields(fields)
+    if "marks" in props:
+        _draft_marks(element_type, fields, props["marks"])
+
+
+def _contact_draft_fields(fields: object) -> None:
+    _object(fields, _CONTACT_FIELDS, set())
+    if not fields:
+        _raise("missing_field", "A contact draft needs at least one field")
+    for key in _CONTACT_TEXT_FIELDS:
+        if key in fields:
+            _string(fields[key], 200, key)
+    for key, check in (("phones", _phone), ("emails", _email)):
+        if key not in fields:
+            continue
+        entries = fields[key]
+        if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_OBJECT_ENTRIES:
+            _raise("limit_exceeded", f"{key} holds 1 to {MAX_OBJECT_ENTRIES} entries")
+        for entry in entries:
+            _object(entry, {"label", "value"}, {"value"})
+            if "label" in entry:
+                _string(entry["label"], 40, f"A {key[:-1]} label", allows_empty=True)
+            check(_string(entry["value"], 200, f"A {key[:-1]}"))
+    if "postal_address" in fields:
+        address = fields["postal_address"]
+        _object(address, _ADDRESS_FIELDS, set())
+        if not address:
+            _raise("missing_field", "Leave postal_address out when there's no address")
+        for key, part in address.items():
+            _string(part, 100, f"Address {key}")
+
+
+def _event_draft_fields(fields: object) -> None:
+    _object(fields, _EVENT_COMMON_FIELDS | _EVENT_TIMED_FIELDS | _EVENT_DAY_FIELDS, set())
+    if not fields:
+        _raise("missing_field", "An event draft needs at least one field")
+    if "title" in fields:
+        _string(fields["title"], 200, "title")
+    for key, maximum in (("location", 500), ("notes", 2_000)):
+        if key in fields:
+            text = _text(fields[key])
+            if len(text) > maximum:
+                _raise("limit_exceeded", f"{key} is over {maximum} characters")
+            if not text.strip():
+                _raise("invalid_value", f"{key} is only spaces")
+    all_day = fields.get("all_day", False)
+    if not isinstance(all_day, bool):
+        _raise("invalid_value", "all_day must be true or false")
+    other = _EVENT_TIMED_FIELDS if all_day else _EVENT_DAY_FIELDS
+    if other & set(fields):
+        _raise("variant_mismatch", "An all-day event takes start_date and end_date; a timed one takes "
+                                   "start, end and time_zone. Don't mix them.")
+    if all_day:
+        start = _draft_date(fields["start_date"]) if "start_date" in fields else None
+        end = _draft_date(fields["end_date"]) if "end_date" in fields else None
+        if end is not None and (start is None or end <= start):
+            _raise("invalid_time_range", "end_date is the day after the last day, after start_date")
+        return
+    begins = _draft_time(fields["start"], "start") if "start" in fields else None
+    ends = _draft_time(fields["end"], "end") if "end" in fields else None
+    if ends is not None and (begins is None or ends <= begins):
+        _raise("invalid_time_range", "end must come after start")
+    if "time_zone" in fields:
+        _draft_time_zone(fields["time_zone"])
+
+
+def _draft_time(value: object, key: str) -> datetime:
+    try:
+        return _timestamp(value)
+    except BighelpCardError as error:
+        raise BighelpCardError(
+            "invalid_value", f"{key} must be RFC 3339 with an offset, like 2030-06-15T18:00:00-07:00"
+        ) from error
+
+
+def _draft_date(value: object) -> date:
+    if isinstance(value, str) and _DATE.fullmatch(value):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    _raise("invalid_value", "A date must be YYYY-MM-DD")
+
+
+_ZONE_DATA: bool | None = None
+
+
+def _draft_time_zone(value: object) -> None:
+    global _ZONE_DATA
+    if not isinstance(value, str) or len(value) > 64 or not _TIME_ZONE.fullmatch(value):
+        _raise("invalid_time_zone", "time_zone must be an IANA name like America/Los_Angeles")
+    import zoneinfo
+    try:
+        zoneinfo.ZoneInfo(value)
+        return
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        pass
+    if _ZONE_DATA is None:
+        # A host without a time zone database (Windows without tzdata) can't check names; it keeps the shape check.
+        _ZONE_DATA = bool(zoneinfo.available_timezones())
+    if _ZONE_DATA:
+        _raise("invalid_time_zone", "time_zone must be an IANA name like America/Los_Angeles")
+
+
+def _draft_marks(element_type: str, fields: dict[str, object], marks: object) -> None:
+    if not isinstance(marks, list) or len(marks) > MAX_DRAFT_MARKS:
+        _raise("limit_exceeded", f"A draft takes at most {MAX_DRAFT_MARKS} marks")
+    seen: set[str] = set()
+    for mark in marks:
+        _object(mark, {"field", "reason"}, {"field", "reason"})
+        path = mark["field"]
+        reason = _enum(mark["reason"], set(DRAFT_MARK_REASONS))
+        if not isinstance(path, str) or path in seen:
+            _raise("invalid_mark", "Mark each field once")
+        seen.add(path)
+        present = _draft_path(element_type, fields, path)
+        if reason == "not_in_image" and present:
+            _raise("invalid_mark", f"{path} has a value, so it can't be not_in_image")
+
+
+def _draft_path(element_type: str, fields: dict[str, object], path: str) -> bool:
+    """Whether ``path`` names a real field of this draft, and whether it holds a value."""
+    if element_type == "contact_draft":
+        if path in _CONTACT_FIELDS:
+            return path in fields
+        match = _LIST_PATH.fullmatch(path)
+        if match and int(match[2]) < MAX_OBJECT_ENTRIES:
+            entries = fields.get(match[1])
+            return isinstance(entries, list) and int(match[2]) < len(entries)
+        prefix, _, part = path.partition(".")
+        if prefix == "postal_address" and part in _ADDRESS_FIELDS:
+            address = fields.get("postal_address")
+            return isinstance(address, dict) and part in address
+    else:
+        variant = _EVENT_DAY_FIELDS if fields.get("all_day") is True else _EVENT_TIMED_FIELDS
+        if path in _EVENT_COMMON_FIELDS | variant:
+            return path in fields
+    _raise("invalid_mark", f"Mark field {path!r} isn't a field of this draft")
 
 
 def _background(value: object, *, warn: bool) -> None:
