@@ -45,8 +45,11 @@ DEFAULT_INSTRUCTIONS = (
     "sentence. If the person trails off mid-sentence or says they have more, keep listening. "
     "Do not delegate greetings, small talk, a brief clarification "
     "question, or repeating a verified result already delivered. Do not guess or invent facts, "
-    "actions, permissions, job status, completion or results. While Hermes works, say briefly that "
-    "you are checking and keep listening for later utterances. Hermes runs each delegated request on "
+    "actions, permissions, job status, completion or results. When a request that needs Hermes sounds "
+    "complete, first say one short, natural line in your own words, such as \"On it, checking now\", then "
+    "delegate in the same response. Vary the wording. Never say you are checking without delegating, and "
+    "never imply the work is done or hint at a result. While Hermes works, keep listening for later "
+    "utterances and talk naturally; do not repeat the acknowledgment. Hermes runs each delegated request on "
     "its own, side by side: delegate a new request as soon as it is complete, without waiting for "
     "earlier work to finish, and keep talking with the person in between. A completed Hermes result is queued "
     "for the next free speaking moment; it does not end the call. Read speakable verified results "
@@ -699,6 +702,9 @@ class CodexLiveProvider(_LiveTransport):
         return {"sdp": sdp, "session": {"model": CODEX_MODEL,
                 "instructions": _instructions(instructions, context),
                 "audio": {"output": {"voice": voice}},
+                # ack_filler: False keeps the provider from speaking its own filler when the model delegates
+                # (the field is only in Codex's source, not OpenAI's docs). The model acknowledges in its own
+                # words, so a second filler would double up.
                 "delegation": {"type": "client", "ack_filler": False}}}
 
     def _decode_answer(self, answer: str, headers: Mapping[str, str]) -> tuple[str, str]:
@@ -798,7 +804,10 @@ class PublicLiveProvider(_LiveTransport):
         "sentence; if they trail off or say there's more, keep listening. "
         "Keep conversation natural while independent jobs run: each delegated request runs on its own, "
         "side by side, so delegate a new one as soon as it is complete, without waiting for earlier work "
-        "to finish, and keep talking with the person in between. Never "
+        "to finish, and keep talking with the person in between. When a request that needs the client "
+        "sounds complete, first say one short, natural line in your own words, such as \"On it, checking "
+        "now\", then delegate in the same response. Vary the wording. Never say you are checking without "
+        "delegating, and never imply the work is done or hint at a result. Never "
         "invent status or completion. Speak verified results naturally; do not expose "
         "private reasoning. Audio interruption does not cancel accepted jobs."
     )
