@@ -427,14 +427,22 @@ class ManagedNotificationTests(unittest.TestCase):
 
     def test_a_reaction_then_a_bare_marker_is_the_whole_reply(self):
         # Hermes retries a reply with no text, so an agent whose reaction says it all ends the turn
-        # on a marker. The reaction answered the person: no notice. A failed or removed reaction,
-        # or one from an earlier turn, doesn't count.
+        # on a marker. The reaction answered the person, so the alert says so, as a messaging app's
+        # does. A failed or removed reaction, or one from an earlier turn, doesn't count.
         def reacted(reactions, success=True):
             return [{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bighelp_react_to_message","arguments":"{}"}}]},
                     {"role":"tool","tool_call_id":"call-1","content":json.dumps({"schema":"loopdy.message-reaction","version":1,"success":success,"rowId":7,"targetRole":"user","reactions":reactions})}]
         thumbs=[{"emoji":"👍","author":"agent"}]
         with self.hermes_rules():
             self.chat_turn("turn-a","[SILENT]",tools=reacted(thumbs))
+            # Both reacted: the alert names the agent's emoji, not the person's.
+            self.chat_turn("turn-g","[SILENT]",tools=reacted([{"emoji":"❤️","author":"user"},{"emoji":"😂","author":"agent"}]))
+        self.assertEqual(self.alerts(),[("session.completed","Reacted 👍 to your message"),
+                                        ("session.completed","Reacted 😂 to your message")])
+        # Turns Hermes lets stay silent stay silent, reaction or not.
+        with self.hermes_rules():
+            self.chat_turn("turn-h","[SILENT]",tools=reacted(thumbs),prompt={"display_kind":"hidden"})
+            self.chat_turn("turn-i","[SILENT]",tools=reacted(thumbs),prompt={"display_metadata":{"reply_expected":False}})
         self.assertEqual(self.alerts(),[])
         notice="⚠️ The model returned only a silence marker for a message that needed a reply. Try again or rephrase."
         with self.hermes_rules():
