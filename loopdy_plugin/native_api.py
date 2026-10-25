@@ -764,8 +764,8 @@ async def _live_alerts_request(request: Request, model):
     if live_alerts.CAPABILITY not in owner.features:
         raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.")
     body = await _body(request, model)
-    from .managed_notifications import get_process_notifications
-    service = await run_in_threadpool(_live_alerts_call, get_process_notifications)
+    from .managed_notifications import get_managed_notifications
+    service = await run_in_threadpool(_live_alerts_call, get_managed_notifications)
     return owner, request_id, body, service
 
 
@@ -810,9 +810,9 @@ class _QuietHours(BaseModel):
 
 
 def _quiet_hours(body: _QuietHours) -> dict:
-    from .managed_notifications import ManagedNotificationError, get_process_notifications
+    from .managed_notifications import ManagedNotificationError, get_managed_notifications
     try:
-        return get_process_notifications().set_quiet_hours(
+        return get_managed_notifications().set_quiet_hours(
             body.grantId, enabled=body.enabled, start_minute=body.startMinute,
             end_minute=body.endMinute, time_zone=body.timeZone)
     except ManagedNotificationError as error:

@@ -467,12 +467,11 @@ class NativeAPITests(unittest.TestCase):
                 self.assertNotIn(str(self.home), json.dumps(events))
                 self.assertNotIn(str(self.home), refused.text)
 
-    def test_a_profile_scoped_request_opens_the_journal_the_producer_uses(self):
+    def test_a_profile_scoped_request_opens_that_profiles_journal_as_before(self):
         from loopdy_plugin.live_alerts import available as live_alerts_available
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
         if not live_alerts_available():
             self.skipTest("notifications need a POSIX host")
-        self.healthy_journal()
         profile_home = self.home / "profiles" / "research"
         app = FastAPI()
         app.state.auth_required = True
@@ -494,8 +493,27 @@ class NativeAPITests(unittest.TestCase):
             answered = scoped.post(PREFIX + "/alerts/listen", headers=self.headers(), json={
                 "listenerId": str(uuid.uuid4()), "grants": [grant], "waitSeconds": 0})
         self.assertEqual((answered.status_code, answered.json()["error"]["code"]), (404, "live_alerts_not_enrolled"))
-        self.assertFalse((profile_home / "plugin-data").exists(), "the profile's own folder was opened")
+        self.assertTrue(self.journal_directory(profile_home).exists(), "the profile's own journal was opened")
         self.journal_instances()
+
+    def test_a_briefly_unreadable_journal_keeps_the_capabilities_and_the_context_unchanged(self):
+        import sqlite3
+        from loopdy_plugin.live_alerts import available as live_alerts_available
+        from loopdy_plugin.quiet_hours import available as quiet_available
+        if not (live_alerts_available() and quiet_available()):
+            self.skipTest("notifications need a POSIX host")
+        self.healthy_journal()
+        sent = self.capture_telemetry()
+        healthy = self.context()
+        self.journal_instances()
+        with patch("loopdy_plugin.managed_notifications.ManagedNotifications",
+                   side_effect=sqlite3.OperationalError("database is locked")):
+            busy = self.context()
+        self.assertIn(self.LIVE_ALERTS, busy.json()["features"])
+        self.assertIn(self.QUIET_HOURS, busy.json()["features"])
+        self.assertNotIn("unavailable", busy.json())
+        self.assertEqual(busy.headers["etag"], healthy.headers["etag"])
+        self.assertEqual(sent(), [])
 
     def test_the_app_reads_and_sets_the_hosts_telemetry_switch(self):
         from loopdy_plugin import host_telemetry

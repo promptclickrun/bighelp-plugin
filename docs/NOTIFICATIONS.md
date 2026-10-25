@@ -325,10 +325,6 @@ The host's notification key and its grants, subscriptions, content keys and pend
 `<Hermes profile home>/plugin-data/loopdy/managed-notifications/`, owner-only. The key is created on first use
 and stays put when the plugin is updated.
 
-The dashboard routes (the app's alerts, Quiet Hours, enrollment and preferences) open the journal in the
-process's own Hermes home, never the folder of a profile that a request is scoped to. The hooks that queue the
-alerts register under that same home, so both use one journal.
-
 ### When the journal can't be opened
 
 The folder must be owned by the user that runs both the gateway and the dashboard. Its mode is 700 and its files
@@ -345,7 +341,9 @@ When it can't be opened, the plugin names one fixed code (never a path) in the h
 | `notification_private_storage_required` | The folder is a symlink or owned by another user, or one of the three files isn't 600 or isn't owned by this user. |
 | `notification_identity_invalid` | `host-key.pem` is over 4,096 bytes or isn't a P-256 key. |
 | `notification_platform_unavailable` | This computer has no `fcntl` (not a POSIX host). |
-| `notification_service_unavailable` | Something else stopped the journal from opening (the disk, SQLite). |
+
+The dashboard looks at the same journal that the routes open for the request. A busy or briefly unreadable
+database is not reported: the capabilities stay listed, and the route answers as it always did.
 
 `/native/context` then leaves out `native-live-alerts-v1` and `native-notification-quiet-hours-v1` and gives the
 code for each in `unavailable`. The app does not listen for instant alerts without the first one, so the host sends
@@ -359,7 +357,7 @@ chmod 700 "$HERMES_HOME/plugin-data/loopdy/managed-notifications"
 chmod 600 "$HERMES_HOME/plugin-data/loopdy/managed-notifications/"*
 ```
 
-If the folder is a symlink, replace it with a real folder (move the files into it). The dashboard needs no
-restart: the next `/native/context` opens the journal again and lists both capabilities. Restart the gateway as
-well. A gateway that couldn't open the journal when it started (its log says `Managed notification producer
-unavailable: <code>`) queues no alerts until it restarts.
+If the folder is a symlink, replace it with a real folder (move the files into it). Then restart the gateway and the
+dashboard, so that both open the journal again. A gateway that couldn't open the journal when it started (its log
+says `Managed notification producer unavailable: <code>`) queues no alerts until it restarts, and a dashboard keeps
+the old code in memory.

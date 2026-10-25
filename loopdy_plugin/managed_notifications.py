@@ -1772,12 +1772,9 @@ def _shared_observations(directory: Path) -> dict[str, Any]:
         return registry.directories.setdefault(os.path.realpath(directory), _new_observations())
 
 
-def get_managed_notifications(home: Path | None = None) -> ManagedNotifications:
-    """The journal of ``home``, or of the active Hermes home (what the producer registers under)."""
-    if home is None:
-        from hermes_constants import get_hermes_home
-        home = get_hermes_home()
-    directory = Path(home) / "plugin-data" / "loopdy" / "managed-notifications"
+def get_managed_notifications() -> ManagedNotifications:
+    from hermes_constants import get_hermes_home
+    directory = get_hermes_home() / "plugin-data" / "loopdy" / "managed-notifications"
     with _instances_lock:
         key = str(directory)
         if key not in _instances:
@@ -1785,30 +1782,18 @@ def get_managed_notifications(home: Path | None = None) -> ManagedNotifications:
         return _instances[key]
 
 
-def get_process_notifications() -> ManagedNotifications:
-    """The journal the dashboard routes open: the one in this process's own Hermes home.
-
-    A request scoped to a profile (``?profile=``, a native grant) points ``get_hermes_home()`` at that
-    profile's folder, and the routes would open a journal that holds none of this host's grants. The producer
-    registers under the home of the process that loaded it. A profile that runs in its own plugin host has
-    that home as its process home, so both open the same folder.
-    """
-    from hermes_constants import get_process_hermes_home
-    return get_managed_notifications(get_process_hermes_home())
-
-
 def journal_problem() -> str | None:
     """Why the routes can't open the journal, as one fixed code, or None when they can.
 
-    A journal that opens stays cached, so a healthy host pays nothing. A failure is not cached: each call
-    tries the small open again, so a host owner's fix is seen at once.
+    It opens the journal exactly as the routes do, under the active Hermes home of the request. Only a
+    ManagedNotificationError counts: its fixed code stays until a person fixes the host. A busy or briefly
+    unreadable database is not a problem to report, so the capability stays listed and the route answers as
+    it does. A journal that opens stays cached; a failure is not cached, so a host owner's fix is seen at once.
     """
     try:
-        get_process_notifications()
+        get_managed_notifications()
     except ManagedNotificationError as error:
         return error.code
-    except (OSError, ValueError, sqlite3.Error):
-        return "notification_service_unavailable"
-    except ImportError:
+    except Exception:
         return None
     return None

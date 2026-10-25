@@ -812,19 +812,18 @@ class JournalHomeTests(unittest.TestCase):
     def directory(self, home):
         return Path(home) / "plugin-data" / "loopdy" / "managed-notifications"
 
-    def test_the_process_journal_is_the_one_the_producer_opens_whatever_the_request_scope(self):
+    def test_a_request_scoped_to_a_profile_opens_that_profiles_journal(self):
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-        producer = self.module.get_managed_notifications()
         profile = self.home / "profiles" / "research"
         token = set_hermes_home_override(profile)
         try:
-            routed = self.module.get_process_notifications()
             scoped = self.module.get_managed_notifications()
+            problem = self.module.journal_problem()
         finally:
             reset_hermes_home_override(token)
-        self.assertIs(routed, producer)
-        self.assertEqual(routed.directory, self.directory(self.home))
-        self.assertEqual(scoped.directory, self.directory(profile), "a producer in that profile keeps its own")
+        self.assertEqual(scoped.directory, self.directory(profile))
+        self.assertIsNone(problem)
+        self.assertTrue(self.directory(profile).exists(), "the probe opens the journal the route will open")
 
     def test_a_journal_problem_is_a_fixed_code_and_a_healthy_journal_has_none(self):
         self.assertIsNone(self.module.journal_problem())
@@ -835,11 +834,14 @@ class JournalHomeTests(unittest.TestCase):
         os.chmod(self.directory(self.home) / "journal.sqlite3", 0o600)
         self.assertIsNone(self.module.journal_problem(), "a fixed journal opens on the next look")
 
-    def test_a_journal_that_fails_in_an_unexpected_way_reports_a_fixed_code_not_the_error(self):
-        with patch.object(self.module, "ManagedNotifications", side_effect=sqlite3.OperationalError("/home/alice/x")):
-            self.assertEqual(self.module.journal_problem(), "notification_service_unavailable")
+    def test_a_journal_that_is_briefly_unreadable_is_not_a_problem(self):
+        for failure in (sqlite3.OperationalError("database is locked: /home/alice/x"), OSError("/home/alice/x"),
+                        ValueError("/home/alice/x")):
+            with self.subTest(failure=type(failure).__name__):
+                with patch.object(self.module, "ManagedNotifications", side_effect=failure):
+                    self.assertIsNone(self.module.journal_problem())
 
-    def test_the_notification_routes_open_the_process_journal_and_name_a_broken_one(self):
+    def test_the_notification_routes_open_the_requests_journal_and_name_a_broken_one(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -858,9 +860,9 @@ class JournalHomeTests(unittest.TestCase):
         app.include_router(managed_notifications_api.router)
         with TestClient(app) as client:
             self.assertEqual(client.get("/notifications/capabilities").status_code, 200)
-            self.assertFalse((profile / "plugin-data").exists())
+            self.assertTrue(self.directory(profile).exists(), "the profile's own journal, as before")
             self.forget()
-            os.chmod(self.directory(self.home) / "journal.sqlite3", 0o644)
+            os.chmod(self.directory(profile) / "journal.sqlite3", 0o644)
             with self.assertLogs("hermes.plugins.bighelp.notifications", level="WARNING") as logs:
                 refused = client.get("/notifications/capabilities")
         self.assertEqual((refused.status_code, refused.json()["detail"]),

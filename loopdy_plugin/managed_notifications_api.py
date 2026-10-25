@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from . import host_telemetry
-from .managed_notifications import ManagedNotificationError, get_process_notifications
+from .managed_notifications import ManagedNotificationError, get_managed_notifications
 
 logger = logging.getLogger("hermes.plugins.bighelp.notifications")
 router = APIRouter(prefix="/notifications")
@@ -91,44 +91,44 @@ def _call(operation, *args):
 # bearer forwarded from the app. No secret authority is accepted in these bodies.
 @router.get("/capabilities")
 def capabilities():
-    return _call(lambda: get_process_notifications().capabilities())
+    return _call(lambda: get_managed_notifications().capabilities())
 
 
 @router.get("/provider")
 def provider():
     """Safe readiness contract; never returns a BuzzKit key or subscriber id."""
-    return _call(lambda: get_process_notifications().provider_contract())
+    return _call(lambda: get_managed_notifications().provider_contract())
 
 
 @router.post("/enroll")
 def enroll(body: EnrollmentBody):
-    return _call(lambda: get_process_notifications().enroll(body.grantId, body.idempotencyKey))
+    return _call(lambda: get_managed_notifications().enroll(body.grantId, body.idempotencyKey))
 
 
 @router.get("/enrollments/{grant_id}")
 def enrollment(grant_id: str):
-    return _call(lambda: get_process_notifications().enrollment(grant_id))
+    return _call(lambda: get_managed_notifications().enrollment(grant_id))
 
 
 @router.delete("/enrollments/{grant_id}")
 def remove(grant_id: str):
-    return _call(lambda: get_process_notifications().remove(grant_id))
+    return _call(lambda: get_managed_notifications().remove(grant_id))
 
 
 @router.put("/enrollments/{grant_id}/recipient-key")
 def recipient_key(grant_id: str, body: RecipientKeyBody):
     """The phone's own content key, sent directly to this host so notification text is end-to-end sealed."""
-    return _call(lambda: get_process_notifications().register_recipient(grant_id, body.publicKey))
+    return _call(lambda: get_managed_notifications().register_recipient(grant_id, body.publicKey))
 
 
 @router.put("/enrollments/{grant_id}/sessions")
 def subscribe(grant_id: str, body: SessionBody):
-    return _call(lambda: get_process_notifications().subscribe(grant_id, body.profile, body.sessionId, body.enabled))
+    return _call(lambda: get_managed_notifications().subscribe(grant_id, body.profile, body.sessionId, body.enabled))
 
 
 @router.get("/enrollments/{grant_id}/preferences")
 def preferences(grant_id: str):
-    return _call(lambda: get_process_notifications().preferences(grant_id))
+    return _call(lambda: get_managed_notifications().preferences(grant_id))
 
 
 @router.put("/enrollments/{grant_id}/preferences")
@@ -137,7 +137,7 @@ def set_preferences(grant_id: str, body: PreferencesBody):
     workflow alerts (needs you, succeeded, failed, cancelled) start on, scheduled links start off."""
     workflows = body.workflows.model_dump() if body.workflows is not None else None
     channels = body.channels.model_dump() if body.channels is not None else None
-    return _call(lambda: get_process_notifications().set_preferences(grant_id, peer_chats=body.peerChats,
+    return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats,
                                                                       workflows=workflows,
                                                                       scheduled_links=body.scheduledLinks,
                                                                       channels=channels))
@@ -146,24 +146,24 @@ def set_preferences(grant_id: str, body: PreferencesBody):
 @router.get("/enrollments/{grant_id}/channels")
 def channels(grant_id: str):
     """The channels this phone's agent has talked on or delivers to, for Settings › Notifications › Channels."""
-    return _call(lambda: get_process_notifications().channels(grant_id))
+    return _call(lambda: get_managed_notifications().channels(grant_id))
 
 
 @router.post("/enrollments/{grant_id}/work")
 def work_snapshot(grant_id: str, body: WorkBody):
-    return _call(lambda: get_process_notifications().work_snapshot(grant_id, body.profile, body.sessionId))
+    return _call(lambda: get_managed_notifications().work_snapshot(grant_id, body.profile, body.sessionId))
 
 
 @router.get("/enrollments/{grant_id}/events/{event_id}")
 def event(grant_id: str, event_id: str):
-    return _call(lambda: get_process_notifications().event(grant_id, event_id))
+    return _call(lambda: get_managed_notifications().event(grant_id, event_id))
 
 
 @router.put("/enrollments/{grant_id}/live-activities/{activity_id}")
 def activity(grant_id: str, activity_id: str, body: ActivityBody):
-    return _call(lambda: get_process_notifications().subscribe_activity(grant_id, activity_id, body.profile, body.sessionId, body.sessionReference, body.leaseExpires, body.turnId))
+    return _call(lambda: get_managed_notifications().subscribe_activity(grant_id, activity_id, body.profile, body.sessionId, body.sessionReference, body.leaseExpires, body.turnId))
 
 
 @router.delete("/enrollments/{grant_id}/live-activities/{activity_id}")
 def remove_activity(grant_id: str, activity_id: str):
-    return _call(lambda: get_process_notifications().remove_activity(grant_id, activity_id))
+    return _call(lambda: get_managed_notifications().remove_activity(grant_id, activity_id))
