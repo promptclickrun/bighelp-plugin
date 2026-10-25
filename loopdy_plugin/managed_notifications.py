@@ -50,6 +50,10 @@ ORIGIN = "https://link.loopdy.app"
 ROOT = "/v1/notifications/host-grants"
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+# Hermes names a turn "<session>:<task>:<8 hex>", so a scheduled run's turn
+# ("local-<64 hex>:cron:<job>:<run>:<8 hex>") passes the 128 characters the app
+# and the notification service accept. Such a turn gets a short, stable alias.
+_LONG_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{128,1023}$")
 _PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _CRON_SESSION = re.compile(r"^cron_.+_\d{8}_\d{6}$")
 _EVENT_TYPES = {
@@ -101,6 +105,15 @@ class ManagedNotificationError(ValueError):
     def __init__(self, code: str, status: int = 409):
         super().__init__(code)
         self.code, self.status = code, status
+
+
+def _short_turn_ids(payload: dict[str, Any]) -> dict[str, Any]:
+    """The hook payload with an over-long but well-formed turn ID replaced by "turn." and its SHA-256."""
+    for key in ("turn_id", "parent_turn_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and _LONG_ID.fullmatch(value):
+            payload = {**payload, key: "turn." + hashlib.sha256(value.encode()).hexdigest()}
+    return payload
 
 
 def _identifier(value: Any, pattern: re.Pattern = _ID) -> str:
@@ -1237,6 +1250,7 @@ class ManagedNotifications:
 
     def _observe(self, hook: str, *, profile: str, **payload: Any):
         if self._stop.is_set(): return
+        payload = _short_turn_ids(payload)
         # A workflow stage's turns never alert or drive a Live Activity; a command
         # it asks to run still needs the person's approval.
         if in_workflow_stage() and hook not in _APPROVAL_HOOKS: return
