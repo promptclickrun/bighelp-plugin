@@ -19,11 +19,11 @@ current code. It isn't legal advice or an independent audit.
 | Teamwork | When on: a team brief (agents' names, IDs and roles) in each agent's `config.yaml` under `platform_hints.bighelp`, and `plugin-data/loopdy/team.json` at the Hermes root | Agents' names and roles to the app, and to your AI provider in each agent's instructions. See [Teamwork](TEAMWORK.md) |
 | Provider usage | Cached in memory for five minutes | Keys go only to their own provider; usage numbers (no keys, emails or account IDs) go to the app. See [Provider usage](PROVIDER_USAGE.md) |
 | Composio Connect | The MCP server entry in the agent's `config.yaml`; Hermes keeps its sign-in tokens | To the app: server names, URLs without query or user info, on or off, and whether Hermes has saved sign-in tokens. Never tokens, headers or keys. See [Composio Connect](COMPOSIO.md) |
-| Host telemetry | Nothing on disk except a random ID and your on/off switches; the events wait in memory | Anonymous timings, counts and fixed codes (never text, paths, names or addresses) to bighelp's telemetry service, then Microsoft Azure for 90 days. On by default; see the switches in [Host telemetry](HOST_TELEMETRY.md) |
+| Host telemetry | Nothing on disk except a random ID and your on/off switches; the events wait in memory | Timings, counts and fixed codes under a random host ID (never text, paths, names or addresses) to bighelp's telemetry service, then Microsoft Azure for 90 days. On by default; see the switches in [Host telemetry](HOST_TELEMETRY.md) |
 
 All plugin data lives under the active Hermes profile home in `plugin-data/loopdy/`, with owner-only
 permissions. Nothing is sent to bighelp except notifications you turned on and, unless you turn it off, the
-anonymous [host telemetry](HOST_TELEMETRY.md).
+[host telemetry](HOST_TELEMETRY.md).
 
 ## Notifications
 

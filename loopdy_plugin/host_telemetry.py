@@ -1,4 +1,4 @@
-"""Host telemetry: a small, anonymous usage stream from this Hermes host (``native-host-telemetry-v1``).
+"""Host telemetry: a small usage stream from this Hermes host, tied to a random host ID (``native-host-telemetry-v1``).
 
 It is on by default and has an off switch (see ``docs/HOST_TELEMETRY.md``). It sends only numbers,
 codes and values from fixed lists: how long turns and tool calls take, which built-in tool ran, how
@@ -1144,7 +1144,7 @@ def _guarded(callback: Callable[..., None]) -> Callable[..., None]:
     return observe
 
 
-NOTICE = ("bighelp host telemetry is on: anonymous timings and counts, never text, paths or names. "
+NOTICE = ("bighelp host telemetry is on: timings and counts under a random host ID, never text, paths or names. "
           "Turn it off with `hermes bighelp telemetry off`, BIGHELP_TELEMETRY=0 or DO_NOT_TRACK=1. "
           "Fields: " + DOC_URL)
 

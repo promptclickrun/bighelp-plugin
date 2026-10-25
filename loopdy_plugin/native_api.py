@@ -302,7 +302,7 @@ async def _telemetry_request(request: Request) -> tuple[NativeContext, str]:
 
 @router.get("/telemetry")
 async def host_telemetry_state(request: Request) -> Response:
-    """Whether this host sends anonymous usage numbers (bighelp app: Settings > Privacy)."""
+    """Whether this host sends usage numbers (bighelp app: Settings > Permissions > Device access)."""
     from . import host_telemetry
     owner, request_id = await _telemetry_request(request)
     if request.query_params:

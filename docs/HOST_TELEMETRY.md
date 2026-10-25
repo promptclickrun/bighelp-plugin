@@ -1,6 +1,6 @@
 # Host telemetry
 
-The plugin sends a small stream of anonymous numbers about how this Hermes host runs: how long a turn takes, which
+The plugin sends a small stream of numbers, tied to a random host ID, about how this Hermes host runs: how long a turn takes, which
 built-in tool ran, whether an alert arrived. It never sends what a chat, a prompt, a file or a person says. It is on
 by default, and any one of the switches below turns it off.
 
@@ -15,7 +15,7 @@ waiting at once.
 | `BIGHELP_TELEMETRY=0` | An environment variable. `false`, `off` and `no` work too. The old name `LOOPDY_TELEMETRY` still works when `BIGHELP_TELEMETRY` is not set |
 | Hermes settings | `config.yaml` of the Hermes home: `bighelp:` with `telemetry: false` below it |
 | Command | `hermes bighelp telemetry off` (and `on`, and `status`) |
-| The bighelp app | Settings > Privacy > Share usage and diagnostics. The app tells each host it connects to |
+| The bighelp app | Settings > Permissions > Device access > Share usage and diagnostics. The app tells each host it connects to |
 
 `hermes bighelp telemetry status` shows each switch, and the link to this field list. `hermes bighelp telemetry on`
 clears the command's switch and the app's switch. It cannot beat `DO_NOT_TRACK`, `BIGHELP_TELEMETRY` or the Hermes

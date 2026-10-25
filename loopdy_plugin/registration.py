@@ -106,7 +106,7 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     from .catalog_submissions import register as register_catalog_submissions
     register_catalog_submissions(ctx)
     register_legacy_toolset_alias()
-    # Anonymous host telemetry, on by default with an off switch (docs/HOST_TELEMETRY.md).
+    # Host telemetry, on by default with an off switch (docs/HOST_TELEMETRY.md).
     from .host_telemetry import register as register_host_telemetry
     register_host_telemetry(ctx)
     # Workflow runs live in their own coordinator; after a reboot it starts again here when runs wait for it.
@@ -407,7 +407,7 @@ def setup_cli(parser: Any) -> None:
 
     telemetry = actions.add_parser(
         "telemetry",
-        help="Turn anonymous host telemetry off or on, or show what is set",
+        help="Turn host telemetry off or on, or show what is set",
     )
     telemetry.add_argument("state", nargs="?", choices=("off", "on", "status"), default="status")
 
