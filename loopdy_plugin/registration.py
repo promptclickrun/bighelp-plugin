@@ -226,9 +226,12 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
             clarification_producer_loaded=True,
         )
         ctx.on_unload(managed.close)
-    except (OSError, ValueError, sqlite3.Error):
-        # Notification storage/identity failure must never break foreground chat.
-        logger.warning("Managed notification producer unavailable")
+    except (OSError, ValueError, sqlite3.Error) as error:
+        # Notification storage/identity failure must never break foreground chat. The fixed code says what
+        # to fix; any other error is named by its class only, as its text can carry a path.
+        code = getattr(error, "code", None)
+        logger.warning("Managed notification producer unavailable: %s",
+                       code if isinstance(code, str) and code.startswith("notification_") else type(error).__name__)
     from .room_activity import register_room_activity
     stop_room_activity = register_room_activity(ctx)
 

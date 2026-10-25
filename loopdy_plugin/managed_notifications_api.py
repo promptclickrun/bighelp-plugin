@@ -1,11 +1,15 @@
 """Mounted only by Hermes' supported authenticated plugin router loader."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
+from . import host_telemetry
 from .managed_notifications import ManagedNotificationError, get_managed_notifications
 
+logger = logging.getLogger("hermes.plugins.bighelp.notifications")
 router = APIRouter(prefix="/notifications")
 _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _ID = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
@@ -73,6 +77,10 @@ def _call(operation, *args):
     try:
         return operation(*args)
     except ManagedNotificationError as error:
+        if error.status >= 500:
+            # The app gets the code; the host owner's log and host telemetry get it too.
+            logger.warning("bighelp notification request failed: %s", error.code)
+            host_telemetry.error(code=error.code, stage="native_route")
         raise HTTPException(status_code=error.status, detail={"code": error.code}) from None
     except (OSError, ValueError):
         raise HTTPException(status_code=503, detail={"code": "notification_service_unavailable"}) from None
