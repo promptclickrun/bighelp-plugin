@@ -22,8 +22,10 @@ _startup_advertisement_logged = False
 
 
 class NativeAPIError(Exception):
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, details: dict | None = None):
         self.status, self.code, self.message = status, code, message
+        # Safe, fixed-shape facts the app acts on (a draft's current state), never exception text.
+        self.details = details or {}
         super().__init__(message)
 
 
@@ -418,4 +420,19 @@ def _native_features(
         features.append(plugin_links_capability)
     else:
         skip(plugin_links_capability, "shared plugins need a POSIX host and Hermes' profile helpers.")
+    # A chat says it draws drafts in its people/speaking note, so Photo actions ride with it.
+    from .image_drafts import CAPABILITY as image_drafts_capability, available as image_drafts_available
+    if image_drafts_available():
+        features.append(image_drafts_capability)
+    else:
+        skip(image_drafts_capability, "public profile helpers are unimportable.")
+    try:
+        from .host_telemetry import CAPABILITY as telemetry_capability, available as telemetry_available
+    except ImportError:
+        skip("native-host-telemetry-v1", "host telemetry support is unimportable.")
+    else:
+        if telemetry_available():
+            features.append(telemetry_capability)
+        else:
+            skip(telemetry_capability, "host telemetry support is unavailable.")
     return profile, tuple(features)

@@ -30,8 +30,18 @@ def _error_response(error: NativeAPIError) -> JSONResponse:
     logger.warning("bighelp native request rejected: %s", error.code)
     return JSONResponse(status_code=error.status, content={"error": {
         "code": error.code, "message": error.message,
-        "retryable": error.status == 503, "details": {},
+        "retryable": error.status == 503, "details": getattr(error, "details", None) or {},
     }}, headers={"Cache-Control": "no-store"})
+
+
+def _report_error(status: int, code: str) -> None:
+    """Host telemetry hears of a failure on the host's side (5xx) by its fixed code. Nothing else."""
+    if status >= 500:
+        try:
+            from . import host_telemetry
+            host_telemetry.error(code=code, stage="native_route")
+        except Exception:
+            pass
 
 
 class _NativeRoute(APIRoute):
@@ -42,6 +52,7 @@ class _NativeRoute(APIRoute):
             try:
                 return await handler(request)
             except NativeAPIError as error:
+                _report_error(error.status, error.code)
                 response = _error_response(error)
                 request_id = request.headers.get("x-loopdy-request-id", "")
                 if len(request.headers.getlist("x-loopdy-request-id")) == 1 and _REQUEST_ID.fullmatch(request_id):
@@ -55,6 +66,7 @@ class _NativeRoute(APIRoute):
                 # text; the class name is fixed and safe to log.
                 logger.error("bighelp native request failed: native_service_unavailable (%s)",
                              type(error).__name__)
+                _report_error(503, "native_service_unavailable")
                 return _error_response(NativeAPIError(503, "native_service_unavailable",
                                                      "The native plugin service is unavailable."))
         return guarded
@@ -272,6 +284,48 @@ async def context(request: Request) -> Response:
         if chunk:
             raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
     return _response(owner.payload(), owner)
+
+
+class _TelemetryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: StrictBool
+
+
+async def _telemetry_request(request: Request) -> tuple[NativeContext, str]:
+    from .host_telemetry import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "host_telemetry_unavailable", "Host telemetry isn't available on this host.")
+    return owner, request_id
+
+
+@router.get("/telemetry")
+async def host_telemetry_state(request: Request) -> Response:
+    """Whether this host sends usage numbers (bighelp app: Settings > Permissions > Device access)."""
+    from . import host_telemetry
+    owner, request_id = await _telemetry_request(request)
+    if request.query_params:
+        raise NativeAPIError(422, "invalid_request", "Host telemetry takes no query or body.")
+    async for chunk in request.stream():
+        if chunk:
+            raise NativeAPIError(422, "invalid_request", "Host telemetry takes no query or body.")
+    return _response(await run_in_threadpool(host_telemetry.status), owner, request_id)
+
+
+@router.put("/telemetry")
+async def host_telemetry_set(request: Request) -> Response:
+    """The app's own switch. It can turn telemetry off or back on; env and config settings still win."""
+    from . import host_telemetry
+    owner, request_id = await _telemetry_request(request)
+    body = await _body(request, _TelemetryBody)
+    try:
+        value = await run_in_threadpool(host_telemetry.set_app_enabled, body.enabled)
+    except OSError:
+        raise NativeAPIError(503, "host_telemetry_unavailable", "Host telemetry can't be saved on this host.") from None
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
 
 
 _TEMPLATE_SUMMARY_KEYS = (
@@ -970,3 +1024,114 @@ async def my_templates_request(operation: str, request: Request) -> Response:
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response(value, owner, request_id, maximum=MAX_RESPONSE_BYTES)
+
+
+# MARK: Photo actions (docs/IMAGE_DRAFTS.md)
+
+_DRAFT_ID = r"^d_[0-9a-f]{32}$"
+_DECISION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+_CHAT_ID = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+
+
+class _ImageActionsSave(_Body):
+    expectedRevision: StrictInt = Field(ge=1, le=9_007_199_254_740_991)
+    settings: dict[str, Any]
+
+
+class _Draft(_Body):
+    sessionId: str = Field(pattern=_CHAT_ID)
+    draftId: str = Field(pattern=_DRAFT_ID)
+
+
+class _DraftStates(_Body):
+    sessionId: str = Field(pattern=_CHAT_ID)
+    draftIds: list[Annotated[str, Field(pattern=_DRAFT_ID)]] = Field(min_length=1, max_length=50)
+
+
+class _DraftSource(_Draft):
+    offset: StrictInt = Field(ge=0, le=25 * 1024 * 1024)
+
+
+class _DraftClaim(_Draft):
+    decisionId: str = Field(pattern=_DECISION_ID)
+    fieldsHash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    destination: str = Field(min_length=1, max_length=100)
+
+
+class _DraftFinish(_Draft):
+    decisionId: str = Field(pattern=_DECISION_ID)
+    outcome: Literal["saved", "failed", "outcome_unknown"]
+    destination: str | None = Field(default=None, min_length=1, max_length=100)
+    reason: Literal["permission_denied", "destination_unavailable", "invalid_fields", "write_failed"] | None = None
+    verified: StrictBool | None = None
+
+
+class _DraftReopen(_Draft):
+    decisionId: str = Field(pattern=_DECISION_ID)
+
+
+_IMAGE_ACTIONS = {"get": _Body, "save": _ImageActionsSave}
+_IMAGE_DRAFTS = {"states": _DraftStates, "source": _DraftSource, "claim": _DraftClaim, "finish": _DraftFinish,
+                 "discard": _Draft, "reopen": _DraftReopen}
+
+
+def _image_drafts(kind: str, operation: str, body: BaseModel) -> dict:
+    from . import image_drafts
+    try:
+        home = image_drafts.profile_home(body.agentId)
+        store = image_drafts.store_for_home(home)
+        if kind == "actions":
+            if operation == "save":
+                revision, overrides = store.save_settings(body.expectedRevision, body.settings)
+                return {"settings": image_drafts.settings_document(revision, overrides)}
+            revision, overrides = store.settings()
+            return {"settings": image_drafts.settings_document(revision, overrides),
+                    "defaults": image_drafts.defaults_document()}
+        # A draft belongs to one agent and one chat, through compaction.
+        lineage = image_drafts.session_lineage(home / "state.db", body.sessionId)
+        if operation == "states":
+            return {"drafts": store.states(body.draftIds, lineage)}
+        if operation == "source":
+            return image_drafts.read_source(store.source(body.draftId, lineage), body.offset, home)
+        if operation == "claim":
+            return store.claim(body.draftId, lineage, decision_id=body.decisionId, fields_hash=body.fieldsHash,
+                               destination=body.destination)
+        if operation == "finish":
+            if (body.outcome == "failed") != (body.reason is not None):
+                raise NativeAPIError(422, "invalid_request", "A failed outcome takes a reason; others don't.")
+            return store.finish(body.draftId, lineage, decision_id=body.decisionId, outcome=body.outcome,
+                                destination=body.destination, reason=body.reason, verified=body.verified)
+        if operation == "discard":
+            return store.discard(body.draftId, lineage)
+        return store.reopen(body.draftId, lineage, decision_id=body.decisionId)
+    except image_drafts.DraftError as error:
+        raise NativeAPIError(error.status, error.code, error.message, error.details) from None
+
+
+async def _image_drafts_request(kind: str, operation: str, request: Request) -> Response:
+    from .image_drafts import CAPABILITY, MAX_SOURCE_RESPONSE_BYTES
+    models = _IMAGE_ACTIONS if kind == "actions" else _IMAGE_DRAFTS
+    if operation not in models:
+        raise NativeAPIError(404, "operation_not_found", "The operation is not supported.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "image_drafts_unavailable", "Photo actions aren't available on this host.")
+    body = await _body(request, models[operation])
+    value = await run_in_threadpool(_image_drafts, kind, operation, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    maximum = MAX_SOURCE_RESPONSE_BYTES if operation == "source" else None
+    return _response(value, owner, request_id, maximum=maximum)
+
+
+@router.post("/image-actions/{operation}")
+async def image_actions(operation: str, request: Request) -> Response:
+    """An agent's Photo actions settings (bighelp app: the agent's Photo actions page)."""
+    return await _image_drafts_request("actions", operation, request)
+
+
+@router.post("/image-drafts/{operation}")
+async def image_drafts_route(operation: str, request: Request) -> Response:
+    """Contact and event drafts from the person's pictures: their states, their picture and the person's decision."""
+    return await _image_drafts_request("drafts", operation, request)

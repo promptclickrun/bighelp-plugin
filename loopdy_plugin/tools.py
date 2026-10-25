@@ -15,7 +15,7 @@ from .generative_ui import (
     rendered_card_delivery,
 )
 from .loopdy_cards import canonical_json as canonical_card_json
-from .loopdy_cards import render_card
+from .loopdy_cards import DRAFT_TYPES, render_card
 from . import card_objects, tool_session
 from .store import form_action_response
 
@@ -91,14 +91,24 @@ def _card_parameters() -> dict[str, Any]:
         / "loopdy-card-v1.schema.json"
     )
     portable = json.loads(schema_path.read_text(encoding="utf-8"))
+    # Drafts come only from the draft tools (image_drafts.py), so this tool doesn't offer them.
+    definitions = {name: value for name, value in portable["$defs"].items() if name not in _DRAFT_DEFINITIONS}
+    definitions["element"] = {"oneOf": [
+        option for option in portable["$defs"]["element"]["oneOf"]
+        if option["properties"]["type"].get("const") not in DRAFT_TYPES
+    ]}
     return {
         "type": portable["type"],
         "properties": {**portable["properties"], "schema": {"const": CARD_SCHEMA},
                        NOTIFICATION_TEXT_FIELD: NOTIFICATION_TEXT_SCHEMA},
         "required": portable["required"],
         "additionalProperties": portable["additionalProperties"],
-        "$defs": portable["$defs"],
+        "$defs": definitions,
     }
+
+
+_DRAFT_DEFINITIONS = frozenset({"draftText", "draftMessage", "draftCommon", "draftEntries",
+                                "contactDraftProps", "eventDraftProps"})
 
 
 def _card_handler(now: Callable[[], datetime], renders: card_objects.Renders):

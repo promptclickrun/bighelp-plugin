@@ -3,6 +3,9 @@
 photos.get: the phone sends a small JPEG as base64. It's written to a folder only this plugin uses, and the
 agent gets the file's path to look at with its vision tool. The bytes go no further than that file.
 
+Which chat fetched which picture is kept beside the folder, so a photo draft (image_drafts.py) can use a
+picture its own chat read, and only that chat.
+
 photos.save: the agent names a file on this host. It's checked the way attachments/resolve checks files
 agents send, then the phone downloads it through attachments/resolve and attachments/fetch. The phone names
 a path to resolve, which resolve only serves when the chat's agent emitted it, so a checked path is also
@@ -17,6 +20,8 @@ import contextlib
 import hashlib
 import mimetypes
 import os
+import re
+import sqlite3
 import sys
 import threading
 import time
@@ -207,6 +212,55 @@ def store_picture(image: Any, directory: Path, *, now: float | None = None) -> d
                 pass
     prune_pictures(directory, now=stamp)
     return {"format": "jpeg", "width": width, "height": height, "path": str(target)}
+
+
+_PICTURE_NAME = re.compile(r"[0-9a-f]{40}\.jpg\Z")
+MAX_FETCHED = 500
+
+
+def _fetched_db(directory: Path) -> Path:
+    # Beside the folder, not in it: the folder holds only the pictures it prunes.
+    return directory.parent / (directory.name + "-fetched.sqlite3")
+
+
+def record_fetched(directory: Path, session_ids: Iterable[str], path: str, *, now: float | None = None) -> None:
+    """Note that these chats read the picture at `path` (a file `store_picture` wrote in `directory`)."""
+    picture = Path(path)
+    if picture.parent != directory or not _PICTURE_NAME.fullmatch(picture.name):
+        return
+    stamp = time.time() if now is None else now
+    database = _fetched_db(directory)
+    if not database.exists():
+        os.close(os.open(database, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600))
+    with contextlib.closing(sqlite3.connect(database, timeout=5)) as db, db:
+        db.execute("CREATE TABLE IF NOT EXISTS fetched(session_id TEXT NOT NULL, name TEXT NOT NULL, "
+                   "fetched REAL NOT NULL, PRIMARY KEY(session_id, name))")
+        for session_id in dict.fromkeys(session_ids):
+            if isinstance(session_id, str) and 0 < len(session_id) <= 256:
+                db.execute("INSERT INTO fetched(session_id, name, fetched) VALUES(?,?,?) ON CONFLICT(session_id, name) "
+                           "DO UPDATE SET fetched=excluded.fetched", (session_id, picture.name, stamp))
+        db.execute("DELETE FROM fetched WHERE fetched < ?", (stamp - KEEP_SECONDS,))
+        db.execute("DELETE FROM fetched WHERE rowid NOT IN (SELECT rowid FROM fetched ORDER BY fetched DESC LIMIT ?)",
+                   (MAX_FETCHED,))
+
+
+def fetched_pictures(directory: Path, session_ids: Iterable[str]) -> list[tuple[float, str]]:
+    """`(when, path)` of the pictures these chats read with photos.get, still on disk, newest first."""
+    wanted = [session_id for session_id in dict.fromkeys(session_ids) if isinstance(session_id, str)]
+    database = _fetched_db(directory)
+    if not wanted or not database.is_file():
+        return []
+    uri = database.resolve().as_uri() + "?mode=ro"
+    with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=5)) as db:
+        rows = db.execute(f"SELECT name, MAX(fetched) FROM fetched WHERE session_id IN "
+                          f"({','.join('?' for _ in wanted)}) GROUP BY name", wanted).fetchall()
+    found = []
+    for name, fetched in rows:
+        path = directory / name
+        # A picture the folder pruned (or anything odd in its place) is skipped.
+        if _PICTURE_NAME.fullmatch(name) and path.is_file() and not path.is_symlink():
+            found.append((float(fetched), str(path)))
+    return sorted(found, reverse=True)
 
 
 def prune_pictures(directory: Path, *, now: float | None = None) -> None:

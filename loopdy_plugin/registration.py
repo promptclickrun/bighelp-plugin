@@ -90,6 +90,9 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     # Who is writing in each bighelp chat, as the app reports it.
     from .people import register as register_people
     register_people(ctx)
+    # Photo actions: contact and event drafts from the person's pictures, saved only after their review.
+    from .image_drafts import register as register_image_drafts
+    register_image_drafts(ctx)
     # Teamwork (opt-in from the app): keeps every agent's team brief current as agents come and go.
     from .team import register as register_team
     register_team(ctx)
@@ -103,6 +106,9 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     from .catalog_submissions import register as register_catalog_submissions
     register_catalog_submissions(ctx)
     register_legacy_toolset_alias()
+    # Host telemetry, on by default with an off switch (docs/HOST_TELEMETRY.md).
+    from .host_telemetry import register as register_host_telemetry
+    register_host_telemetry(ctx)
     # Workflow runs live in their own coordinator; after a reboot it starts again here when runs wait for it.
     if os.environ.get("HERMES_SESSION_SOURCE") != "workflow":
         try:
@@ -399,6 +405,12 @@ def setup_cli(parser: Any) -> None:
 
     actions.add_parser("status", help="Show provider health and registered devices")
 
+    telemetry = actions.add_parser(
+        "telemetry",
+        help="Turn host telemetry off or on, or show what is set",
+    )
+    telemetry.add_argument("state", nargs="?", choices=("off", "on", "status"), default="status")
+
     files = actions.add_parser(
         "files",
         help="Manage explicit read-only workspace file grants",
@@ -486,6 +498,9 @@ def handle_cli(
     action = str(getattr(args, "bighelp_action", "") or "")
     if action == "files":
         _handle_files_cli(args)
+        return
+    if action == "telemetry":
+        _handle_telemetry_cli(args)
         return
     if action == "catalog":
         from .catalog_submissions import handle_cli as handle_catalog_cli
@@ -583,6 +598,19 @@ def handle_cli(
         _print_json(service.test_notification(target=target, profile=profile))
         return
     raise ValueError("Unknown bighelp command")
+
+
+def _handle_telemetry_cli(args: Any) -> None:
+    from . import host_telemetry
+
+    # This process only changes a setting or reads it: it sends nothing itself.
+    host_telemetry.mute_process()
+    state = str(getattr(args, "state", "status") or "status")
+    if state == "off":
+        host_telemetry.set_cli_enabled(False)
+    elif state == "on":
+        host_telemetry.set_cli_enabled(True)
+    _print_json(host_telemetry.describe())
 
 
 def _app_notifications_status() -> dict[str, Any]:

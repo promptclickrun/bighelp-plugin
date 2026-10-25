@@ -9,6 +9,10 @@ approvals.
 Notifications are optional: turn them on for this host in the app. With current bighelp builds, notification content is end-to-end encrypted
 for your phone.
 
+Host telemetry is on: the plugin sends numbers about turns, tools and alerts, tied to a random host ID (never text, paths or
+names). Turn it off with `hermes bighelp telemetry off`, `BIGHELP_TELEMETRY=0` or `DO_NOT_TRACK=1`. The field list is
+in `docs/HOST_TELEMETRY.md` of the plugin repository.
+
 Agents: call a visible `bighelp_render_*` tool directly to show a card in the current chat. If Hermes has
 progressively disclosed it and it isn't visible, use the official tool bridge (`tool_search`, `tool_describe`,
 `tool_call`) to run that exact tool. Examples: `skill_view("loopdy:generative-ui")`.
