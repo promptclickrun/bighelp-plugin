@@ -426,8 +426,12 @@ class MiddlewareTests(unittest.IsolatedAsyncioTestCase):
                 tool_call_id="official-call",
                 next_call=lambda: self.fail("native channel must terminate the chain"),
             ))
-            await asyncio.sleep(0)
-            request = hub.poll(owner, fields, after=0)["requests"][0]["request"]
+            # The call runs on a worker thread: wait until it reaches the hub, however busy the machine is.
+            for _ in range(500):
+                if requests := hub.poll(owner, fields, after=0)["requests"]:
+                    break
+                await asyncio.sleep(0.01)
+            request = requests[0]["request"]
             self.assertEqual(request["sessionId"], "stored-session")
             self.assertEqual(request["turnId"], "official-turn")
             self.assertEqual(request["operation"], "calendar.list")
