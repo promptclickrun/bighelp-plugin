@@ -86,6 +86,8 @@ class Recipe:
     drop_env: tuple[str, ...] = ()
     keep_token: tuple[re.Pattern[str], str] | None = None
     signed_in: Callable[[], bool | None] | None = None
+    # Runs in this process after a tool that saved its sign-in in its own process exits cleanly.
+    after_sign_in: Callable[[str], None] | None = None
     retired: str = ""
     replacement_key: str = ""
     # Listed only when this Hermes has the provider; Hermes' own status rows (claude-code) always are.
@@ -183,16 +185,69 @@ def _claude_signed_in(command: Callable[[], list[str] | None], config_variable: 
     return signed_in
 
 
-def _hermes_signed_in(provider_id: str) -> Callable[[], bool | None]:
-    """Hermes' own read-only status for a provider it keeps the credential for (in the profile scope)."""
+def _hermes_signed_in(provider_id: str, saved: Callable[[], bool] | None = None) -> Callable[[], bool | None]:
+    """Hermes' own read-only status for a provider it keeps the credential for (in the profile scope).
+
+    ``saved`` also counts a credential in the profile's own env file, for providers Hermes reads only
+    from the process environment, which a sign-in saved by another process never reaches."""
     def signed_in() -> bool | None:
         try:
             from hermes_cli.auth import get_auth_status
             state = get_auth_status(provider_id).get("logged_in")
         except Exception:  # noqa: BLE001 - a status Hermes can't give is "unknown", never a failure
-            return None
+            state = None
+        if state is not True and saved is not None and saved():
+            return True
         return state if isinstance(state, bool) else None
     return signed_in
+
+
+_MAX_ENV_FILE = 1024 * 1024
+
+
+def _saved_copilot_token(keys: tuple[str, ...] = ()) -> tuple[str, str] | None:
+    """The first Copilot token Hermes would accept in this profile's own env file, as (name, value).
+
+    Read-only, with Hermes' own reader and token check, in the current profile scope; nothing is
+    refreshed or written. None when there is none, or this Hermes can't say."""
+    try:
+        from hermes_cli.config import get_env_path, invalidate_env_cache, load_env
+        from hermes_cli.copilot_auth import COPILOT_ENV_VARS, validate_copilot_token
+        if get_env_path().stat().st_size > _MAX_ENV_FILE:
+            return None
+        invalidate_env_cache()  # another process wrote the file
+        saved = load_env()
+        for name in keys or COPILOT_ENV_VARS:
+            value = saved.get(name)
+            if isinstance(value, str) and value.strip() and validate_copilot_token(value)[0]:
+                return name, value.strip()
+    except Exception:  # noqa: BLE001 - fail closed to what Hermes says on its own
+        pass
+    return None
+
+
+def _publish_copilot_token(agent_id: str) -> None:
+    """Make the token the sign-in's process saved visible to this process, as Hermes' own save would have.
+
+    Hermes reads a Copilot token only from the process environment and the dashboard never reloads its
+    env file. Only the one key is published, and only for the profile this process serves on a host
+    that serves one: another profile's token must not reach the launch profile through the shared
+    environment. Hermes' ``_publish_env_value`` does the publishing."""
+    from .workspace_capabilities import profile_scope
+    try:
+        from agent.secret_scope import is_multiplex_active
+        from hermes_cli.config import _publish_env_value
+        from hermes_cli.profiles import get_profile_dir
+        from hermes_constants import get_process_hermes_home
+        if is_multiplex_active() or not callable(_publish_env_value):
+            return
+        if Path(get_profile_dir(agent_id)).resolve() != Path(get_process_hermes_home()).resolve():
+            return
+        with profile_scope(agent_id):
+            if (token := _saved_copilot_token(("COPILOT_GITHUB_TOKEN",))) is not None:
+                _publish_env_value(*token)
+    except Exception as error:  # noqa: BLE001 - the class name is safe to log, the text isn't
+        logger.warning("bighelp sign-in: publishing copilot failed (%s)", type(error).__name__)
 
 
 def _hermes_providers() -> set[str] | None:
@@ -228,7 +283,8 @@ RECIPES: tuple[Recipe, ...] = (
         provider_id="copilot", name="GitHub Copilot", client="Hermes", flow=DEVICE, link_hosts=("github.com",),
         command=_hermes_helper("copilot", "hermes_cli.copilot_auth"),
         docs="https://docs.github.com/en/copilot", code=_GITHUB_CODE, env=_profile_home,
-        signed_in=_hermes_signed_in("copilot")),
+        signed_in=_hermes_signed_in("copilot", lambda: _saved_copilot_token() is not None),
+        after_sign_in=_publish_copilot_token),
     Recipe(
         provider_id="claude-code", name="Claude Code", client="Claude Code", flow=PASTE, link_hosts=_CLAUDE_HOSTS,
         command=lambda: (argv + ["auth", "login", "--claudeai"]) if (argv := _claude()) else None,
@@ -481,7 +537,9 @@ class _Session:
             if code == 0 and self.recipe.keep_token is None:
                 with _status_lock:
                     _status_cache.clear()
-                verified = self.recipe.signed_in() if self.recipe.signed_in is not None else None
+                if self.recipe.after_sign_in is not None:
+                    self.recipe.after_sign_in(self.agent_id)
+                verified = self._verified()
                 if verified is False:
                     self._end(FAILED, f"{self.recipe.client} didn't finish signing in. Try again.")
                 else:
@@ -491,6 +549,17 @@ class _Session:
             else:
                 self._end(FAILED, f"{self.recipe.client} didn't finish signing in. Try again.")
         self._cleanup()
+
+    def _verified(self) -> bool | None:
+        """The provider's own sign-in status for this session's profile."""
+        from .workspace_capabilities import profile_scope
+        if self.recipe.signed_in is None:
+            return None
+        try:
+            with profile_scope(self.agent_id):
+                return self.recipe.signed_in()
+        except ValueError:  # the profile is gone
+            return None
 
     def _end(self, status: str, message: str) -> None:
         with self._condition:

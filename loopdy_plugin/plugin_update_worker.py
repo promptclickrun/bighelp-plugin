@@ -417,7 +417,11 @@ def _validate_staged_plugin(plugin_root: Path, hermes_home: Path) -> None:
     # Added privileges require an attended host decision before replacing code.
     try:
         # Copied beside this worker, like plugin_update.py: Hermes 0.22 and later have no PyYAML.
-        from yaml_compat import safe_load
+        # Inside the package (the test suite runs it there) it is the package's own module.
+        try:
+            from yaml_compat import safe_load
+        except ImportError:
+            from .yaml_compat import safe_load
         staged_manifest = safe_load(manifest_text)
         previous_manifest = safe_load((hermes_home / "plugins" / PLUGIN_NAME / "plugin.yaml").read_text(encoding="utf-8"))
         def declared(value: Any) -> set[str]:
