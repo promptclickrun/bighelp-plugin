@@ -1,4 +1,5 @@
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 import json
 import os
 from pathlib import Path
@@ -508,6 +509,71 @@ class ManagedNotificationTests(unittest.TestCase):
             db.execute("UPDATE grants SET expires=?", (self.now + 3600,))
         self.service.queue_sign_in_wakes(); self.service.drain_pending()
         self.assertEqual(len(self.wakes()), 2)
+
+    def telemetry_events(self):
+        from loopdy_plugin import host_telemetry
+        heard = []
+        # A stream of its own: the once-a-minute repeat guard of errors must not carry over from another test.
+        streams = patch.dict(sys.modules, {host_telemetry._SHARED_STREAM: host_telemetry._new_stream()})
+        streams.start()
+        self.addCleanup(streams.stop)
+        patcher = patch.object(host_telemetry, "_enqueue", lambda name, props: heard.append((name, props)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return heard
+
+    def test_host_telemetry_hears_how_alerts_fare_by_type_and_timing_only(self):
+        heard = self.telemetry_events()
+        text = "Your private reply about the layoff plan, sent to alice@example.com"
+        self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-a",assistant_response=text)
+        self.assertEqual(heard, [("alert.queued", {"eventType": "session.completed", "queueMs": 0})])
+        self.service.drain_pending()
+        self.assertEqual([name for name, _ in heard], ["alert.queued", "alert.sent"])
+        sent = heard[1][1]
+        self.assertEqual((sent["eventType"], sent["result"], sent["attempt"]), ("session.completed", "accepted", 1))
+        self.assertGreaterEqual(sent["relayMs"], 0)
+        # A refusal reports the fixed code of the refusal, and the next try is attempt 2.
+        self.fail_send = True
+        self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-b",assistant_response=text)
+        self.service.drain_pending()
+        self.assertEqual(heard[-2][0:2], ("alert.sent", {**heard[-2][1], "result": "other", "eventType": "session.completed", "attempt": 1}))
+        self.assertEqual(heard[-1], ("error", {"code": "other", "stage": "notification_send"}))
+        self.fail_send = False
+        self.now += 120
+        self.service.drain_pending()
+        self.assertEqual(heard[-1][1]["result"], "accepted")
+        self.assertEqual(heard[-1][1]["attempt"], 2)
+        self.assertNotIn("layoff", json.dumps(heard))
+        self.assertNotIn("alice", json.dumps(heard))
+        self.assertNotIn(self.grant_id, json.dumps(heard))
+        self.assertNotIn("native-session", json.dumps(heard))
+
+    def test_host_telemetry_hears_of_wakes_and_live_activity_updates(self):
+        heard = self.telemetry_events()
+        reference = session_reference("default", "native-session")
+        original = self.service.transport
+        def transport(method, path, raw, headers):
+            if path.endswith("/wake"):
+                self.calls.append((method, path, raw, headers))
+                return {"version": 1, "status": "accepted", "deliveryId": "msg_wake"}
+            if method == "GET" and "/live-activities/" in path:
+                return {"version": 1, "activity": {"grantId": self.grant_id, "activityId": "phone-activity",
+                    "sessionReference": reference, "status": "active", "leaseExpires": self.now + 600}}
+            if "/live-activities/" in path and path.endswith("/updates"):
+                self.calls.append((method, path, raw, headers))
+                return {"version": 1, "status": "accepted", "deliveryId": "msg_activity"}
+            return original(method, path, raw, headers)
+        self.service.transport = transport
+        self.service.queue_sign_in_wakes(); self.service.drain_pending()
+        self.assertEqual([(name, props.get("eventType")) for name, props in heard], [("alert.sent", "wake")])
+        heard.clear()
+        self.service.subscribe_activity(self.grant_id, "phone-activity", "default", "native-session", reference, self.now + 600)
+        self.service.observe("pre_llm_call", profile="default", session_id="native-session", turn_id="turn-a")
+        self.service.observe("pre_tool_call", profile="default", session_id="native-session", turn_id="turn-a", tool_name="terminal", args={"command": "cat ~/secret"})
+        queued = [props for name, props in heard if name == "alert.queued"]
+        self.assertTrue(queued)
+        self.assertEqual({props["eventType"] for props in queued}, {"liveactivity"})
+        self.assertNotIn("secret", json.dumps(heard))
 
     def test_a_phone_without_a_content_key_is_not_woken(self):
         with self.service._db() as db:

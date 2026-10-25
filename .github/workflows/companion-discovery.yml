@@ -11,6 +11,8 @@ permissions:
 jobs:
   discovery:
     runs-on: ubuntu-latest
+    env:
+      BIGHELP_TELEMETRY: '0'
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4

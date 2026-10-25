@@ -4,6 +4,7 @@ Every value here is made up.
 """
 
 from __future__ import annotations
+import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
 import copy
 import hashlib

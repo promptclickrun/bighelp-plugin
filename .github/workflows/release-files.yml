@@ -10,6 +10,8 @@ jobs:
   release-files:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      BIGHELP_TELEMETRY: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
