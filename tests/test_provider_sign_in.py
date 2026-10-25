@@ -312,6 +312,129 @@ class CatalogTests(Base):
         self.assertEqual(refused.exception.code, "sign_in_busy")
 
 
+# The real helper in a child process, with GitHub's device login faked: it saves the token to the
+# profile's .env in the child, so this process's environment never gets it, as on a host.
+FAKE_HELPER = """
+    import sys, time
+    from unittest.mock import patch
+    from loopdy_plugin import provider_sign_in_helper as helper
+
+    def login():
+        print("To authenticate, visit https://github.com/login/device and enter code WDJB-MJHT", flush=True)
+        time.sleep(0.3)
+        return "gho_" + "f" * 36
+
+    with patch("hermes_cli.copilot_auth.copilot_device_code_login", login):
+        sys.exit(helper.main(sys.argv[1:]))
+"""
+COPILOT_TOKEN = "gho_" + "f" * 36
+
+
+class CopilotTokenTests(Base):
+    """Hermes reads Copilot's token only from the process environment, which the sign-in's child never sets."""
+
+    def setUp(self):
+        super().setUp()
+        from hermes_cli import copilot_auth
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN")}
+        patched = patch.dict(os.environ, environment, clear=True)
+        patched.start()
+        self.addCleanup(patched.stop)
+        gh = patch.object(copilot_auth, "_try_gh_cli_token", return_value=None)
+        gh.start()
+        self.addCleanup(gh.stop)
+        helper = patch.object(si, "_HELPER", Path(executable(self.root / "bin", "helper.py", FAKE_HELPER)))
+        helper.start()
+        self.addCleanup(helper.stop)
+
+    def make_profile(self, name="research"):
+        home = self.home / "profiles" / name
+        home.mkdir(parents=True)
+        (home / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+        return home
+
+    def signed_in(self, agent_id="default"):
+        return next(row for row in si.providers(agent_id) if row["providerId"] == "copilot")["signedIn"]
+
+    def sign_in(self, agent_id="default"):
+        started = si.start(agent_id, "copilot")
+        self.assertEqual((started["status"], started["code"]), (si.WAITING, "WDJB-MJHT"), started)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            done = si.status(agent_id, started["sessionId"])
+            if done["status"] in (si.SIGNED_IN, si.FAILED):
+                return done
+            time.sleep(0.05)
+        self.fail(f"still {done}")
+
+    def test_a_sign_in_saved_by_the_child_is_signed_in_without_a_restart(self):
+        self.assertIs(self.signed_in(), False)
+        done = self.sign_in()
+        self.assertEqual(done["status"], si.SIGNED_IN, done)
+        self.assertIn(f"COPILOT_GITHUB_TOKEN={COPILOT_TOKEN}", (self.home / ".env").read_text())
+        self.assertIs(self.signed_in(), True)
+        self.assertNotIn(COPILOT_TOKEN, repr(done))
+
+    def test_the_launch_profile_gets_the_token_as_if_hermes_saved_it_in_process(self):
+        self.assertIsNone(os.environ.get("COPILOT_GITHUB_TOKEN"))
+        self.assertEqual(self.sign_in()["status"], si.SIGNED_IN)
+        self.assertEqual(os.environ.get("COPILOT_GITHUB_TOKEN"), COPILOT_TOKEN)
+
+    def test_hermes_model_picker_accepts_copilot_once_signed_in(self):
+        """Hermes' own /api/model/set runs in the dashboard process and judges Copilot by its environment."""
+        from fastapi import HTTPException
+        from hermes_cli import web_server_config
+        select = getattr(web_server_config, "_validated_main_model_selection", None)
+        if select is None:
+            self.skipTest("this Hermes has no main-model selection to call")
+        config = {"model": {"provider": "openrouter", "default": "vendor/model"}}
+        with self.assertRaises(HTTPException) as refused:
+            select(config, "copilot", "gpt-5-mini")
+        self.assertIn("not connected", str(refused.exception.detail))
+        self.assertEqual(self.sign_in()["status"], si.SIGNED_IN)
+        try:
+            select(config, "copilot", "gpt-5-mini")
+        except HTTPException as error:  # a catalog or network problem is not the missing sign-in
+            self.assertNotIn("not connected", str(error.detail))
+
+    def test_only_the_copilot_key_is_published_and_environment_keys_stay(self):
+        (self.home / ".env").write_text("OPENROUTER_API_KEY=from-the-file\nKEEP_ME=gone-from-file\n")
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "from-the-host", "KEEP_ME": "from-the-host"}):
+            self.assertEqual(self.sign_in()["status"], si.SIGNED_IN)
+            self.assertEqual((os.environ["OPENROUTER_API_KEY"], os.environ["KEEP_ME"]),
+                             ("from-the-host", "from-the-host"))
+
+    def test_a_named_profiles_token_never_reaches_the_shared_environment(self):
+        research = self.make_profile()
+        self.assertIs(self.signed_in("research"), False)
+        done = self.sign_in("research")
+        self.assertEqual(done["status"], si.SIGNED_IN, done)
+        self.assertIn(COPILOT_TOKEN, (research / ".env").read_text())
+        self.assertIsNone(os.environ.get("COPILOT_GITHUB_TOKEN"))
+        self.assertIs(self.signed_in("research"), True)
+        self.assertIs(self.signed_in("default"), False)
+
+    def test_a_multi_profile_host_keeps_the_token_out_of_the_shared_environment(self):
+        import agent.secret_scope as secret_scope
+        with patch.object(secret_scope, "_MULTIPLEX_ACTIVE", True):
+            self.assertEqual(self.sign_in()["status"], si.SIGNED_IN)
+            self.assertIsNone(os.environ.get("COPILOT_GITHUB_TOKEN"))
+            self.assertIs(self.signed_in(), True)
+
+    def test_a_token_in_the_profile_env_that_hermes_would_refuse_is_not_signed_in(self):
+        (self.home / ".env").write_text("COPILOT_GITHUB_TOKEN=ghp_" + "a" * 36 + "\n")
+        self.assertIs(self.signed_in(), False)
+
+    def test_a_hermes_without_the_publish_helper_still_reads_the_profiles_own_env(self):
+        import hermes_cli.config as hermes_config
+        with patch.object(hermes_config, "_publish_env_value", None, create=True):
+            done = self.sign_in()
+            self.assertEqual(done["status"], si.SIGNED_IN, done)
+            self.assertIsNone(os.environ.get("COPILOT_GITHUB_TOKEN"))
+            self.assertIs(self.signed_in(), True)
+
+
 class HelperTests(unittest.TestCase):
     def test_saves_the_token_where_hermes_model_does_and_never_prints_it(self):
         from loopdy_plugin import provider_sign_in_helper as helper
