@@ -177,6 +177,11 @@ class AgentsActivityTests(unittest.TestCase):
         settle("resolved")
         self.assertEqual(self.states("nova"), {"nova": ("working", None)}, "Answered: back to work")
 
+        password = requests.send_async("sudo", sid, {"command": "apt update"}, lambda result: None)
+        self.addCleanup(password, "test")
+        self.assertEqual(self.states("nova"), {"nova": ("waiting", None)}, "A password request waits on the person")
+        password("resolved")
+
         with server._sessions_lock:
             server._sessions[sid]["_compute_host_open_request"] = {"id": "srq-1", "method": "clarify", "params": {}}
         self.assertEqual(self.states("nova"), {"nova": ("waiting", None)}, "A question from an isolated turn")

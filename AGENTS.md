@@ -188,6 +188,8 @@ private hub, and its phone tools answer `phone_unavailable` even though `/native
   - Releases leave out tests, docs and fixtures, but the scan reads everything that ships: code, skills, the
     README and `after-install.md`.
   - The limits are 400 files, 10 MB, and 1 MB for one file. The release script stops at 300 files and 8 MB.
+  - Hermes 0.21 scans more strictly than current Hermes. The bare word `sudo` anywhere in shipped code, even in a
+    string, is a high finding there, so a 0.21 host's update would wait for approval.
 - Before merging, export the release files of your branch, scan them with a separate Hermes checkout, and make sure
   the verdict is still `safe` with no high or critical findings:
 
