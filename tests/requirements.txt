@@ -1,0 +1,4 @@
+# What the test suite needs beyond Hermes itself. Hermes 0.22 and later read YAML with ruamel.yaml and
+# no longer install PyYAML; the card tests check documents against the JSON Schemas in spec/.
+PyYAML
+jsonschema

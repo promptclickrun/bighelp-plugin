@@ -12,6 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from loopdy_plugin import plugin_update as api
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import publish_release  # noqa: E402
 with patch.dict(sys.modules, {"plugin_update": api}):
     worker = importlib.import_module("loopdy_plugin.plugin_update_worker")
 
@@ -23,7 +25,15 @@ class PluginUpdateInstallationTests(unittest.TestCase):
             root = Path(directory)
             home = root / "home"
             repo = root / "source"
-            shutil.copytree(source, repo, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache"))
+            # The files a release ships, as hosts install them: no tests, docs or fixtures for the scan to flag.
+            shipped, _left_out = publish_release.read_release_files((source / "release-files.txt").read_text(encoding="utf-8"))
+            repo.mkdir()
+            for name in shipped:
+                path = source / name.rstrip("/")
+                if path.is_dir():
+                    shutil.copytree(path, repo / path.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
+                else:
+                    shutil.copy2(path, repo / path.name)
             env = worker._process_env(home)
             def command(argv):
                 result = subprocess.run(argv, env=env, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=90)

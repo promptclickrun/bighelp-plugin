@@ -328,6 +328,8 @@ class RouteTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
         (self.home / "profiles/research").mkdir(parents=True)
+        # Hermes counts a named profile only when it has an identity file; an empty folder is a ghost.
+        (self.home / "profiles/research/config.yaml").write_text("model: {}\n", encoding="utf-8")
         environment = patch.dict(os.environ, {"HERMES_HOME": str(self.home), "HOME": str(self.home)})
         environment.start()
         self.addCleanup(environment.stop)

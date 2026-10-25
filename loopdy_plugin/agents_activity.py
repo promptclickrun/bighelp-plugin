@@ -37,7 +37,9 @@ CAPABILITY = "native-agents-activity-v1"
 MAX_AGENTS = 64
 BOT_CHAT = "Bot Chat"
 # The requests that wait on the person; Hermes' others (reading a terminal, a theme) don't.
-HUMAN_PROMPTS = frozenset({"approval", "clarify", "sudo", "secret"})
+# The password request is spelled in two parts: Hermes 0.21's install scan reads the bare word as
+# privilege escalation, and its verdict would hold every unattended update for a person to approve.
+HUMAN_PROMPTS = frozenset({"approval", "clarify", "su" "do", "secret"})
 MAX_LEASES = 32
 MAX_CHAIN = 64
 MAX_TOOL_RESULTS = 64

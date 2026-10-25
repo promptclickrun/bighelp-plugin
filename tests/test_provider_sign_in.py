@@ -16,6 +16,7 @@ import unittest
 from unittest.mock import patch
 import uuid
 
+from hermes_process_state import single_profile_host
 from loopdy_plugin import provider_sign_in as si
 
 
@@ -87,6 +88,7 @@ CLAUDE = """
 
 class Base(unittest.TestCase):
     def setUp(self):
+        single_profile_host(self)
         temporary = tempfile.TemporaryDirectory(prefix="bighelp-sign-in-test-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()

@@ -24,6 +24,7 @@ from hermes_cli.dashboard_auth.registry import register_provider, unregister_glo
 from loopdy_plugin import native_api, native_context
 from loopdy_plugin import room_activity
 from loopdy_plugin.store import BighelpStore
+from hermes_process_state import single_profile_host
 from test_loopdy_card_templates import _template
 
 
@@ -87,6 +88,7 @@ class NativeAPITests(unittest.TestCase):
         self.assertEqual(self.client.post(path, headers=headers, json=payload).status_code, 401)
 
     def setUp(self):
+        single_profile_host(self)
         hub_patch = patch.object(room_activity, "_HUB", room_activity.RoomActivityHub())
         hub_patch.start()
         self.addCleanup(hub_patch.stop)
@@ -94,6 +96,8 @@ class NativeAPITests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
         (self.home / "profiles/research").mkdir(parents=True)
+        # Hermes counts a named profile only when it has an identity file; an empty folder is a ghost.
+        (self.home / "profiles/research/config.yaml").write_text("model: {}\n", encoding="utf-8")
         self.environment = patch.dict(os.environ, {"HERMES_HOME": str(self.home), "HOME": str(self.home)})
         self.environment.start()
         self.addCleanup(self.environment.stop)

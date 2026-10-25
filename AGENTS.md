@@ -188,6 +188,8 @@ private hub, and its phone tools answer `phone_unavailable` even though `/native
   - Releases leave out tests, docs and fixtures, but the scan reads everything that ships: code, skills, the
     README and `after-install.md`.
   - The limits are 400 files, 10 MB, and 1 MB for one file. The release script stops at 300 files and 8 MB.
+  - Hermes 0.21 scans more strictly than current Hermes. The bare word `sudo` anywhere in shipped code, even in a
+    string, is a high finding there, so a 0.21 host's update would wait for approval.
 - Before merging, export the release files of your branch, scan them with a separate Hermes checkout, and make sure
   the verdict is still `safe` with no high or critical findings:
 
@@ -205,9 +207,11 @@ private hub, and its phone tools answer `phone_unavailable` even though `/native
 ## Testing
 
 ```bash
+uv pip install --python /path/to/hermes-agent/.venv/bin/python -r tests/requirements.txt
+
 HERMES_HOME=/private/tmp/bighelp-test-home TMPDIR=/private/tmp BIGHELP_TELEMETRY=0 \
 PYTHONPATH=/path/to/hermes-agent:"$PWD":"$PWD/tests" \
-  /path/to/hermes-agent/venv/bin/python -m unittest discover -s tests -v
+  /path/to/hermes-agent/.venv/bin/python -m unittest discover -s tests -v
 
 hermes plugins doctor . --ci
 ```
@@ -215,6 +219,10 @@ hermes plugins doctor . --ci
 - `BIGHELP_TELEMETRY=0` keeps host telemetry from posting during tests. A test module that registers the plugin or
   runs `ManagedNotifications` also imports `telemetry_off` (`tests/telemetry_off.py`), which sets that variable and
   swaps in a transport that sends nothing. `tests/test_host_telemetry.py` checks that every such module does.
+- Build the test Hermes the way a host does: current Hermes runs on Python 3.14 and installs from its `uv.lock`
+  (`uv sync --python python3.14` in the clone). A plain `pip install -e .` on another Python leaves out locked
+  dependencies such as `ruamel.yaml`, and tests then fail with `ModuleNotFoundError` that a host never sees.
+  `tests/requirements.txt` adds what only the tests need (PyYAML, jsonschema).
 - Set `HERMES_HOME` before anything imports Hermes. On macOS use real, non-symlinked temp folders (`/private/tmp`,
   not `/tmp`) that aren't inside a Git checkout.
 - Use a separate clone of Hermes for tests, never the checkout a real install runs from.
@@ -222,8 +230,11 @@ hermes plugins doctor . --ci
     unfinished update, rebuilds the checkout and rewrites the real install's launchers.
   - Set `HERMES_DISABLE_LAZY_INSTALLS=1`.
 - Never call `/api/gateway/restart` from a test host. On macOS it reaps every gateway process on the machine.
-- Some tests are flaky or environment-bound on `main` too (a `test_native_device_tools` middleware test can hang for
-  about 30 seconds). Compare with `main` before calling something a regression.
+- The first request for a named profile makes the whole test process a multi-profile host for good, and later
+  tests then fail far from the cause (a saved setting never reaches `os.environ`). Hermes' own tests reset this
+  before every test, and so do ours: call `single_profile_host(self)` from `tests/hermes_process_state.py` in a
+  fixture that serves named profiles or depends on single-profile behavior.
+- Some tests are environment-bound. Compare with `main` before calling something a regression.
 - **End-to-end with the app:**
   - The app repo's `Scripts/HostSignInMatrixProbe.py --plugin <this checkout>` starts isolated hosts, with scripted
     tool turns under `--modes tools`.
