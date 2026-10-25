@@ -88,7 +88,8 @@ How each value is limited:
 - **`result`** is `accepted` or `duplicate`, or one of the fixed error codes the plugin uses (for example
   `notification_remote_rejected`). Anything else is `other`.
 - **`error`** has a `code` and a `stage` (`native_route` or `notification_send`). The code must be one of the fixed
-  codes in the plugin's own list (the codes it raises, for example `native_service_unavailable`); any other code is
+  codes in the plugin's own list (the codes it raises, for example `native_service_unavailable`, or
+  `notification_private_storage_required` when the notification journal can't be opened); any other code is
   `other`. Only failures on the host's side are reported, not mistakes of the app. The same pair is reported at most
   once a minute.
 

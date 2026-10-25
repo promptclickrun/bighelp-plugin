@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,14 @@ class FixtureProvider(DashboardAuthProvider):
 
     def revoke_session(self, **kwargs):
         raise NotImplementedError
+
+
+def _forget_journals():
+    """Close the notification journals a test opened, so the next test opens its own."""
+    from loopdy_plugin import managed_notifications
+    for instance in list(managed_notifications._instances.values()):
+        instance.close()
+    managed_notifications._instances.clear()
 
 
 class NativeAPITests(unittest.TestCase):
@@ -114,6 +123,7 @@ class NativeAPITests(unittest.TestCase):
         app.include_router(native_api.router, prefix="/api/plugins/loopdy")
         self.client = TestClient(app)
         self.addCleanup(self.client.close)
+        self.addCleanup(_forget_journals)
 
     def context(self, token="fixture-alice"):
         return self.client.get(PREFIX + "/context", headers={"Authorization": "Bearer " + token})
@@ -338,6 +348,154 @@ class NativeAPITests(unittest.TestCase):
         headers = self.headers()
         headers.pop("X-Loopdy-Request-ID")
         self.assertEqual(put(night, headers).status_code, 422)
+
+    # The notification journal: what the app is told when it can't be opened, and which one a request opens.
+
+    LIVE_ALERTS = "native-live-alerts-v1"
+    QUIET_HOURS = "native-notification-quiet-hours-v1"
+
+    def journal_directory(self, home=None):
+        return Path(home or self.home) / "plugin-data" / "loopdy" / "managed-notifications"
+
+    def journal_instances(self):
+        _forget_journals()
+
+    def healthy_journal(self):
+        from loopdy_plugin.managed_notifications import ManagedNotifications
+        ManagedNotifications(self.journal_directory(), transport=lambda *args: {}).close()
+        self.journal_instances()
+
+    def break_journal(self, how):
+        directory = self.journal_directory()
+        if how == "journal_mode":
+            os.chmod(directory / "journal.sqlite3", 0o644)
+        elif how == "symlinked_folder":
+            moved = self.home / "moved-journal"
+            directory.rename(moved)
+            directory.symlink_to(moved, target_is_directory=True)
+        elif how == "oversized_key":
+            (directory / "host-key.pem").write_bytes(b"x" * 5_000)
+        self.journal_instances()
+
+    def capture_telemetry(self):
+        from loopdy_plugin import host_telemetry
+        stream = host_telemetry._new_stream()
+        for manager in (patch.dict(sys.modules, {host_telemetry._SHARED_STREAM: stream}),
+                        patch.object(host_telemetry, "_ensure_sender", lambda stream: None),
+                        patch.dict(os.environ)):
+            manager.start()
+            self.addCleanup(manager.stop)
+        for name in ("DO_NOT_TRACK", "BIGHELP_TELEMETRY", "LOOPDY_TELEMETRY"):
+            os.environ.pop(name, None)
+        return lambda: [(event["name"], event["p"]) for event in stream.events]
+
+    def listen(self, headers=None):
+        grant = {"grantId": str(uuid.uuid4()), "recipientKeyId": "A" * 43}
+        return self.client.post(PREFIX + "/alerts/listen", headers=self.headers() if headers is None else headers,
+                                json={"listenerId": str(uuid.uuid4()), "grants": [grant], "waitSeconds": 0})
+
+    def test_a_healthy_journal_lists_instant_alerts_and_quiet_hours_as_before(self):
+        from loopdy_plugin.live_alerts import available as live_alerts_available
+        from loopdy_plugin.quiet_hours import available as quiet_available
+        if not (live_alerts_available() and quiet_available()):
+            self.skipTest("notifications need a POSIX host")
+        self.healthy_journal()
+        sent = self.capture_telemetry()
+        value = self.context().json()
+        self.assertIn(self.LIVE_ALERTS, value["features"])
+        self.assertIn(self.QUIET_HOURS, value["features"])
+        self.assertNotIn("unavailable", value)
+        self.assertEqual(self.context().headers["etag"], self.context().headers["etag"])
+        refused = self.listen()
+        self.assertEqual((refused.status_code, refused.json()["error"]["code"]), (404, "live_alerts_not_enrolled"))
+        self.assertEqual(sent(), [])
+
+    def test_a_journal_that_cannot_open_is_not_advertised_and_the_cause_is_reported(self):
+        from loopdy_plugin.live_alerts import available as live_alerts_available
+        if not live_alerts_available():
+            self.skipTest("notifications need a POSIX host")
+        cases = (("journal_mode", "notification_private_storage_required"),
+                 ("symlinked_folder", "notification_private_storage_required"),
+                 ("oversized_key", "notification_identity_invalid"))
+        for how, code in cases:
+            with self.subTest(how=how):
+                shutil.rmtree(self.home / "plugin-data", ignore_errors=True)
+                self.healthy_journal()
+                self.break_journal(how)
+                sent = self.capture_telemetry()
+                first = self.context()
+                value = first.json()
+                self.assertNotIn(self.LIVE_ALERTS, value["features"])
+                self.assertNotIn(self.QUIET_HOURS, value["features"])
+                self.assertEqual(value["unavailable"], {self.LIVE_ALERTS: code, self.QUIET_HOURS: code})
+                self.assertEqual(self.context().headers["etag"], first.headers["etag"],
+                                 "a skipped capability must not change the context on every request")
+                self.assertIn(("error", {"code": code, "stage": "native_route"}), sent())
+                with self.assertLogs("hermes.plugins.bighelp", level="WARNING") as logs, \
+                        patch.object(native_context, "_startup_advertisement_logged", False):
+                    native_context.log_native_feature_startup()
+                text = "\n".join(logs.output)
+                self.assertIn(self.LIVE_ALERTS, text)
+                self.assertIn(code, text)
+                self.assertNotIn(str(self.home), text)
+                self.assertNotIn(str(self.home), json.dumps(sent()))
+                self.assertNotIn(str(self.home), first.text)
+
+    def test_a_journal_that_breaks_after_the_context_still_answers_the_same_and_says_why(self):
+        from loopdy_plugin.live_alerts import available as live_alerts_available
+        if not live_alerts_available():
+            self.skipTest("notifications need a POSIX host")
+        for how, code in (("journal_mode", "notification_private_storage_required"),
+                          ("symlinked_folder", "notification_private_storage_required"),
+                          ("oversized_key", "notification_identity_invalid")):
+            with self.subTest(how=how):
+                shutil.rmtree(self.home / "plugin-data", ignore_errors=True)
+                self.healthy_journal()
+                self.break_journal(how)
+                sent = self.capture_telemetry()
+                # The app's context was made while the journal worked; the request meets the broken one.
+                with patch.object(native_context, "_journal_problem", return_value=None):
+                    with self.assertLogs("loopdy_plugin.native_api", level="WARNING") as logs:
+                        refused = self.listen()
+                self.assertEqual((refused.status_code, refused.json()["error"]["code"]),
+                                 (503, "live_alerts_unavailable"))
+                self.assertIn("bighelp live alerts unavailable: " + code, "\n".join(logs.output))
+                self.assertNotIn(str(self.home), "\n".join(logs.output))
+                events = sent()
+                self.assertIn(("error", {"code": code, "stage": "native_route"}), events)
+                self.assertIn(("error", {"code": "live_alerts_unavailable", "stage": "native_route"}), events)
+                self.assertNotIn(str(self.home), json.dumps(events))
+                self.assertNotIn(str(self.home), refused.text)
+
+    def test_a_profile_scoped_request_opens_the_journal_the_producer_uses(self):
+        from loopdy_plugin.live_alerts import available as live_alerts_available
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        if not live_alerts_available():
+            self.skipTest("notifications need a POSIX host")
+        self.healthy_journal()
+        profile_home = self.home / "profiles" / "research"
+        app = FastAPI()
+        app.state.auth_required = True
+
+        @app.middleware("http")
+        async def scoped_to_a_profile(request, call_next):
+            token = set_hermes_home_override(profile_home)
+            try:
+                return await call_next(request)
+            finally:
+                reset_hermes_home_override(token)
+
+        app.middleware("http")(gated_auth_middleware)
+        app.include_router(native_api.router, prefix="/api/plugins/loopdy")
+        with TestClient(app) as scoped:
+            headers = self.headers()
+            self.assertIn(self.LIVE_ALERTS, scoped.get(PREFIX + "/context", headers=headers).json()["features"])
+            grant = {"grantId": str(uuid.uuid4()), "recipientKeyId": "A" * 43}
+            answered = scoped.post(PREFIX + "/alerts/listen", headers=self.headers(), json={
+                "listenerId": str(uuid.uuid4()), "grants": [grant], "waitSeconds": 0})
+        self.assertEqual((answered.status_code, answered.json()["error"]["code"]), (404, "live_alerts_not_enrolled"))
+        self.assertFalse((profile_home / "plugin-data").exists(), "the profile's own folder was opened")
+        self.journal_instances()
 
     def test_the_app_reads_and_sets_the_hosts_telemetry_switch(self):
         from loopdy_plugin import host_telemetry

@@ -1026,6 +1026,14 @@ class QueueTests(TelemetryCase):
         self.assertEqual(self.queued(), [("error", {"code": "native_service_unavailable", "stage": "native_route"}),
                                          ("error", {"code": "notification_remote_rejected", "stage": "notification_send"})])
 
+    def test_the_codes_that_say_why_the_notification_journal_cannot_open_are_reported_as_they_are(self):
+        for code in ("notification_private_storage_required", "notification_identity_invalid",
+                     "notification_platform_unavailable", "notification_service_unavailable"):
+            telemetry.error(code=code, stage="native_route")
+        self.assertEqual(self.queued(), [("error", {"code": code, "stage": "native_route"}) for code in (
+            "notification_private_storage_required", "notification_identity_invalid",
+            "notification_platform_unavailable", "notification_service_unavailable")])
+
     def test_no_test_run_can_post(self):
         # The default transport is the no-op the shared helper installed, whatever stream a test uses.
         self.assertIs(telemetry._post, telemetry_off.discard)

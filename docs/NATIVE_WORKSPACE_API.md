@@ -27,9 +27,11 @@ short-lived phone channel on the same routes.
 ```
 
 `unavailable` is present only when a feature this plugin has can't work on this computer for a known reason. Each
-value is a fixed reason code, never free text, so the app can say what to do. Today only workflows use it
+value is a fixed reason code, never free text, so the app can say what to do. Workflows use it
 (`native-workflows-v1`: `not_posix`, `profile_helpers_missing`, `chat_runner_missing` or `store_unavailable`; see
-[Workflows](WORKFLOWS.md)). Apps that don't know the field ignore it.
+[Workflows](WORKFLOWS.md)). So do instant alerts and Quiet Hours (`native-live-alerts-v1`,
+`native-notification-quiet-hours-v1`) when the notification journal can't be opened: the value is a
+`notification_*` code, see [Notifications](NOTIFICATIONS.md#when-the-journal-cant-be-opened). Apps that don't know the field ignore it.
 
 Routes are mounted behind Hermes' own authentication middleware. With provider
 login enabled, a real verified `dashboard_auth.base.Session` is required, and

@@ -354,6 +354,25 @@ class RegistrationTests(unittest.TestCase):
                 else:
                     self.assertEqual(status["notifications"], {"available": True, "active_grants": 2})
 
+    def test_a_producer_that_cannot_start_says_why_without_a_path(self) -> None:
+        from loopdy_plugin.managed_notifications import ManagedNotificationError
+        from loopdy_plugin.registration import register
+
+        for failure, expected in (
+            (ManagedNotificationError("notification_private_storage_required", 503),
+             "notification_private_storage_required"),
+            (OSError("/home/alice/.hermes/plugin-data/loopdy"), "OSError"),
+        ):
+            with self.subTest(expected=expected):
+                with (
+                    patch("loopdy_plugin.managed_notifications.get_managed_notifications", side_effect=failure),
+                    self.assertLogs("hermes.plugins.bighelp", level="WARNING") as logs,
+                ):
+                    register(_Context(), service=_Service())
+                text = "\n".join(logs.output)
+                self.assertIn("Managed notification producer unavailable: " + expected, text)
+                self.assertNotIn("alice", text)
+
     def test_retired_marketplace_tool_and_skill_are_not_registered(self) -> None:
         # The bighelp Marketplace is gone: its service has no draft routes and the app has no Marketplace,
         # so an agent that called the tool always failed.

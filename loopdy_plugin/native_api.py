@@ -749,7 +749,11 @@ def _live_alerts_call(operation, *args, **kwargs):
         return operation(*args, **kwargs)
     except LiveAlertError as error:
         raise NativeAPIError(error.status, error.code, error.message) from None
-    except ManagedNotificationError:
+    except ManagedNotificationError as error:
+        # The app only hears "unavailable"; the host owner needs the fixed cause (a folder anyone else
+        # can open, a key that isn't valid), so it goes to the log and to host telemetry.
+        logger.warning("bighelp live alerts unavailable: %s", error.code)
+        _report_error(503, error.code)
         raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.") from None
 
 
@@ -760,8 +764,8 @@ async def _live_alerts_request(request: Request, model):
     if live_alerts.CAPABILITY not in owner.features:
         raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.")
     body = await _body(request, model)
-    from .managed_notifications import get_managed_notifications
-    service = await run_in_threadpool(_live_alerts_call, get_managed_notifications)
+    from .managed_notifications import get_process_notifications
+    service = await run_in_threadpool(_live_alerts_call, get_process_notifications)
     return owner, request_id, body, service
 
 
@@ -806,9 +810,9 @@ class _QuietHours(BaseModel):
 
 
 def _quiet_hours(body: _QuietHours) -> dict:
-    from .managed_notifications import ManagedNotificationError, get_managed_notifications
+    from .managed_notifications import ManagedNotificationError, get_process_notifications
     try:
-        return get_managed_notifications().set_quiet_hours(
+        return get_process_notifications().set_quiet_hours(
             body.grantId, enabled=body.enabled, start_minute=body.startMinute,
             end_minute=body.endMinute, time_zone=body.timeZone)
     except ManagedNotificationError as error:

@@ -790,6 +790,85 @@ class ManagedNotificationTests(unittest.TestCase):
 if __name__ == "__main__": unittest.main()
 
 
+class JournalHomeTests(unittest.TestCase):
+    """Which journal a request opens, and what a journal that can't open reports."""
+
+    def setUp(self):
+        from loopdy_plugin import managed_notifications
+        self.module = managed_notifications
+        temporary = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name)
+        environment = patch.dict(os.environ, {"HERMES_HOME": str(self.home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.addCleanup(self.forget)
+
+    def forget(self):
+        for instance in list(self.module._instances.values()):
+            instance.close()
+        self.module._instances.clear()
+
+    def directory(self, home):
+        return Path(home) / "plugin-data" / "loopdy" / "managed-notifications"
+
+    def test_the_process_journal_is_the_one_the_producer_opens_whatever_the_request_scope(self):
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        producer = self.module.get_managed_notifications()
+        profile = self.home / "profiles" / "research"
+        token = set_hermes_home_override(profile)
+        try:
+            routed = self.module.get_process_notifications()
+            scoped = self.module.get_managed_notifications()
+        finally:
+            reset_hermes_home_override(token)
+        self.assertIs(routed, producer)
+        self.assertEqual(routed.directory, self.directory(self.home))
+        self.assertEqual(scoped.directory, self.directory(profile), "a producer in that profile keeps its own")
+
+    def test_a_journal_problem_is_a_fixed_code_and_a_healthy_journal_has_none(self):
+        self.assertIsNone(self.module.journal_problem())
+        self.forget()
+        os.chmod(self.directory(self.home) / "journal.sqlite3", 0o644)
+        self.assertEqual(self.module.journal_problem(), "notification_private_storage_required")
+        self.assertNotIn(self.directory(self.home), self.module._instances, "a failure is not kept")
+        os.chmod(self.directory(self.home) / "journal.sqlite3", 0o600)
+        self.assertIsNone(self.module.journal_problem(), "a fixed journal opens on the next look")
+
+    def test_a_journal_that_fails_in_an_unexpected_way_reports_a_fixed_code_not_the_error(self):
+        with patch.object(self.module, "ManagedNotifications", side_effect=sqlite3.OperationalError("/home/alice/x")):
+            self.assertEqual(self.module.journal_problem(), "notification_service_unavailable")
+
+    def test_the_notification_routes_open_the_process_journal_and_name_a_broken_one(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from loopdy_plugin import managed_notifications_api
+        profile = self.home / "profiles" / "research"
+        app = FastAPI()
+
+        @app.middleware("http")
+        async def scoped_to_a_profile(request, call_next):
+            token = set_hermes_home_override(profile)
+            try:
+                return await call_next(request)
+            finally:
+                reset_hermes_home_override(token)
+
+        app.include_router(managed_notifications_api.router)
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/notifications/capabilities").status_code, 200)
+            self.assertFalse((profile / "plugin-data").exists())
+            self.forget()
+            os.chmod(self.directory(self.home) / "journal.sqlite3", 0o644)
+            with self.assertLogs("hermes.plugins.bighelp.notifications", level="WARNING") as logs:
+                refused = client.get("/notifications/capabilities")
+        self.assertEqual((refused.status_code, refused.json()["detail"]),
+                         (503, {"code": "notification_private_storage_required"}))
+        self.assertIn("notification_private_storage_required", "\n".join(logs.output))
+        self.assertNotIn(str(self.home), "\n".join(logs.output))
+
+
 class DashboardDoubleImportTests(unittest.TestCase):
     """Hermes' hook loader and the dashboard router import this package under
     different module names in one process. Both must share the live turn."""
