@@ -19,6 +19,15 @@ xAI Grok) keep using Hermes' own sign-in.
 A sign-in is listed only when this Hermes has that provider. That includes GitHub Copilot, which Hermes files under
 API keys because it keeps a token, but which signs in with GitHub like an account.
 
+Hermes reads Copilot's token only from the process environment, and the dashboard never reloads the profile's env
+file. The sign-in runs in its own process, so when it finishes, bighelp does what Hermes' own save would have done
+in the dashboard: it publishes that one key with Hermes' `_publish_env_value`. It does that only for the profile the
+dashboard serves as its own, on a host that serves one profile. A named profile's token, or any token on a
+multi-profile host, stays out of the shared environment; the Copilot row and the sign-in result then read the token
+from that profile's own env file, with Hermes' read-only helpers and its token check. Nothing is refreshed or
+rewritten. Without this, the sign-in ended as failed and the row said "not signed in" until the dashboard restarted,
+and Hermes' own model picker refused a Copilot model.
+
 If the tool isn't installed, the app says so and shows the install command. Nothing is installed for you.
 
 ## Respecting provider terms
