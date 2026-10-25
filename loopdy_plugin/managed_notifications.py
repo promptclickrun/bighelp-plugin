@@ -1780,3 +1780,20 @@ def get_managed_notifications() -> ManagedNotifications:
         if key not in _instances:
             _instances[key] = ManagedNotifications(directory, observations=_shared_observations(directory))
         return _instances[key]
+
+
+def journal_problem() -> str | None:
+    """Why the routes can't open the journal, as one fixed code, or None when they can.
+
+    It opens the journal exactly as the routes do, under the active Hermes home of the request. Only a
+    ManagedNotificationError counts: its fixed code stays until a person fixes the host. A busy or briefly
+    unreadable database is not a problem to report, so the capability stays listed and the route answers as
+    it does. A journal that opens stays cached; a failure is not cached, so a host owner's fix is seen at once.
+    """
+    try:
+        get_managed_notifications()
+    except ManagedNotificationError as error:
+        return error.code
+    except Exception:
+        return None
+    return None

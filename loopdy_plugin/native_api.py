@@ -749,7 +749,11 @@ def _live_alerts_call(operation, *args, **kwargs):
         return operation(*args, **kwargs)
     except LiveAlertError as error:
         raise NativeAPIError(error.status, error.code, error.message) from None
-    except ManagedNotificationError:
+    except ManagedNotificationError as error:
+        # The app only hears "unavailable"; the host owner needs the fixed cause (a folder anyone else
+        # can open, a key that isn't valid), so it goes to the log and to host telemetry.
+        logger.warning("bighelp live alerts unavailable: %s", error.code)
+        _report_error(503, error.code)
         raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.") from None
 
 

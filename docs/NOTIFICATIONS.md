@@ -219,7 +219,8 @@ straight from the host instead, in about one second. Locked and background devic
 5. Both copies have the same event ID. When a push arrives for an alert that the device already showed, the
    device puts the push in Notification Center only and removes the first copy. You see one alert.
 
-The device asks for this only when `/native/context` lists `native-live-alerts-v1`.
+The device asks for this only when `/native/context` lists `native-live-alerts-v1`. The host lists it only when it
+can open its notification journal; otherwise it says why in `unavailable` and sends pushes.
 
 ### Routes
 
@@ -249,7 +250,9 @@ that the host will not send as pushes. A push that started already is not in the
 bighelp goes to the background, so that the host sends its next alerts as pushes immediately.
 
 Errors: `live_alerts_not_enrolled` (404) when no grant counts, `live_alerts_busy` (429) when 32 grants are live
-on the host, and `live_alerts_unavailable` (503).
+on the host, and `live_alerts_unavailable` (503). The 503 hides the cause from the app. The host log says it
+(`bighelp live alerts unavailable: <code>`) and host telemetry reports it; see [When the journal can't be
+opened](#when-the-journal-cant-be-opened).
 
 A device stays live for the wait it asked for plus 10 seconds, so that the next request can follow. After that,
 or after `alerts/stop`, the host sends its alerts as pushes immediately.
@@ -321,3 +324,40 @@ message text.
 The host's notification key and its grants, subscriptions, content keys and pending events live under
 `<Hermes profile home>/plugin-data/loopdy/managed-notifications/`, owner-only. The key is created on first use
 and stays put when the plugin is updated.
+
+### When the journal can't be opened
+
+The folder must be owned by the user that runs both the gateway and the dashboard. Its mode is 700 and its files
+(`journal.sqlite3`, `identity.lock`, `host-key.pem`) are 600, all owned by that user. The folder can't be a
+symlink. A folder that this user owns and that is too wide is made private when the journal opens; a file is
+never changed. The usual cause is a dashboard and a gateway that run as different users, or files that something else
+copied or created.
+
+When it can't be opened, the plugin names one fixed code (never a path) in the host log, in
+`/native/context` and in host telemetry:
+
+| Code | Meaning |
+|---|---|
+| `notification_private_storage_required` | The folder is a symlink or owned by another user, or one of the three files isn't 600 or isn't owned by this user. |
+| `notification_identity_invalid` | `host-key.pem` is over 4,096 bytes or isn't a P-256 key. |
+| `notification_platform_unavailable` | This computer has no `fcntl` (not a POSIX host). |
+
+The dashboard looks at the same journal that the routes open for the request. A busy or briefly unreadable
+database is not reported: the capabilities stay listed, and the route answers as it always did.
+
+`/native/context` then leaves out `native-live-alerts-v1` and `native-notification-quiet-hours-v1` and gives the
+code for each in `unavailable`. The app does not listen for instant alerts without the first one, so the host sends
+every alert as a push until the journal is fixed. Enrollment and preferences answer 503 with the same code.
+
+To fix it, as the user that runs the gateway and the dashboard:
+
+```bash
+chown -R "$(id -un)" "$HERMES_HOME/plugin-data/loopdy/managed-notifications"
+chmod 700 "$HERMES_HOME/plugin-data/loopdy/managed-notifications"
+chmod 600 "$HERMES_HOME/plugin-data/loopdy/managed-notifications/"*
+```
+
+If the folder is a symlink, replace it with a real folder (move the files into it). Then restart the gateway and the
+dashboard, so that both open the journal again. A gateway that couldn't open the journal when it started (its log
+says `Managed notification producer unavailable: <code>`) queues no alerts until it restarts, and a dashboard keeps
+the old code in memory.

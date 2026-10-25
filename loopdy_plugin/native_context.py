@@ -111,6 +111,26 @@ def log_native_feature_startup(profile: str | None = None) -> None:
         ", ".join(advertised))
 
 
+def _journal_problem() -> str | None:
+    """The fixed code for why the notification journal can't be opened in this process, or None.
+
+    A host owner's cause is told by the code, never by a path or error text. It goes to host telemetry
+    too (once a minute at most), because an unlisted capability means no route call reports it.
+    """
+    try:
+        from .managed_notifications import journal_problem
+        code = journal_problem()
+    except Exception:
+        return None
+    if code is not None:
+        try:
+            from . import host_telemetry
+            host_telemetry.error(code=code, stage="native_route")
+        except Exception:
+            pass
+    return code
+
+
 def native_context(request: Request) -> NativeContext:
     try:
         from hermes_cli.dashboard_auth.base import Session
@@ -376,13 +396,28 @@ def _native_features(
         skip("native-workflows-trigger-v1", "workflow support is unimportable.")
         skip("native-workflows-code-v1", "workflow support is unimportable.")
     from .live_alerts import CAPABILITY as live_alerts_capability, available as live_alerts_available
+    from .quiet_hours import CAPABILITY as quiet_capability, available as quiet_available
+    # Both keep their data in the notification journal, so neither is listed while it can't be opened here.
+    # An app that doesn't see instant alerts relies on pushes, so an unlisted capability costs nothing.
+    journal = None
+    if live_alerts_available() or quiet_available():
+        journal = _journal_problem()
     if live_alerts_available():
-        features.append(live_alerts_capability)
+        if journal is None:
+            features.append(live_alerts_capability)
+        else:
+            skip(live_alerts_capability, f"the notification journal can't be opened ({journal}).")
+            if unavailable is not None:
+                unavailable[live_alerts_capability] = journal
     else:
         skip(live_alerts_capability, "the notification journal needs a POSIX host and Hermes' home helpers.")
-    from .quiet_hours import CAPABILITY as quiet_capability, available as quiet_available
     if quiet_available():
-        features.append(quiet_capability)
+        if journal is None:
+            features.append(quiet_capability)
+        else:
+            skip(quiet_capability, f"the notification journal can't be opened ({journal}).")
+            if unavailable is not None:
+                unavailable[quiet_capability] = journal
     else:
         skip(quiet_capability, "notifications need a POSIX host that can read time zones.")
     from .composio import CAPABILITY as composio_capability, available as composio_available

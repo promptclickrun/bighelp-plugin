@@ -124,6 +124,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
                    module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
+        self.stack.enter_context(patch.object(native_context, "_journal_problem", return_value=None))
         self.stack.enter_context(patch.object(native_context.time, "time", return_value=1000))
 
     def request(self, *, principal=False):
