@@ -326,6 +326,32 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.drain_pending()
         self.assertIn("scheduled.completed",[e["eventType"] for e in self.events_sent()])
 
+    def test_scheduled_run_with_a_turn_id_over_128_characters_still_alerts(self):
+        # Regression (#215): Hermes' unified runtime names a cron turn
+        # "<session>:cron:<job>:<run>:<8 hex>", 130 characters, and every such
+        # run was dropped without a word. It now alerts under a stable alias.
+        self.grant["eventTypes"]=["scheduled.completed","scheduled.failed","session.completed","session.failed"]
+        grant_id=str(uuid.uuid4()); self.grant["grantId"]=grant_id; self.grant_id=grant_id
+        self.enroll_with_key(grant_id)
+        session="local-"+"a1"*32
+        done=f"{session}:cron:b6c7a015db53:{'3e'*16}:bd22c14b"
+        failed=f"{session}:cron:b6c7a015db53:{'4f'*16}:0c11aa27"
+        self.assertEqual(len(done),130)
+        self.service.observe("post_llm_call",profile="default",session_id=session,turn_id=done,assistant_response="Briefing delivered.",platform="cron")
+        self.service.observe("on_session_end",profile="default",session_id=session,turn_id=done,completed=True,platform="cron")
+        self.service.observe("on_session_end",profile="default",session_id=session,turn_id=failed,failed=True,error="provider unreachable",platform="cron")
+        self.service.drain_pending()
+        sent=self.events_sent()
+        self.assertEqual([e["eventType"] for e in sent],["scheduled.completed","scheduled.failed"])
+        alias=lambda value: "turn."+hashlib.sha256(value.encode()).hexdigest()
+        self.assertEqual([e["turnId"] for e in sent],[alias(done),alias(failed)])
+        self.assertTrue(all(len(e["turnId"])<=128 for e in sent))
+        # Well-formed but absurdly long, or not well-formed at all: still no alert.
+        for turn in ("x"*1025, "bad turn id "+"x"*130):
+            self.service.observe("on_session_end",profile="default",session_id=session,turn_id=turn,failed=True,error="x",platform="cron")
+        self.service.drain_pending()
+        self.assertEqual(len(self.events_sent()),2)
+
     def test_silent_scheduled_run_sends_no_alert(self):
         # Regression: a cron run answering "[SILENT]" skipped Telegram delivery but
         # still reached the phone as a push reading "[SILENT]".
