@@ -41,7 +41,7 @@ copy, including the phone's content key.
 
 | Event | When |
 | --- | --- |
-| `session.completed` / `session.failed` | The agent finished a reply, or couldn't. |
+| `session.completed` / `session.failed` | The agent finished a reply, or couldn't. When its only answer was a reaction to your message, the alert reads "Reacted 👍 to your message". |
 | `scheduled.completed` / `scheduled.failed` | A scheduled task finished or failed. |
 | `approval.required` | The agent needs your approval to continue. |
 | `clarification.required` | The agent asked you a question. |

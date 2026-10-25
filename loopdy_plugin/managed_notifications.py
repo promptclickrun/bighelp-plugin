@@ -148,6 +148,8 @@ _OFF_SCREEN_DISPLAY_KIND = "hidden"
 _UNEXPECTED_SILENCE_REPLY = ("⚠️ The model returned only a silence marker for a message that needed "
                              "a reply. Try again or rephrase.")
 _LEGACY_SILENCE_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"})
+# The alert for a turn whose only answer was the agent's reaction to the person's message.
+_REACTION_REPLY = "Reacted {emoji} to your message"
 # Hermes runs each group chat member's turn in a session of this source, and its rules there tell an
 # agent with nothing new to add to reply "(pass)". Hermes publishes no message for a pass, so it
 # sends no alert either. The pattern is gateway/hosted_room_discussion.py's is_pass_text.
@@ -182,12 +184,12 @@ def _turn_prompt(history: Any) -> tuple[Any, Any]:
     return None, None
 
 
-def _turn_reacted(history: Any) -> bool:
-    """Whether this turn's agent reacted to the person's message (``bighelp_react_to_message``).
-    Hermes retries a reply with no text, so a reaction that says it all ends on a bare marker."""
+def _turn_reaction(history: Any) -> str | None:
+    """The emoji this turn's agent reacted to the person's message with (``bighelp_react_to_message``),
+    if it did. Hermes retries a reply with no text, so a reaction that says it all ends on a bare marker."""
     for message in reversed(history if isinstance(history, list) else ()):
         if not isinstance(message, dict) or message.get("role") == "user":
-            return False
+            return None
         content = message.get("content")
         if message.get("role") != "tool" or not isinstance(content, str) or len(content) > 65_536:
             continue
@@ -195,11 +197,13 @@ def _turn_reacted(history: Any) -> bool:
             result = json.loads(content)
         except ValueError:
             continue
-        if (isinstance(result, dict) and result.get("schema") == REACTION_SCHEMA and result.get("success") is True
-                and any(isinstance(item, dict) and item.get("author") == "agent"
-                        for item in result.get("reactions") or ())):
-            return True
-    return False
+        if not isinstance(result, dict) or result.get("schema") != REACTION_SCHEMA or result.get("success") is not True:
+            continue
+        for item in result.get("reactions") or ():
+            emoji = item.get("emoji") if isinstance(item, dict) and item.get("author") == "agent" else None
+            if isinstance(emoji, str) and emoji.strip() and len(emoji.encode()) <= 32:
+                return emoji.strip()
+    return None
 
 
 def _delivered_reply(response: Any, *, autonomous: bool, history: Any, group_chat: bool = False) -> Any:
@@ -222,9 +226,11 @@ def _delivered_reply(response: Any, *, autonomous: bool, history: Any, group_cha
         if silence_allowed is None:  # Before the human-turn notice, Hermes kept every bare marker quiet.
             return ""
         kind, reply_expected = _turn_prompt(history)
-        if kind == _OFF_SCREEN_DISPLAY_KIND or silence_allowed(kind, reply_expected) or _turn_reacted(history):
+        if kind == _OFF_SCREEN_DISPLAY_KIND or silence_allowed(kind, reply_expected):
             return ""
-        return _UNEXPECTED_SILENCE_REPLY
+        # A reaction that was the whole answer alerts like a messaging app's does.
+        emoji = _turn_reaction(history)
+        return _REACTION_REPLY.format(emoji=emoji) if emoji else _UNEXPECTED_SILENCE_REPLY
     except Exception:
         logger.warning("Notification silence check unavailable; the reply alerts unchanged")
         return response
