@@ -33,6 +33,14 @@ The Codex sign-in is read inside the selected agent's Hermes profile (its home a
 credentials). Hosts serving several profiles refuse credential reads outside one; if that still happens the call
 fails with `voice_provider_credentials_unavailable`, not as a sign-in failure.
 
+## What the voice model says
+
+The plugin gives the voice model its instructions. When a request sounds complete, the model first says one
+short line in its own words ("On it, checking now"), then hands the request to the agent in the same response.
+It never claims the work is done and doesn't guess a result; it speaks the agent's result only once it arrives.
+Both providers use the same rule. On the Codex subscription the plugin also sets `delegation.ack_filler` to
+`false`, so the provider adds no filler of its own on top of the model's line.
+
 ## What the plugin keeps
 
 Nothing lasting. Call state lives in memory and is dropped when the call closes or the plugin unloads. The

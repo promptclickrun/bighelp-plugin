@@ -130,6 +130,32 @@ class LiveVoiceProviderTests(unittest.TestCase):
                 with self.subTest(phrase=phrase):
                     self.assertIn(phrase, text)
 
+    def test_both_providers_acknowledge_in_a_short_line_then_delegate_in_the_same_response(self):
+        # The model hands off and stays silent unless told to speak first; asking is the lever we control.
+        from loopdy_plugin.live_voice_provider import DEFAULT_INSTRUCTIONS, PublicLiveProvider
+
+        for instructions in (DEFAULT_INSTRUCTIONS, PublicLiveProvider.default_instructions):
+            text = instructions.lower()
+            for phrase in ("one short, natural line in your own words", "on it, checking now",
+                           "then delegate in the same response", "never say you are checking without delegating",
+                           "never imply the work is done"):
+                with self.subTest(phrase=phrase):
+                    self.assertIn(phrase, text)
+            self.assertNotIn("say briefly that you are checking", text)
+            self.assertLess(len(instructions.encode("utf-8")), 16384)
+
+    def test_subscription_keeps_the_provider_filler_off_so_the_model_alone_acknowledges(self):
+        # ack_filler (Codex's delegation.ack_filler) asks the provider to speak its own filler on delegation.
+        # The model acknowledges in its own words, so a second filler would double up.
+        from loopdy_plugin.live_voice_provider import CodexLiveProvider, DEFAULT_INSTRUCTIONS, PublicLiveProvider
+
+        payload = CodexLiveProvider(auth=_Auth())._create_payload(
+            "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", DEFAULT_INSTRUCTIONS, "cove", ())
+        self.assertIs(payload["session"]["delegation"]["ack_filler"], False)
+        public = PublicLiveProvider(mode="api_key", api_key="test-key")._create_payload(
+            "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", PublicLiveProvider.default_instructions, "marin", ())
+        self.assertEqual(public["session"]["delegation"], {"type": "client"})
+
     def test_subscription_instructions_cover_delegation_and_continued_turns(self):
         from loopdy_plugin.live_voice_provider import CodexLiveProvider, DEFAULT_INSTRUCTIONS
 
