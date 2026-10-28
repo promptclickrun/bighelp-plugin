@@ -723,6 +723,66 @@ async def agents_activity(request: Request) -> Response:
     return _response(value, owner, request_id, maximum=32_768)
 
 
+class _BotChat(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    profile: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    idempotencyKey: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+
+
+@router.post("/bot-chat/create")
+async def bot_chat_create(request: Request) -> Response:
+    """The agent's Bot Chat, made by Hermes as its own chat when there's none yet (bighelp app: Bots)."""
+    from .bot_chat import CAPABILITY, BotChatError, create
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "bot_chat_unavailable", "Hermes can't make Bot Chats for the app on this host.")
+    body = await _body(request, _BotChat)
+    try:
+        value = await create(body.profile, body.idempotencyKey)
+    except LookupError:
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.") from None
+    except BotChatError as error:
+        raise NativeAPIError(503 if error.busy else 409, error.code,
+                             "Hermes couldn't start this agent's Bot Chat. Try again in a moment." if error.busy
+                             else "Hermes didn't make this agent's Bot Chat.",
+                             {"reason": error.reason} if error.reason else None) from None
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response({"ok": True, **value}, owner, request_id)
+
+
+class _VoiceCatalog(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    profile: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    provider: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _voice_catalog(body: _VoiceCatalog) -> dict:
+    from .voice_catalog import VoiceCatalogError, catalog
+    try:
+        return catalog(body.profile, body.provider)
+    except LookupError:
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.") from None
+    except VoiceCatalogError:
+        raise NativeAPIError(503, "voice_catalog_failed", "This voice provider couldn't list its voices.") from None
+
+
+@router.post("/voice-catalog")
+async def voice_catalog(request: Request) -> Response:
+    """The voices and models a speech plugin offers an agent, read-only (bighelp app: Voice settings)."""
+    from .voice_catalog import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "voice_catalog_unavailable", "Voice lists aren't available on this host.")
+    body = await _body(request, _VoiceCatalog)
+    value = await run_in_threadpool(_voice_catalog, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response({"ok": True, **value}, owner, request_id, maximum=131_072)
+
+
 class _Team(_Body):
     enabled: StrictBool | None = None
 
