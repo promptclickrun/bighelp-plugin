@@ -470,4 +470,14 @@ def _native_features(
             features.append(telemetry_capability)
         else:
             skip(telemetry_capability, "host telemetry support is unavailable.")
+    from .bot_chat import CAPABILITY as bot_chat_capability, available as bot_chat_available
+    if bot_chat_available():
+        features.append(bot_chat_capability)
+    else:
+        skip(bot_chat_capability, "this Hermes has no gateway client to make Bot Chats with.")
+    from .voice_catalog import CAPABILITY as voice_catalog_capability, available as voice_catalog_available
+    if voice_catalog_available():
+        features.append(voice_catalog_capability)
+    else:
+        skip(voice_catalog_capability, "this Hermes has no plugin speech providers.")
     return profile, tuple(features)
