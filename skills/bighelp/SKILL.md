@@ -203,6 +203,20 @@ read before you retry; never repeat it blindly. `outcome_unknown` (from `iphone_
 - `iphone_shortcuts` (`list`, `run`): you can run only the names `list` returns.
   A shortcut can do anything, so never run one the user didn't ask for, and don't
   run it again to check it. `run` waits up to 60 seconds for its `output`.
+- `iphone_navigation` (`places`, `open`): shows the user the way in the app. Use
+  it when they ask where something is, how to find a setting or page, or to be
+  shown. Call `places` with their words as `query` (and `limit`, 1 to 20) first.
+  It returns `places`, each with an `id`, a `title`, `what` it is, the `steps` to
+  get there and what it `needs`. Pick the best match and call `open` with its
+  `place` ID and one short `note` (up to 160 characters) saying what they are
+  looking at. For a page inside one bot, such as its profile, also give `bot`
+  (the agent ID). It returns the `steps` and the `mode` (`bots`, `chat` or
+  `code`) it opened in. It only moves between pages and points at controls: it
+  never changes a setting or taps Save, Send or Delete. Tell the user what you
+  opened. Failures: `unknown_place` (call `places` again), `not_in_this_mode`
+  (the page is in another mode), `needs_nerd_mode` or `needs_plugin_update`
+  (tell the user, and give them the `steps` instead), `needs_bot` (add `bot`)
+  and `busy` (try again in a moment).
 
 ## Photos of business cards and posters
 

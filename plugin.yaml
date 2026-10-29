@@ -54,6 +54,7 @@ provides_tools:
   - iphone_music
   - iphone_focus
   - iphone_shortcuts
+  - iphone_navigation
   - bighelp_render_summary
   - bighelp_render_metrics
   - bighelp_render_list

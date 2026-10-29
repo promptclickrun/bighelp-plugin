@@ -20,6 +20,8 @@ _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
 _BIRTHDAY = r"^(\d{4}-\d{2}-\d{2}|--\d{2}-\d{2})$"
 _BIRTHDAY_OR_EMPTY = r"^(|\d{4}-\d{2}-\d{2}|--\d{2}-\d{2})$"
 _TOKEN = r"^[A-Za-z][A-Za-z0-9_-]{0,23}$"
+# A page of the app by its ID; the phone names them (see navigation.places).
+_PLACE = r"^[a-z0-9.-]+$"
 MAX_PHOTO_PATH_LENGTH = 4_096
 
 
@@ -309,6 +311,9 @@ OPERATIONS: dict[str, Operation] = {
     "focus.current": Operation(),
     "shortcuts.list": Operation(),
     "shortcuts.run": Operation({"name": _text(200), "input": _text(4_000, 0)}, ("name",)),
+    "navigation.places": Operation({"query": _text(120), "limit": _whole(1, 20)}),
+    "navigation.open": Operation(
+        {"place": _text(96, pattern=_PLACE), "bot": _text(96), "note": _text(160)}, ("place",)),
 }
 
 KIND_OPERATIONS: dict[str, tuple[str, ...]] = {}

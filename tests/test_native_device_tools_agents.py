@@ -825,6 +825,7 @@ class DeliveredWriteTests(WaitCase):
             "health.read", "calendar.list", "reminders.list", "location.current", "appearance.get",
             "contacts.list", "photos.list", "photos.albums", "photos.get", "geofences.list", "alarms.list",
             "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
+            "navigation.places",
         })
         for operation in DEVICE_TOOL_OPERATIONS:
             expected = "phone_unavailable" if operation in reads else "outcome_unknown"

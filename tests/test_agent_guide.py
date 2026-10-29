@@ -109,7 +109,7 @@ class AgentGuideTests(unittest.TestCase):
 
     def test_brief_fits_hermes_section_limits(self) -> None:
         # Hermes skips a section over 4,000 characters and caps all plugins together at 8,000.
-        self.assertLessEqual(len(agent_guide.prompt_section({"platform": "bighelp"})), 2_600)
+        self.assertLessEqual(len(agent_guide.prompt_section({"platform": "bighelp"})), 2_800)
         self.assertLessEqual(len(agent_guide.ELSEWHERE_NOTE), 500)
         self.assertRegex(agent_guide.SECTION_ID, r"^[a-z0-9._-]{1,128}$")
 

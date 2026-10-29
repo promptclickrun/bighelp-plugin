@@ -356,10 +356,10 @@ class ToolSchemaTests(unittest.TestCase):
                 with self.subTest(kind=kind, phrase=phrase):
                     self.assertIn(phrase, self.schemas[f"iphone_{kind}"]["description"])
 
-    def test_all_iphone_schemas_stay_within_ten_kilobytes(self):
+    def test_all_iphone_schemas_stay_within_eleven_kilobytes(self):
         # Sent with every request to the serving agent, whatever the Device access switches say.
         total = sum(len(json.dumps(schema, separators=(",", ":"))) for schema in self.schemas.values())
-        self.assertLessEqual(total, 10_000, total)
+        self.assertLessEqual(total, 11_000, total)
 
     def test_bounds_are_the_contracts(self):
         def prop(kind: str, name: str) -> dict:
@@ -421,7 +421,7 @@ class ToolSchemaTests(unittest.TestCase):
 
 class ChannelKindTests(unittest.TestCase):
     def test_features_and_enabled_kinds(self):
-        self.assertEqual(KIND_CAPABILITIES, {kind: f"native-device-{kind}-v1" for kind in NEW_TOOLS})
+        self.assertEqual(KIND_CAPABILITIES, {kind: f"native-device-{kind}-v1" for kind in (*NEW_TOOLS, "navigation")})
         fields = {
             "channelId": str(uuid.uuid4()), "deviceId": str(uuid.uuid4()), "hostId": "local-host",
             "authorizationEpoch": 1, "agentId": "default", "sessionId": "stored-session",
