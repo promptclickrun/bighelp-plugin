@@ -223,6 +223,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.voice_catalog import available as voice_catalog_available
         if voice_catalog_available():
             expected.append("native-voice-catalog-v1")
+        from loopdy_plugin.native_skills_import import available as skills_import_available
+        if skills_import_available():
+            expected.append("native-skills-import-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

@@ -43,6 +43,7 @@ PROCESS_FEATURES = (
     "native-host-telemetry-v1",
     "native-bot-chat-v1",
     "native-voice-catalog-v1",
+    "native-skills-import-v1",
 )
 
 
@@ -124,11 +125,13 @@ class NativeStartupLoggingTests(unittest.TestCase):
                                available=Mock(return_value=True))
         self.voice_catalog = module("loopdy_plugin.voice_catalog", CAPABILITY=PROCESS_FEATURES[48],
                                     available=Mock(return_value=True))
+        self.skills_import = module("loopdy_plugin.native_skills_import", CAPABILITY=PROCESS_FEATURES[49],
+                                    available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
                    self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.agents_activity, self.team,
                    self.my_templates, self.plugin_links, self.image_drafts, self.telemetry,
-                   self.bot_chat, self.voice_catalog,
+                   self.bot_chat, self.voice_catalog, self.skills_import,
                    module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
@@ -187,6 +190,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.telemetry.available.return_value = False
         self.bot_chat.available.return_value = False
         self.voice_catalog.available.return_value = False
+        self.skills_import.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
         expected = PROCESS_FEATURES[:2]
