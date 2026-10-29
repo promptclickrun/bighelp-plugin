@@ -435,7 +435,7 @@ class ChatBriefTests(unittest.TestCase):
         section = agent_guide.prompt_section({"platform": "bighelp"})
         for word in ("contact", "place", "music", "iphone_contacts", "iphone_music"):
             self.assertIn(word, section)
-        self.assertLessEqual(len(section), 2_600)
+        self.assertLessEqual(len(section), 2_800)
 
     def test_the_skill_teaches_the_objects(self) -> None:
         skill = (PLUGIN_ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8")

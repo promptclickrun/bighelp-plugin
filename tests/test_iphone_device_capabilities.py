@@ -107,6 +107,9 @@ GOOD = {
     "focus.current": [{}],
     "shortcuts.list": [{}],
     "shortcuts.run": [{"name": "Log Water"}, {"name": "Log Water", "input": "one glass"}],
+    # test_iphone_navigation_tool.py has the full set of cases.
+    "navigation.places": [{}, {"query": "voice", "limit": 20}],
+    "navigation.open": [{"place": "settings.voice"}, {"place": "bot.profile", "bot": "research", "note": "Here."}],
 }
 
 BAD = {
@@ -195,6 +198,8 @@ BAD = {
     "shortcuts.list": [{"x": 1}],
     "shortcuts.run": [{}, {"name": ""}, {"name": "x" * 201}, {"name": "A", "input": "i" * 4001}, {"name": "A", "input": 5},
                       {"name": "A", "args": {}}],
+    "navigation.places": [{"limit": 21}, {"place": "settings.voice"}],
+    "navigation.open": [{}, {"place": "Settings"}, {"place": "ok", "tap": "Save"}],
 }
 
 # A reminder with a place for iOS Reminders to watch; a made-up address.
@@ -223,7 +228,7 @@ class ArgumentContractTests(unittest.TestCase):
         self.assertEqual(set(GOOD), set(OPERATIONS))
         self.assertEqual(set(BAD), set(OPERATIONS))
         self.assertTrue(set(OPERATIONS) <= DEVICE_TOOL_OPERATIONS)
-        self.assertEqual(len(OPERATIONS), 29)
+        self.assertEqual(len(OPERATIONS), 31)
         for kind in NEW_TOOLS:
             self.assertIn(kind, DEVICE_TOOL_KINDS)
 
