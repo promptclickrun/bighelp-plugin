@@ -16,6 +16,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
 from .native_context import NativeAPIError, NativeContext, PROFILE_ID, log_native_feature_startup, native_context
+from .native_skills_import import MAX_DATA_CHARS as MAX_SKILL_IMPORT_DATA_CHARS
+from .native_skills_import import MAX_REQUEST_BYTES as MAX_SKILL_IMPORT_BYTES
 from .store import CardTemplateConflict, CardTemplateLimit
 
 
@@ -189,7 +191,7 @@ def _invalid_number(_value):
     raise ValueError("Non-finite JSON number")
 
 
-async def _body(request: Request, model: type[_BodyT]) -> _BodyT:
+async def _body(request: Request, model: type[_BodyT], maximum: int = MAX_BODY_BYTES) -> _BodyT:
     if request.query_params:
         raise NativeAPIError(422, "invalid_request", "Query fields are not supported.")
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -197,7 +199,7 @@ async def _body(request: Request, model: type[_BodyT]) -> _BodyT:
         raise NativeAPIError(422, "invalid_request", "A JSON request is required.")
     content = bytearray()
     async for chunk in request.stream():
-        if len(content) + len(chunk) > MAX_BODY_BYTES:
+        if len(content) + len(chunk) > maximum:
             raise NativeAPIError(413, "payload_too_large", "The request exceeds the byte limit.")
         content.extend(chunk)
     try:
@@ -781,6 +783,40 @@ async def voice_catalog(request: Request) -> Response:
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response({"ok": True, **value}, owner, request_id, maximum=131_072)
+
+
+class _SkillImport(_Body):
+    fileName: str = Field(min_length=1, max_length=200)
+    kind: Literal["zip", "skillMd"]
+    data: str = Field(min_length=1, max_length=MAX_SKILL_IMPORT_DATA_CHARS)
+    category: str | None = Field(default=None, max_length=64)
+
+
+def _skills_import(body: _SkillImport) -> dict:
+    from .native_skills_import import SkillImportError, import_skill
+    try:
+        return import_skill(body.agentId, body.kind, body.data, body.category)
+    except SkillImportError as error:
+        raise NativeAPIError(error.status, error.code, error.message, error.details) from None
+    except Exception as error:
+        # Hermes' writers may carry host paths in their text; only the class name is logged.
+        logger.error("bighelp skill import failed: skill_import_failed (%s)", type(error).__name__)
+        raise NativeAPIError(503, "skill_import_failed", "The skill couldn't be added. Nothing was changed.") from None
+
+
+@router.post("/skills/import")
+async def skills_import(request: Request) -> Response:
+    """Add a skill (a .zip folder or one SKILL.md) to an agent (bighelp app: Skills & Tools › Upload skill)."""
+    from .native_skills_import import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "skill_import_unavailable", "This host can't add skills from the app.")
+    body = await _body(request, _SkillImport, MAX_SKILL_IMPORT_BYTES)
+    value = await run_in_threadpool(_skills_import, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
 
 
 class _Team(_Body):
