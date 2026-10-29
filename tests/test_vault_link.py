@@ -9,6 +9,8 @@ import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 import dataclasses
 from pathlib import Path
 import sys
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -161,6 +163,55 @@ class VaultLinkTests(unittest.TestCase):
                 self.assertIn(result.json()["copies"][0]["status"], ("created", "existing"))
         self.assertEqual(len(self.vault().list_items()), 2)
         self.assertEqual(len(self.vault("research").list_items()), 2)
+
+    def test_a_serving_agent_that_is_a_named_profile_is_the_default_when_profile_is_left_out(self):
+        mine = self.save("payment", "Card", CARD, SHOP, profile="research")
+        default_card = self.save("payment", "Card", CARD, SHOP)
+        default_before = self.snapshot()
+        with patch("hermes_constants.profile_name_for_home", return_value="research"):
+            self.assertEqual(self.fixture.context().json()["servingProfileId"], "research")
+            result = self.call({"item_ids": [mine], "origins": [OTHER_SHOP]})
+            self.assertEqual(result.status_code, 200, result.text)
+            # The default agent's item is not in the serving agent's vault.
+            missing = self.call({"item_ids": [default_card], "origins": [OTHER_SHOP]})
+        self.assertEqual(missing.json()["error"]["code"], "item_not_found")
+        made = result.json()["copies"][0]["id"]
+        self.assertEqual(self.vault("research").get_meta(made).origin, OTHER_SHOP)
+        self.assertEqual(self.snapshot(), default_before, "the default agent's vault was not touched")
+
+    def test_two_overlapping_requests_make_one_copy(self):
+        """The app retries at once when an answer is lost, so a retry can overlap the first request."""
+        from agent.vault_store import VaultStore
+        card = self.save("payment", "Card", CARD)
+        real = VaultStore.add_item
+        first_write = threading.Event()
+
+        def slow(store, *args, **kwargs):
+            first_write.set()
+            time.sleep(0.2)  # long enough for the second request to take its snapshot, were there no lock
+            return real(store, *args, **kwargs)
+
+        results, errors = [], []
+
+        def run(wait):
+            try:
+                if wait:
+                    first_write.wait(5)
+                results.append(vault_link.link("default", [card], [SHOP]))
+            except BaseException as error:  # a failing thread must fail the test, not vanish
+                errors.append(error)
+
+        with patch.object(VaultStore, "add_item", slow):
+            threads = [threading.Thread(target=run, args=(False,)), threading.Thread(target=run, args=(True,))]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(10)
+        self.assertEqual(errors, [])
+        copies = [value["copies"][0] for value in results]
+        self.assertEqual(sorted(copy["status"] for copy in copies), ["created", "existing"])
+        self.assertEqual(copies[0]["id"], copies[1]["id"])
+        self.assertEqual(len(self.vault().list_items()), 2)
 
     def test_a_write_that_fails_midway_reports_the_copies_made_and_a_retry_finishes(self):
         card = self.save("payment", "Card", CARD)

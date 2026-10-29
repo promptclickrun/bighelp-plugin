@@ -17,6 +17,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 import importlib
 import logging
+import threading
 from typing import Any
 
 from .workspace_capabilities import profile_scope
@@ -28,6 +29,10 @@ MAX_ORIGINS = 10
 LOCAL_PREFIX = "vault_"
 COPYABLE_KINDS = ("payment", "address")
 logger = logging.getLogger("hermes.plugins.bighelp")
+# One link at a time. The vault locks each call, not the check and the write together, and a request keeps
+# running after its client is gone, so the app's retry could overlap it and add the same copy twice. This is
+# not the vault's own lock: that one is not re-entrant, and every vault call takes it.
+_LINK_LOCK = threading.Lock()
 
 # Hermes' own names this module relies on.
 _STORE_NAMES = ("get_vault_store", "normalize_origin", "VaultError")
@@ -100,17 +105,18 @@ def link(profile: str | None, item_ids: list[str], origins: list[str]) -> dict[s
                 stack.enter_context(profile_scope(profile))
             except ValueError:
                 raise VaultLinkError(404, "profile_not_found", "The selected agent no longer exists.") from None
-        try:
-            store = vault_store.get_vault_store()
-            saved = {meta.id: meta for meta in store.list_items()}
-            plan = _plan(store, vault_store, saved, item_ids)
-        except VaultLinkError:
-            raise
-        except Exception as error:
-            # Hermes' text may carry paths; only the class name is logged.
-            logger.error("bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
-            raise _unavailable() from None
-        return {"copies": _write(store, vault_store, saved, plan, targets)}
+        with _LINK_LOCK:
+            try:
+                store = vault_store.get_vault_store()
+                saved = {meta.id: meta for meta in store.list_items()}
+                plan = _plan(store, vault_store, saved, item_ids)
+            except VaultLinkError:
+                raise
+            except Exception as error:
+                # Hermes' text may carry paths; only the class name is logged.
+                logger.error("bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
+                raise _unavailable() from None
+            return {"copies": _write(store, vault_store, saved, plan, targets)}
 
 
 def _plan(store: Any, vault_store: Any, saved: dict[str, Any], item_ids: list[str]) -> list[tuple[Any, dict[str, str]]]:
@@ -151,6 +157,7 @@ def _write(store: Any, vault_store: Any, saved: dict[str, Any], plan: list[tuple
                 meta = saved[item_id]
                 secrets[item_id] = _secret_of(vault_store, meta.kind, store.resolve_secret(item_id))
             except Exception:
+                # A candidate that can't be read is not a copy, on purpose: the worst case is one more copy.
                 return None
         return secrets[item_id]
 
