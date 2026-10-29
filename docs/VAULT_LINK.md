@@ -16,8 +16,9 @@ computer instead. The secret never leaves the computer.
   own vault folder and key are the ones used.
 - For each item and each origin it adds a new item with the same kind, label
   and secret. The new item has that origin.
-- Only `payment` and `address` items are copied. A login is refused, because
-  its authenticator seed can not go through `add_item` as it was stored. Items
+- Only `payment` and `address` items are copied. A login is refused to stay
+  careful: its authenticator seed, when it uses the `seed|digits|period|algo`
+  form, does not go through `add_item` as it was stored. Items
   of 1Password or Bitwarden (`op:…`, `bw:…`) are refused too: only the local
   vault (`vault_…`) is used.
 - The plugin checks everything before it writes anything: the shape of the
@@ -28,9 +29,13 @@ computer instead. The secret never leaves the computer.
   and the origin are the same and the secret is the same. The plugin compares
   the secrets on the computer and never returns or logs them. So a retry, also
   after a lost answer, is safe and finishes the rest.
-- Origins are normalized with the `normalize_origin` of Hermes
-  (`HTTPS://Shop.Example.org:443/path` becomes `https://shop.example.org`). Only
-  `http` and `https` are accepted.
+- The app sends origins already normalized: `scheme://host[:port]`, with the
+  default port left out. The plugin still normalizes them with the
+  `normalize_origin` of Hermes (`HTTPS://Shop.Example.org:443/path` becomes
+  `https://shop.example.org`). The `origin` in the reply is the form of Hermes.
+  Only `http` and `https` are accepted.
+- One link runs at a time in the plugin process. A retry that comes while the
+  first request still writes waits, then reports the copies as `existing`.
 - Messages are fixed text. They never hold a secret value.
 
 ## Route
@@ -76,12 +81,13 @@ The body is the usual `{"error": {"code", "message", "retryable", "details"}}`.
 
 | Status | Code | Meaning |
 | --- | --- | --- |
-| 400 | `invalid_request` | A field is wrong, an unknown field, a wrong count, an item or origin twice, or an origin that is not an `http(s)` address. This route uses 400 for all of them |
+| 400 | `invalid_request` | A field is wrong, an unknown field, a wrong count, an item or origin twice, or an origin that is not an `http(s)` address. This route uses 400 for the body. |
+| 422 | `invalid_request` | The `X-Loopdy-Request-ID` header is missing or not a lowercase UUID. The shared check of the native routes answers this before the body is read |
 | 400 | `not_copyable` | The item is a login, or not in the local vault, or has no full card or address details. `details.itemId` names it |
 | 404 | `profile_not_found` | The agent no longer exists |
 | 404 | `item_not_found` | A local item does not exist in that agent's vault. `details.itemId` names it |
 | 413 | `payload_too_large` | The request is bigger than 32 KiB |
-| 428 | `context_required` | Load the native context first |
+| 428 | `context_required` | There is no `If-Match` header. Load the native context first |
 | 412 | `context_changed` | The context changed. After the write, `details.copies` lists the copies. A retry reports them as `existing` |
 | 500 | `vault_write_failed` | A write failed after some copies were made. `details.copies` has the rows done so far. Retry: the rest is finished |
 | 503 | `vault_unavailable` | The Hermes has no vault, or the vault or its key can not be opened. `retryable` is true |
