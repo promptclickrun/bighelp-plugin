@@ -53,12 +53,14 @@ DEVICE_TOOL_READ_OPERATIONS = frozenset(
         "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
         # The app doesn't journal these either: playing or pausing twice, or setting a look twice, is once.
         "music.play", "music.control", "appearance.set",
+        # Both only move the app between pages, so doing one twice is the same as once.
+        "navigation.places", "navigation.open",
     }
 )
 # One per switch in Device access; the channel's `enabled` list names them.
 DEVICE_TOOL_KINDS = (
     "health", "calendar", "reminders", "location", "appearance",
-    "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts",
+    "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts", "navigation",
 )
 # Wait longer than the usual 30 seconds: a shortcut can run that long, and a file is fetched from the host.
 DEVICE_TOOL_LONG_OPERATIONS = frozenset({"shortcuts.run", "photos.save"})

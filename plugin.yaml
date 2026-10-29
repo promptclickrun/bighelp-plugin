@@ -2,7 +2,7 @@ manifest_version: 1
 name: loopdy
 label: bighelp
 kind: platform
-version: "3.33.0"
+version: "3.34.0"
 license: Apache-2.0
 description: >
   The bighelp app's plugin for Hermes: native cards, Feed, Ideas and Goals,
@@ -54,6 +54,7 @@ provides_tools:
   - iphone_music
   - iphone_focus
   - iphone_shortcuts
+  - iphone_navigation
   - bighelp_render_summary
   - bighelp_render_metrics
   - bighelp_render_list

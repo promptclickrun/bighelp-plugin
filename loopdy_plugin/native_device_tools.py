@@ -58,6 +58,7 @@ KIND_CAPABILITIES = {
     "music": "native-device-music-v1",
     "focus": "native-device-focus-v1",
     "shortcuts": "native-device-shortcuts-v1",
+    "navigation": "native-device-navigation-v1",
 }
 # Every profile's agent can use the phone tools: a chat of any profile on this host may open a channel.
 AGENTS_CAPABILITY = "native-device-tools-agents-v1"
@@ -85,6 +86,7 @@ PURE_READ_OPERATIONS = frozenset({
     "health.read", "calendar.list", "reminders.list", "location.current", "appearance.get",
     "contacts.list", "photos.list", "photos.albums", "photos.get", "geofences.list", "alarms.list",
     "music.nowPlaying", "music.search", "music.library", "focus.current", "shortcuts.list",
+    "navigation.places",
 })
 _UUID = r"\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z"
 _SESSION = r"\A[A-Za-z0-9_-]{1,180}\z"
@@ -1233,8 +1235,8 @@ class _Connect(_Scope):
     sessionId: str = Field(pattern=_SESSION)
     enabled: list[Literal[
         "health", "calendar", "reminders", "location", "appearance",
-        "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts",
-    ]] = Field(min_length=0, max_length=12)
+        "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts", "navigation",
+    ]] = Field(min_length=0, max_length=13)
 
     @field_validator("enabled")
     @classmethod

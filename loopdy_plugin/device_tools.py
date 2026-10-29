@@ -1,5 +1,5 @@
 """bighelp's iPhone Health, Calendar, Reminders, Location, Appearance, Contacts, Photos, Geofence, Alarm,
-Music, Focus and Shortcuts tools.
+Music, Focus, Shortcuts and Navigation tools.
 
 The phone runs each call over the native channel: native_device_tools.py takes it in
 Hermes' execution middleware, so the handlers here never run on a working host.
@@ -159,6 +159,12 @@ _SHORTCUTS = (
     "input and waits up to a minute. Only when asked. outcome_unknown: it may have run; don't rerun, check first."
     + _ACCESS.format("Shortcuts")
 )
+_NAVIGATION = (
+    "Show the user where a setting or page is in bighelp, when they ask where something is or how to find it. "
+    "Call places with their words (query), then open the best match's id with a short note on what they are "
+    "looking at (bot: an agent id, for a page inside one bot). It only moves between pages and points at "
+    "controls; it never changes a setting or taps Save, Send or Delete. Tell the user what you opened."
+)
 
 
 async def _unreachable_handler(payload: Any, **kwargs: Any) -> str:
@@ -225,6 +231,7 @@ def register(ctx: Any) -> None:
         ("iphone_music", _MUSIC, _kind_schema("music")),
         ("iphone_focus", _FOCUS, _kind_schema("focus")),
         ("iphone_shortcuts", _SHORTCUTS, _kind_schema("shortcuts")),
+        ("iphone_navigation", _NAVIGATION, _kind_schema("navigation")),
     )
     for name, description, schema in definitions:
         ctx.register_tool(name=name, toolset=TOOLSET, schema={"name": name, "description": description, "parameters": _compact(schema)}, handler=_unreachable_handler, is_async=True)
