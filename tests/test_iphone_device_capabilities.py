@@ -107,6 +107,9 @@ GOOD = {
     "focus.current": [{}],
     "shortcuts.list": [{}],
     "shortcuts.run": [{"name": "Log Water"}, {"name": "Log Water", "input": "one glass"}],
+    # test_iphone_navigation_tool.py has the full set of cases.
+    "navigation.places": [{}, {"query": "voice", "limit": 20}],
+    "navigation.open": [{"place": "settings.voice"}, {"place": "bot.profile", "bot": "research", "note": "Here."}],
 }
 
 BAD = {
@@ -195,6 +198,8 @@ BAD = {
     "shortcuts.list": [{"x": 1}],
     "shortcuts.run": [{}, {"name": ""}, {"name": "x" * 201}, {"name": "A", "input": "i" * 4001}, {"name": "A", "input": 5},
                       {"name": "A", "args": {}}],
+    "navigation.places": [{"limit": 21}, {"place": "settings.voice"}],
+    "navigation.open": [{}, {"place": "Settings"}, {"place": "ok", "tap": "Save"}],
 }
 
 # A reminder with a place for iOS Reminders to watch; a made-up address.
@@ -223,7 +228,7 @@ class ArgumentContractTests(unittest.TestCase):
         self.assertEqual(set(GOOD), set(OPERATIONS))
         self.assertEqual(set(BAD), set(OPERATIONS))
         self.assertTrue(set(OPERATIONS) <= DEVICE_TOOL_OPERATIONS)
-        self.assertEqual(len(OPERATIONS), 29)
+        self.assertEqual(len(OPERATIONS), 31)
         for kind in NEW_TOOLS:
             self.assertIn(kind, DEVICE_TOOL_KINDS)
 
@@ -356,10 +361,10 @@ class ToolSchemaTests(unittest.TestCase):
                 with self.subTest(kind=kind, phrase=phrase):
                     self.assertIn(phrase, self.schemas[f"iphone_{kind}"]["description"])
 
-    def test_all_iphone_schemas_stay_within_ten_kilobytes(self):
+    def test_all_iphone_schemas_stay_within_eleven_kilobytes(self):
         # Sent with every request to the serving agent, whatever the Device access switches say.
         total = sum(len(json.dumps(schema, separators=(",", ":"))) for schema in self.schemas.values())
-        self.assertLessEqual(total, 10_000, total)
+        self.assertLessEqual(total, 11_000, total)
 
     def test_bounds_are_the_contracts(self):
         def prop(kind: str, name: str) -> dict:
@@ -421,7 +426,7 @@ class ToolSchemaTests(unittest.TestCase):
 
 class ChannelKindTests(unittest.TestCase):
     def test_features_and_enabled_kinds(self):
-        self.assertEqual(KIND_CAPABILITIES, {kind: f"native-device-{kind}-v1" for kind in NEW_TOOLS})
+        self.assertEqual(KIND_CAPABILITIES, {kind: f"native-device-{kind}-v1" for kind in (*NEW_TOOLS, "navigation")})
         fields = {
             "channelId": str(uuid.uuid4()), "deviceId": str(uuid.uuid4()), "hostId": "local-host",
             "authorizationEpoch": 1, "agentId": "default", "sessionId": "stored-session",

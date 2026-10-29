@@ -237,7 +237,7 @@ def _native_features(
         skip("native-device-tools-v1", reason)
         skip("native-device-location-v1", reason)
         skip("native-device-appearance-v1", reason)
-        for feature in ("contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts"):
+        for feature in ("contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts", "navigation"):
             skip(f"native-device-{feature}-v1", reason)
         skip("native-device-tools-agents-v1", reason)
         skip("native-device-tools-wait-v1", reason)

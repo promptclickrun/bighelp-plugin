@@ -279,7 +279,7 @@ class DeviceToolRegistrationTests(unittest.TestCase):
             set(tools),
             {"iphone_health", "iphone_calendar", "iphone_reminders", "iphone_location", "iphone_appearance",
              "iphone_contacts", "iphone_photos", "iphone_geofences", "iphone_alarms", "iphone_music",
-             "iphone_focus", "iphone_shortcuts"},
+             "iphone_focus", "iphone_shortcuts", "iphone_navigation"},
         )
         for name, handler in tools.items():
             with self.subTest(tool=name), self.assertRaisesRegex(ValueError, "context is unavailable"):
