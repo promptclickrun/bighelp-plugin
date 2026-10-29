@@ -480,4 +480,9 @@ def _native_features(
         features.append(voice_catalog_capability)
     else:
         skip(voice_catalog_capability, "this Hermes has no plugin speech providers.")
+    from .native_skills_import import CAPABILITY as skills_import_capability, available as skills_import_available
+    if skills_import_available():
+        features.append(skills_import_capability)
+    else:
+        skip(skills_import_capability, "Hermes' skill writers are unimportable.")
     return profile, tuple(features)
