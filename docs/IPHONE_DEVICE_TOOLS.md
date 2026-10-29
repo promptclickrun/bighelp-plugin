@@ -1,6 +1,6 @@
 # iPhone tools
 
-Agents can use twelve tools that run on your iPhone:
+Agents can use thirteen tools that run on your iPhone:
 
 | Tool | What it can do |
 | --- | --- |
@@ -16,6 +16,7 @@ Agents can use twelve tools that run on your iPhone:
 | `iphone_music` | See what plays, search, play and control music, and add to playlists and the library. |
 | `iphone_focus` | Read which Focus is on and your note for agents, so agents can respect it (read-only). |
 | `iphone_shortcuts` | List and run only the Shortcuts you chose. |
+| `iphone_navigation` | Open a page in bighelp to show you where something is, for things like "where do I change the voice?". It only moves between pages. |
 
 Current bighelp builds do not offer Health. Only app builds before 2.3.0 (105) can turn on `iphone_health`.
 
@@ -107,6 +108,43 @@ location contents.
   to offer it), `phone_unavailable` or `device_unavailable` when bighelp isn't open, and `owner_changed` when the
   person left the chat before the change.
 
+## Navigation
+
+`iphone_navigation` shows a person the way in the app. It has two operations:
+
+- `operation: "places"` finds pages by the person's words. It takes an optional `query` (1–120) and an optional
+  `limit` (1–20, default 8). The phone answers with the best matches and how many there are in all:
+
+  ```json
+  {
+    "places": [
+      {
+        "id": "settings.appearance",
+        "title": "Appearance",
+        "what": "How bighelp looks.",
+        "steps": ["Open the menu", "Tap Settings", "Tap Appearance"],
+        "needs": null
+      }
+    ],
+    "total": 1
+  }
+  ```
+
+  `needs` says what a page needs before it opens (for example Nerd Mode), or is `null`.
+
+- `operation: "open"` takes `place` (required: an ID from `places`, 1–96 characters, only lowercase letters, digits,
+  `.` and `-`), `bot` (an agent ID, 1–96, for a page inside one bot such as its profile) and `note` (1–160: one
+  short sentence the app shows beside the page). The phone answers `{"opened": "<place>", "steps": [...], "mode":
+  "bots" | "chat" | "code"}`.
+
+- It only moves between pages and points at controls. It never changes a setting or taps Save, Send or Delete.
+  The app does not journal either operation: doing one twice is the same as doing it once.
+- The plugin refuses unknown keys, a wrong type or a value out of range (`invalid_arguments`) before the call
+  leaves the host. The phone owns the list of pages, so it answers `unknown_place` for an ID it does not have.
+  Its other failures are `not_in_this_mode`, `needs_nerd_mode`, `needs_plugin_update`, `needs_bot` and `busy`.
+- Also the usual codes: `authorization_required` when the app is too old to offer it, `phone_unavailable` or
+  `device_unavailable` when bighelp isn't open.
+
 ## Arguments the plugin checks
 
 Every `iphone_*` tool sends `operation` plus the arguments below. The phone's operation is `<kind>.<operation>`
@@ -146,6 +184,8 @@ Dates are ISO-8601 with an offset or `Z`. IDs are opaque strings of at most 512 
 | `focus.current` | none |
 | `shortcuts.list` | none |
 | `shortcuts.run` | `name` (one the list returned), `input` (≤ 4000) |
+| `navigation.places` | `query` (1–120), `limit` (1–20, default 8) |
+| `navigation.open` | `place` (1–96; lowercase letters, digits, `.` and `-`), `bot` (1–96), `note` (1–160) |
 | `reminders.create` and `reminders.update` | also `locationTrigger` `{name, latitude, longitude, radiusMeters (100–5000), proximity: "arrive" or "leave"}`; `reminders.update` also takes `clearLocationTrigger: true` (not together with `locationTrigger`) |
 
 Writes (create, update, delete, save, play and the like) are never repeated by the plugin. When the outcome is
@@ -207,7 +247,7 @@ A request the phone has received is one that a `poll` answer has handed to it. I
 sent again. Only a pure read fails with `phone_unavailable`, and the agent may ask again. The pure reads are
 `health.read`, `calendar.list`, `reminders.list`, `location.current`, `appearance.get`, `contacts.list`,
 `photos.list`, `photos.albums`, `photos.get`, `geofences.list`, `alarms.list`, `music.nowPlaying`, `music.search`,
-`music.library`, `focus.current` and `shortcuts.list`. Every other operation (and any operation the plugin does not
+`music.library`, `focus.current`, `shortcuts.list` and `navigation.places`. Every other operation (and any operation the plugin does not
 know) fails with `outcome_unknown`, whose note tells the agent not to run it again and to check first. A request
 the phone never received did nothing, so it fails with `phone_unavailable` (except `shortcuts.run` and
 `photos.save`, which always say `outcome_unknown` when they time out). A request whose time ran out is also no
@@ -220,7 +260,7 @@ run again by a retry (`result_replay`).
 ### Tool schemas
 
 The schemas the agent reads are short on purpose, because they are sent with every request to the serving agent
-(about 10 KB for all `iphone_*` tools). They keep the enums, number ranges and list sizes, and leave out formats,
+(about 11 KB for all `iphone_*` tools). They keep the enums, number ranges and list sizes, and leave out formats,
 patterns, long text limits and nested shapes (a contact's `phones` is described as `[{label, value}]`). The plugin
 checks every bound in the table above, and `invalid_arguments` names the field that was wrong in `payload.note`.
 
@@ -253,8 +293,8 @@ The plugin advertises `native-device-tools-v1` only when the Hermes host support
 list; older plugins reject it, so the app leaves Location out for them and asks you to update the plugin.
 `native-device-appearance-v1` does the same for `appearance`, and so do `native-device-contacts-v1`,
 `native-device-photos-v1`, `native-device-geofences-v1`, `native-device-alarms-v1`, `native-device-music-v1`,
-`native-device-focus-v1` and `native-device-shortcuts-v1` for `contacts`, `photos`, `geofences`, `alarms`, `music`,
-`focus` and `shortcuts`. A call whose kind isn't in the channel's `enabled` list fails with `authorization_required`.
+`native-device-focus-v1`, `native-device-shortcuts-v1` and `native-device-navigation-v1` for `contacts`, `photos`,
+`geofences`, `alarms`, `music`, `focus`, `shortcuts` and `navigation`. A call whose kind isn't in the channel's `enabled` list fails with `authorization_required`.
 Because Appearance is on by default, the phone opens a
 channel for every chat on a host that lists it, and polls more slowly (every 8 seconds instead
 of 0.75) while Appearance is the only tool on that channel.
