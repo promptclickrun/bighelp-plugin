@@ -815,7 +815,9 @@ async def skills_import(request: Request) -> Response:
     body = await _body(request, _SkillImport, MAX_SKILL_IMPORT_BYTES)
     value = await run_in_threadpool(_skills_import, body)
     if native_context(request) != owner:
-        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+        # The skill is already added, so a retry would answer skill_exists. The app reads it back instead.
+        raise NativeAPIError(412, "context_changed", "The native context changed; reconcile the outcome.",
+                             {"name": value["name"], "category": value["category"]})
     return _response(value, owner, request_id)
 
 

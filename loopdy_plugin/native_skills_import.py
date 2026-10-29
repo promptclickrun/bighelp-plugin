@@ -5,6 +5,10 @@ Stock Hermes can create a skill from SKILL.md text, but has no way to take a ski
 anything, then writes the skill with Hermes' own writers (`tools.skill_manager_tool`), in the agent's own
 profile. It never overwrites a skill, and when any step fails it deletes what it made, so nothing half-made
 stays. Hermes' validators decide what a skill may hold; this module adds only the archive rules.
+
+An upload is outside content, like a hub install. So after the last file is written, Hermes' skill scanner
+(`tools.skills_guard`) runs once on the whole skill with the install policy of a community source, whether or
+not the host turned on `skills.guard_agent_created`. A skill the policy blocks is deleted and refused.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ import shutil
 import stat
 import tempfile
 from typing import Any
+import unicodedata
 import zipfile
 
 from .workspace_capabilities import profile_scope
@@ -34,7 +39,10 @@ MAX_ENTRIES = 200
 # Folder entries and Mac junk don't count toward MAX_ENTRIES, but a table this long is not a skill.
 MAX_TABLE_ENTRIES = 2000
 MAX_TOTAL_BYTES = 16 * 1024 * 1024
-MAX_PATH_CHARS = 240
+# Bytes, not characters: with 200 files this keeps the answer far under the 64 KiB the app reads back.
+MAX_PATH_BYTES = 240
+# The source name Hermes' scanner sees. Anything but its own trusted ids is a community source.
+SCAN_SOURCE = "bighelp-upload"
 logger = logging.getLogger("hermes.plugins.bighelp")
 
 # Hermes' own functions and limits this module relies on.
@@ -42,10 +50,16 @@ _TOOL_NAMES = ("_validate_name", "_validate_category", "_validate_frontmatter", 
                "_resolve_supporting_file", "_create_skill", "_write_file", "_delete_skill", "_find_skill",
                "_resolve_skill_dir", "_security_scan_skill", "_parse_frontmatter")
 _UNIX = 3
-_UNSAFE_PATH = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029\\]")
+_SCAN_NAMES = ("scan_skill", "should_allow_install")
+# A double quote is left out too, so a path never grows when it is written as JSON.
+_UNSAFE_PATH = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029\\\"]")
 _DRIVE = re.compile(r"[A-Za-z]:")
 # An absolute path inside a Hermes message (two or more segments), for scrubbing before it reaches the app.
-_HOST_PATH = re.compile(r"(?<![\w/.])/[^\s'\"():;,]+/[^\s'\"():;,]+")
+# Folders in the middle may hold spaces and apostrophes ("/Volumes/Gordie's Codebox/..."); the last name ends
+# at the first space, since the text after a path is a sentence again.
+_MIDDLE = r"[^/\"():;<>]*"
+_LAST = r"[^\s'\"():;,<>]*"
+_HOST_PATH = re.compile(r"(?<![\w/.])/(?:" + _MIDDLE + r"/)+" + _LAST)
 
 
 class SkillImportError(Exception):
@@ -57,10 +71,12 @@ class SkillImportError(Exception):
 
 
 def available() -> bool:
-    """Only when Hermes' skill writers import (they are internals, so an odd Hermes turns this feature off)."""
+    """Only when Hermes' skill writers and scanner import (they are internals, so an odd Hermes turns this off)."""
     try:
         from tools import skill_manager_tool as tool
+        from tools import skills_guard as guard
         return (all(callable(getattr(tool, name, None)) for name in _TOOL_NAMES)
+                and all(callable(getattr(guard, name, None)) for name in _SCAN_NAMES)
                 and isinstance(getattr(tool, "ALLOWED_SUBDIRS", None), (set, frozenset))
                 and isinstance(getattr(tool, "MAX_SKILL_FILE_BYTES", None), int)
                 and isinstance(getattr(tool, "MAX_SKILL_CONTENT_CHARS", None), int))
@@ -80,6 +96,22 @@ def _reason(message: Any) -> str:
     """A Hermes message for the app: no host paths, bounded."""
     text = _HOST_PATH.sub("<path>", " ".join(str(message).split()))
     return text if len(text) <= 300 else text[:297] + "..."
+
+
+def _refusal(problem: Any, what: str = "Hermes can't take this skill") -> SkillImportError:
+    """`invalid_skill` with Hermes' reason in the message too, because the app shows only the message."""
+    reason = _reason(problem)
+    return _invalid(f"{what}: {reason}", "invalid_skill", reason=reason)
+
+
+def _folders(path: str) -> list[str]:
+    parts = path.split("/")
+    return ["/".join(parts[:index]) for index in range(1, len(parts))]
+
+
+def _same_file(path: str) -> str:
+    """One key for names a disk treats as one file: Unicode-equivalent (NFC and NFD) and case-folded."""
+    return unicodedata.normalize("NFC", path).casefold()
 
 
 # MARK: - The archive
@@ -119,7 +151,7 @@ def _is_ignored(name: str) -> bool:
 
 def _check_entry(info: zipfile.ZipInfo) -> None:
     name = info.filename
-    if (_UNSAFE_PATH.search(name) or name.startswith("/") or _DRIVE.match(name) or len(name) > MAX_PATH_CHARS
+    if (_UNSAFE_PATH.search(name) or name.startswith("/") or _DRIVE.match(name) or len(name.encode("utf-8", "surrogatepass")) > MAX_PATH_BYTES
             or any(part in ("", ".", "..") for part in name.split("/"))):
         raise _invalid("The archive has a file path that isn't allowed.")
     if info.create_system == _UNIX:
@@ -161,8 +193,8 @@ def _read_archive(raw: bytes, tool: Any) -> _Skill:
             if info.filename.endswith("/") or _is_ignored(info.filename):
                 continue
             _check_entry(info)
-            # Folded, so one name can't be written twice on a host with a case-insensitive disk.
-            key = info.filename.casefold()
+            # Folded, so one name can't be written twice on a disk that treats case or Unicode forms as equal.
+            key = _same_file(info.filename)
             if key in seen:
                 raise _invalid("The archive has the same file twice.")
             seen.add(key)
@@ -201,6 +233,11 @@ def _read_archive(raw: bytes, tool: Any) -> _Skill:
                 "unsupported_layout", path=path)
         if (problem := tool._validate_file_path(path)):
             raise _invalid(_reason(problem), "unsupported_layout", path=path)
+    # A path that is a file and also a folder of another file can't be written.
+    folders = {folder for path, _ in files for folder in _folders(_same_file(path))}
+    for path, _ in files:
+        if _same_file(path) in folders:
+            raise _invalid("A file has the same name as a folder.", "unsupported_layout", path=path)
     return _Skill(skill_md, files)
 
 
@@ -234,7 +271,7 @@ def _check_skill(content: str, category: str | None, tool: Any) -> tuple[str, st
         if isinstance(category, str):
             category = category.strip() or None
         if problem := (tool._validate_category(category) or tool._validate_frontmatter(content, new_skill=True)):
-            raise _invalid("Hermes can't take this skill.", "invalid_skill", reason=_reason(problem))
+            raise _refusal(problem)
         frontmatter, _ = tool._parse_frontmatter(content)
     except SkillImportError:
         raise
@@ -245,19 +282,56 @@ def _check_skill(content: str, category: str | None, tool: Any) -> tuple[str, st
         raise _invalid("The SKILL.md header needs a name.", "invalid_skill")
     name = name.strip()
     if problem := tool._validate_name(name):
-        raise _invalid("The skill's name isn't allowed.", "invalid_skill", reason=_reason(problem))
+        raise _refusal(problem, "The skill's name isn't allowed")
+    # Hermes skips these folder names in every skill lookup, so a skill in one could never be read back.
+    hidden = _hidden_names()
+    for label, value in (("name", name), ("category", category)):
+        if value in hidden:
+            raise _invalid(f"The skill {label} '{value}' can't be used: Hermes hides folders with that name.",
+                           "invalid_skill", reason=f"{label} is a hidden folder name")
     return name, category
+
+
+def _hidden_names() -> frozenset:
+    try:
+        from agent.skill_utils import EXCLUDED_SKILL_DIRS
+        return frozenset(EXCLUDED_SKILL_DIRS)
+    except Exception:
+        return frozenset()
+
+
+def _blocked(reason: str, findings: list[dict] | None = None) -> SkillImportError:
+    reason = _reason(reason)
+    details: dict[str, Any] = {"reason": reason}
+    if findings:
+        details["findings"] = findings
+    return SkillImportError(422, "blocked", f"Hermes' security scan blocked this skill: {reason}", details)
+
+
+def _scan(skill_dir: Path) -> dict:
+    """Hermes' scanner on the finished skill, with the install policy of a community source (as a hub
+    install). Runs whether or not the host turned on `skills.guard_agent_created`. Raises `blocked` when the
+    policy says block; a scan that itself fails also fails the import, so nothing unchecked stays."""
+    from tools.skills_guard import scan_skill, should_allow_install
+    result = scan_skill(skill_dir, source=SCAN_SOURCE)
+    allowed, _ = should_allow_install(result, force=False)
+    if allowed is False:
+        findings = [{"severity": str(f.severity)[:20], "file": _reason(f.file)[:120],
+                     "description": _reason(f.description)[:160]} for f in result.findings[:5]]
+        raise _blocked(result.summary, findings)
+    # `allowed` is None when the policy says "ask"; an upload goes ahead and the app can show the verdict.
+    return {"verdict": result.verdict, "policy": "allow" if allowed else "ask"}
 
 
 def _refused(result: Any, *, writing: bool) -> SkillImportError:
     """Hermes turned a write down: a blocked scan, a skill that appeared meanwhile, or another rule."""
     message = str(result.get("error", "")) if isinstance(result, dict) else ""
     if message.startswith("Security scan blocked"):
-        return SkillImportError(422, "blocked", "Hermes' security scan blocked this skill.",
-                                {"reason": _reason(message.split("\n", 1)[0])})
+        return _blocked(message.split("\n", 1)[0].removeprefix("Security scan blocked this skill").strip(" :") or
+                        "it has content that isn't allowed")
     if "already exists" in message and not writing:
         return SkillImportError(409, "skill_exists", "This agent already has a skill with that name.")
-    return _invalid("Hermes refused this skill.", "invalid_skill", reason=_reason(message))
+    return _refusal(message or "no reason given", "Hermes refused this skill")
 
 
 def _write_binary(tool: Any, skill_dir: Path, path: str, data: bytes) -> None:
@@ -266,8 +340,8 @@ def _write_binary(tool: Any, skill_dir: Path, path: str, data: bytes) -> None:
         raise _too_large("A file is too big.")
     target, refusal = tool._resolve_supporting_file(skill_dir, path)
     if refusal:
-        raise _invalid("Hermes refused a file path.", "unsupported_layout", path=path,
-                       reason=_reason(refusal.get("error", "")))
+        reason = _reason(refusal.get("error", ""))
+        raise _invalid(f"Hermes refused a file path: {reason}", "unsupported_layout", path=path, reason=reason)
     target.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(dir=target.parent, prefix=".tmp_")
     try:
@@ -312,9 +386,9 @@ def _clear_prompt_cache() -> None:
 
 
 def _install(tool: Any, skill_md: str, name: str, category: str | None,
-             files: list[tuple[str, bytes, str | None]]) -> list[str]:
-    """Create the skill and write its files. Returns the relative paths written, SKILL.md first.
-    Any failure deletes what was made, then raises."""
+             files: list[tuple[str, bytes, str | None]]) -> tuple[list[str], dict]:
+    """Create the skill and write its files, then scan it. Returns the relative paths written, SKILL.md
+    first, and the scan's verdict. Any failure deletes what was made, then raises."""
     skill_dir = Path(tool._resolve_skill_dir(name, category))
     created = False
     try:
@@ -333,6 +407,7 @@ def _install(tool: Any, skill_md: str, name: str, category: str | None,
             _write_binary(tool, skill_dir, path, data)
         if binaries and (blocked := tool._security_scan_skill(skill_dir)):
             raise _refused({"error": blocked}, writing=True)
+        scan = _scan(skill_dir)
     except BaseException:
         if created:
             _rollback(tool, name, skill_dir)
@@ -346,7 +421,7 @@ def _install(tool: Any, skill_md: str, name: str, category: str | None,
     finally:
         if created:
             _clear_prompt_cache()
-    return ["SKILL.md", *(path for path, _, _ in files)]
+    return ["SKILL.md", *(path for path, _, _ in files)], scan
 
 
 def import_skill(agent_id: str, kind: str, data: str, category: str | None = None) -> dict:
@@ -368,5 +443,5 @@ def import_skill(agent_id: str, kind: str, data: str, category: str | None = Non
             if tool._find_skill(name):
                 raise SkillImportError(409, "skill_exists", "This agent already has a skill with that name.",
                                        {"name": name})
-            written = _install(tool, skill.skill_md, name, category, files)
-    return {"name": name, "category": category, "files": written}
+            written, scan = _install(tool, skill.skill_md, name, category, files)
+    return {"name": name, "category": category, "files": written, "scan": scan}
