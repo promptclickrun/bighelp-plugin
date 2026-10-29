@@ -4,4 +4,4 @@ A release PR changes it together with plugin.yaml and dashboard/manifest.json.
 The app reads it from /native/context.
 """
 
-PLUGIN_VERSION = "3.33.0"
+PLUGIN_VERSION = "3.34.0"
