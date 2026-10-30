@@ -4,6 +4,10 @@ This bounded, disposable feed replaces Link's voice control channel. It does not
 execute prompts, store transcripts, own jobs, or implement a second scheduler.
 The native app submits work through ordinary Hermes prompt.submit and appends
 the resulting answer here. Provider credentials never leave this process.
+
+Every call's voice model is the agent itself: its brief comes from the agent's
+name and SOUL.md (``voice_brief``). GPT-Live calls hold their sideband here; a
+Gemini call is only a single-use token, and the phone holds the whole session.
 """
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from . import gemini_live, voice_brief
 from .native_context import NativeAPIError, NativeContext, native_context
 from .live_voice_provider import (
     MAX_PROVIDER_EVENT_NAME_BYTES, MAX_PROVIDER_EVENT_TYPES,
@@ -27,6 +32,7 @@ from .live_voice_provider import (
 )
 
 CAPABILITY = "native-voice-v1"
+GEMINI_CAPABILITY = "native-voice-gemini-v1"
 logger = logging.getLogger(__name__)
 _FIXED_NAME = re.compile(r"[a-z_]{1,48}")
 
@@ -77,8 +83,12 @@ class _Call:
 
 
 class NativeVoiceHub:
-    def __init__(self, *, provider_factory=make_live_provider, lease_seconds=60, setup_seconds=40):
+    def __init__(self, *, provider_factory=make_live_provider, lease_seconds=60, setup_seconds=40,
+                 brief=voice_brief.for_profile, gemini_mint=gemini_live.mint, gemini_key=gemini_live.api_key):
         self.factory = provider_factory
+        self.brief = brief
+        self.gemini_mint = gemini_mint
+        self.gemini_key = gemini_key
         self.lease_seconds = lease_seconds
         self.setup_seconds = setup_seconds
         self.calls: dict[str, _Call] = {}
@@ -98,6 +108,8 @@ class NativeVoiceHub:
         return call
 
     async def offer(self, owner, fields):
+        if fields["provider"] == "gemini":
+            return await self._offer_gemini(owner, fields)
         try:
             validate_audio_sdp(fields["sdp"])
         except LiveProviderError as error:
@@ -116,7 +128,9 @@ class NativeVoiceHub:
             try:
                 async with asyncio.timeout(self.setup_seconds):
                     with _profile_scope(fields["agentId"]):
-                        answer = await call.provider.create(fields["sdp"], voice=fields["voice"])
+                        instructions = self.brief(fields["agentId"], delegation="client")
+                        answer = await call.provider.create(
+                            fields["sdp"], instructions=instructions, voice=fields["voice"])
             except TimeoutError:
                 raise LiveProviderError("setup_timeout") from None
             if call.closed:
@@ -131,6 +145,21 @@ class NativeVoiceHub:
         except BaseException:
             await self._close(call)
             raise
+
+    async def _offer_gemini(self, owner, fields):
+        """A single-use Gemini token with this agent's brief, voice and tools locked in."""
+        if any(not call.closed and call.owner == owner for call in self.calls.values()):
+            raise _reject("voice_already_active")
+        call = self._claim(owner, fields)
+        call.closed = True  # The phone holds the session: nothing to poll, append to or close here.
+        try:
+            with _profile_scope(fields["agentId"]):
+                instructions = self.brief(fields["agentId"], delegation="tools")
+                key = self.gemini_key()
+            connect = await self.gemini_mint(instructions, fields["voice"], key=key)
+        except LiveProviderError as error:
+            raise _provider_rejection(error) from None
+        return {"voiceId": fields["voiceId"], **connect}
 
     async def _event(self, call, event):
         if call.closed or not isinstance(event, dict):
@@ -274,8 +303,11 @@ class _Scope(BaseModel):
     sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,179}$")
 
 
+_Provider = Literal["codex_subscription", "api_key", "gemini"]
+
+
 class _Status(_Scope):
-    provider: Literal["codex_subscription", "api_key"]
+    provider: _Provider
 
 
 class _Voice(_Scope):
@@ -283,9 +315,10 @@ class _Voice(_Scope):
 
 
 class _Offer(_Voice):
-    provider: Literal["codex_subscription", "api_key"]
+    provider: _Provider
     voice: str = Field(min_length=1, max_length=32)
-    sdp: str = Field(min_length=1, max_length=180_000)
+    # GPT-Live only: Gemini's media never passes through the host.
+    sdp: str = Field(default="", max_length=180_000)
 
 
 class _Poll(_Voice):
@@ -295,6 +328,15 @@ class _Poll(_Voice):
 class _Result(_Voice):
     delegationId: str = Field(min_length=1, max_length=180)
     text: str = Field(min_length=1, max_length=1500)
+
+
+def _has_gemini_key(agent_id: str) -> bool:
+    """The agent's own Gemini key, read in its profile scope like its other credentials."""
+    try:
+        with _profile_scope(agent_id):
+            return bool(_HUB.gemini_key())
+    except Exception:
+        return False  # A host that can't scope this profile's secrets can't start the call either.
 
 
 async def request(operation: str, request: Request):
@@ -317,7 +359,10 @@ async def request(operation: str, request: Request):
     if native_context(request) != owner:
         raise _reject("context_changed", 412)
     if operation == "status":
-        configured = body.provider == "codex_subscription" or bool(os.environ.get("OPENAI_API_KEY"))
+        if body.provider == "gemini":
+            configured = _has_gemini_key(body.agentId)
+        else:
+            configured = body.provider == "codex_subscription" or bool(os.environ.get("OPENAI_API_KEY"))
         value = {"available": configured, "enabled": True, "provider": body.provider, "interruptSupported": False}
     elif operation == "poll":
         value = _HUB.poll(owner, fields, after=body.after)

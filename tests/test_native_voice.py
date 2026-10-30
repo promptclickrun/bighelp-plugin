@@ -22,6 +22,7 @@ class Provider:
 
     async def create(self, sdp, **kwargs):
         self.creates += 1
+        self.create_kwargs = kwargs
         await self.event({"kind": "started"})
         return SDP
 
@@ -39,7 +40,17 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
             provider = Provider(**kwargs)
             self.providers.append(provider)
             return provider
-        self.hub = NativeVoiceHub(provider_factory=factory, lease_seconds=30)
+        self.briefs = []
+        def brief(profile, *, delegation):
+            self.briefs.append((profile, delegation))
+            return f"You are {profile}."
+        self.mints = []
+        async def mint(instructions, voice, *, key):
+            self.mints.append((instructions, voice, key))
+            return {"transport": "websocket", "url": "wss://gemini.example/ws", "token": "auth_tokens/one",
+                    "model": "models/gemini-3.8-live", "expiresAt": 1_900_000_000}
+        self.hub = NativeVoiceHub(provider_factory=factory, lease_seconds=30, brief=brief,
+                                  gemini_mint=mint, gemini_key=lambda: "gemini-key")
         self.owner = NativeContext("fixture", "alice", None, "default", ("native-voice-v1",), "runtime")
         self.fields = {"agentId": "default", "sessionId": "stored", "voiceId": "voice_fixture",
                        "provider": "codex_subscription", "voice": "cove", "sdp": SDP}
@@ -141,6 +152,40 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.03)
         self.assertTrue(self.providers[0].closed)
         self.assertTrue(self.hub.poll(self.owner, self.fields, after=0)["closed"])
+
+    # Each call's voice model is the agent; Gemini calls are only a token.
+
+    async def test_gpt_live_speaks_with_the_agents_own_brief(self):
+        await self.offer()
+        self.assertEqual(self.briefs, [("default", "client")])
+        self.assertEqual(self.providers[0].create_kwargs["instructions"], "You are default.")
+        self.assertEqual(self.providers[0].create_kwargs["voice"], "cove")
+
+    async def test_gemini_offer_is_a_locked_token_and_holds_nothing_here(self):
+        fields = dict(self.fields, provider="gemini", voice="Charon", sdp="")
+        value = await self.hub.offer(self.owner, fields)
+        self.assertEqual(value, {"voiceId": "voice_fixture", "transport": "websocket", "url": "wss://gemini.example/ws",
+                                 "token": "auth_tokens/one", "model": "models/gemini-3.8-live",
+                                 "expiresAt": 1_900_000_000})
+        self.assertEqual(self.briefs, [("default", "tools")])
+        self.assertEqual(self.mints, [("You are default.", "Charon", "gemini-key")])
+        self.assertEqual(self.providers, [])
+        self.assertTrue(self.hub.poll(self.owner, fields, after=0)["closed"])
+        with self.assertRaises(NativeAPIError):
+            await self.hub.result(self.owner, dict(fields, delegationId="call", text="Done."))
+        await self.hub.close(self.owner, fields)
+        with self.assertRaises(NativeAPIError):
+            await self.hub.offer(self.owner, fields)  # The voice ID is spent.
+        await self.hub.offer(self.owner, dict(self.fields, voiceId="voice_next"))  # GPT-Live still starts.
+        self.assertEqual(len(self.providers), 1)
+
+    async def test_gemini_failure_reports_the_providers_fixed_reason(self):
+        async def refused(*args, **kwargs):
+            raise LiveProviderError("authentication_failed", stage="create", http_status=401)
+        self.hub.gemini_mint = refused
+        with self.assertRaises(NativeAPIError) as caught:
+            await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp=""))
+        self.assertEqual(caught.exception.code, "voice_provider_authentication_failed")
 
 
 class NativeVoiceProviderFailureTests(unittest.IsolatedAsyncioTestCase):

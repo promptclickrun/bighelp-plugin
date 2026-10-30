@@ -490,4 +490,9 @@ def _native_features(
         features.append(vault_link_capability)
     else:
         skip(vault_link_capability, "this Hermes has no credential vault.")
+    # Gemini live voice rides the same voice routes and profile helpers.
+    if "native-voice-v1" in features:
+        features.append("native-voice-gemini-v1")
+    else:
+        skip("native-voice-gemini-v1", "live voice is unavailable on this host.")
     return profile, tuple(features)
