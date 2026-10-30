@@ -485,4 +485,9 @@ def _native_features(
         features.append(skills_import_capability)
     else:
         skip(skills_import_capability, "Hermes' skill writers are unimportable.")
+    from .vault_link import CAPABILITY as vault_link_capability, available as vault_link_available
+    if vault_link_available():
+        features.append(vault_link_capability)
+    else:
+        skip(vault_link_capability, "this Hermes has no credential vault.")
     return profile, tuple(features)
