@@ -19,10 +19,13 @@ from .native_context import NativeAPIError, NativeContext, PROFILE_ID, log_nativ
 from .native_skills_import import MAX_DATA_CHARS as MAX_SKILL_IMPORT_DATA_CHARS
 from .native_skills_import import MAX_REQUEST_BYTES as MAX_SKILL_IMPORT_BYTES
 from .store import CardTemplateConflict, CardTemplateLimit
+from .vault_link import MAX_ITEMS as MAX_VAULT_LINK_ITEMS, MAX_ORIGINS as MAX_VAULT_LINK_ORIGINS
 
 
 logger = logging.getLogger(__name__)
 MAX_BODY_BYTES = 196_608
+# 10 items of 128 characters and 10 origins of 2,048, with room for the JSON around them.
+MAX_VAULT_LINK_BYTES = 32_768
 MAX_TEMPLATES = 500
 _REQUEST_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 _BodyT = TypeVar("_BodyT", bound=BaseModel)
@@ -818,6 +821,51 @@ async def skills_import(request: Request) -> Response:
         # The skill is already added, so a retry would answer skill_exists. The app reads it back instead.
         raise NativeAPIError(412, "context_changed", "The native context changed; reconcile the outcome.",
                              {"name": value["name"], "category": value["category"]})
+    return _response(value, owner, request_id)
+
+
+class _VaultLink(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    profile: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    item_ids: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")]] = Field(
+        min_length=1, max_length=MAX_VAULT_LINK_ITEMS)
+    origins: list[Annotated[str, Field(min_length=1, max_length=2048)]] = Field(
+        min_length=1, max_length=MAX_VAULT_LINK_ORIGINS)
+
+
+def _vault_link(profile: str | None, body: _VaultLink) -> dict:
+    from .vault_link import VaultLinkError, link
+    try:
+        return link(profile, body.item_ids, body.origins)
+    except VaultLinkError as error:
+        raise NativeAPIError(error.status, error.code, error.message, error.details) from None
+    except Exception as error:
+        logger.error("bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
+        raise NativeAPIError(503, "vault_unavailable", "This computer's vault can't be opened.") from None
+
+
+@router.post("/vault/link")
+async def vault_link(request: Request) -> Response:
+    """Copy a saved card or address to more websites, on the computer (bighelp app: Saved cards and addresses)."""
+    from .vault_link import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "vault_unavailable", "This host's vault can't be used from the app.")
+    try:
+        body = await _body(request, _VaultLink, MAX_VAULT_LINK_BYTES)
+    except NativeAPIError as error:
+        # This route answers a bad request with 400, as its contract says; the other routes use 422.
+        if error.code != "invalid_request":
+            raise
+        raise NativeAPIError(400, "invalid_request", error.message) from None
+    # No profile means the serving agent. The serving agent's own ID is just as good as any other.
+    profile = body.profile or owner.serving_profile_id
+    value = await run_in_threadpool(_vault_link, profile, body)
+    if native_context(request) != owner:
+        # The copies are made. A retry reports them `existing`, so it is safe.
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh and retry.",
+                             {"copies": value["copies"]})
     return _response(value, owner, request_id)
 
 
