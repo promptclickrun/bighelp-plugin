@@ -152,10 +152,13 @@ class NativeVoiceHub:
             raise _reject("voice_already_active")
         call = self._claim(owner, fields)
         call.closed = True  # The phone holds the session: nothing to poll, append to or close here.
-        try:
+
+        def brief_and_key():
+            # Reading another profile's secrets can wait on its secret source: never on the event loop.
             with _profile_scope(fields["agentId"]):
-                instructions = self.brief(fields["agentId"], delegation="tools")
-                key = self.gemini_key()
+                return self.brief(fields["agentId"], delegation="tools"), self.gemini_key()
+        try:
+            instructions, key = await asyncio.to_thread(brief_and_key)
             connect = await self.gemini_mint(instructions, fields["voice"], key=key)
         except LiveProviderError as error:
             raise _provider_rejection(error) from None
@@ -335,8 +338,10 @@ def _has_gemini_key(agent_id: str) -> bool:
     try:
         with _profile_scope(agent_id):
             return bool(_HUB.gemini_key())
-    except Exception:
-        return False  # A host that can't scope this profile's secrets can't start the call either.
+    except Exception as error:
+        # A host that can't scope this profile's secrets can't start the call either.
+        logger.warning("bighelp native voice could not read a Gemini key: %s", type(error).__name__)
+        return False
 
 
 async def request(operation: str, request: Request):
@@ -360,7 +365,7 @@ async def request(operation: str, request: Request):
         raise _reject("context_changed", 412)
     if operation == "status":
         if body.provider == "gemini":
-            configured = _has_gemini_key(body.agentId)
+            configured = await asyncio.to_thread(_has_gemini_key, body.agentId)
         else:
             configured = body.provider == "codex_subscription" or bool(os.environ.get("OPENAI_API_KEY"))
         value = {"available": configured, "enabled": True, "provider": body.provider, "interruptSupported": False}
