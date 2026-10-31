@@ -158,9 +158,10 @@ def _disk() -> Iterator[None]:
 class UploadStore:
     """Staged uploads under one folder. Every method is safe to call from several threads."""
 
-    def __init__(self, root: Path, *, now=time.time, disk_usage=None) -> None:
+    def __init__(self, root: Path, *, now=time.time, disk_usage=None, workspace=None) -> None:
         self.root = root
         self._now = now
+        self._workspace = workspace or _agent_workspace
         self._disk_usage = disk_usage or (lambda path: shutil.disk_usage(path))
         self._pruned_at = float("-inf")
 
@@ -424,13 +425,72 @@ class UploadStore:
                     meta.update(received=[], updatedAt=self._now())
                     self._write_meta(folder, meta)
                     raise NativeAPIError(422, "upload_corrupt", "The file arrived damaged. Send it again.")
-                if os.path.lexists(target.parent):
-                    raise NativeAPIError(409, "upload_conflict", "The upload can't be finished.")
-                target.parent.mkdir(mode=0o700)
-                os.rename(folder / _DATA, target)
-                meta.update(finished=True, updatedAt=self._now())
+                placed = self._place_in_workspace(folder / _DATA, meta)
+                if placed is None:
+                    if os.path.lexists(target.parent):
+                        raise NativeAPIError(409, "upload_conflict", "The upload can't be finished.")
+                    target.parent.mkdir(mode=0o700)
+                    os.rename(folder / _DATA, target)
+                meta.update(finished=True, updatedAt=self._now(), path=str(placed or target),
+                            inWorkspace=placed is not None)
                 self._write_meta(folder, meta)
-            return {**self._answer(meta), "path": str(target)}
+            return {**self._answer(meta), "path": meta["path"], "inWorkspace": bool(meta.get("inWorkspace"))}
+
+    def _place_in_workspace(self, source: Path, meta: dict[str, Any]) -> Path | None:
+        """Move the checked file to ``uploads/<date>/<name>`` in the agent's working folder, the one
+        its Files tab shows, so the chat's link opens it and no sweep here ever removes it. None
+        when the agent has no folder on this computer (a container or SSH backend), or the way in
+        isn't plain folders: the file then stays staged, and Hermes' file.attach copies it in."""
+        root = self._workspace(str(meta["agentId"]))
+        if root is None:
+            return None
+        try:
+            if not stat.S_ISDIR(os.stat(root).st_mode):
+                return None
+            folder = Path(root)
+            for part in ("uploads", time.strftime("%Y-%m-%d", time.localtime(self._now()))):
+                folder = folder / part
+                try:
+                    os.mkdir(folder, 0o755)
+                except FileExistsError:
+                    pass
+                if not stat.S_ISDIR(os.lstat(folder).st_mode):
+                    return None  # a planted link or file: never followed
+            name = str(meta["fileName"])
+            stem, suffix = Path(name).stem or "attachment", Path(name).suffix
+            for number in range(1, 1_000):
+                target = folder / (name if number == 1 else f"{stem}-{number}{suffix}")
+                try:
+                    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                except FileExistsError:
+                    continue
+                break
+            else:
+                return None
+        except OSError:
+            return None
+        try:
+            try:
+                # The reserved name is ours; on the same disk the move is instant and takes no room.
+                with _disk():
+                    os.replace(source, target)
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                if self._disk_usage(folder).free < int(meta["byteCount"]) + FREE_SPACE_RESERVE_BYTES:
+                    raise NativeAPIError(409, "upload_no_space", "This computer doesn't have room for this file.")
+                with _disk(), open(source, "rb") as input_file, os.fdopen(os.dup(descriptor), "wb") as output:
+                    shutil.copyfileobj(input_file, output, 1024 * 1024)
+                    output.flush()
+                    os.fsync(output.fileno())
+                source.unlink()
+        except BaseException:
+            if source.exists():
+                target.unlink(missing_ok=True)
+            raise
+        finally:
+            os.close(descriptor)
+        return target
 
     def discard(self, upload_id: str, owner: str) -> dict[str, Any]:
         self._sweep()
@@ -458,6 +518,17 @@ class UploadStore:
             "finished": bool(meta["finished"]),
             "expiresAt": float(meta["updatedAt"]) + EXPIRY_SECONDS,
         }
+
+
+def _agent_workspace(agent_id: str) -> Path | None:
+    """The agent's working folder, decided the way its Files tab decides, or None without one here."""
+    from . import workspace_root
+    if not workspace_root.available():
+        return None
+    try:
+        return workspace_root.resolve(agent_id).root
+    except NativeAPIError:
+        return None
 
 
 _store: UploadStore | None = None

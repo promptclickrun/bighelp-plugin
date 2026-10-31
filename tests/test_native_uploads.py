@@ -11,6 +11,7 @@ import json
 import sys
 import os
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -45,8 +46,12 @@ class UploadStoreTests(unittest.TestCase):
         self.root = Path(temporary.name) / "uploads"
         self.clock = [1_000_000.0]
         self.free = [100 * GB]
+        self.workspace = Path(temporary.name) / "workspace"
+        self.workspace.mkdir()
+        self.workspaces = {"default": self.workspace}
         self.store = nu.UploadStore(self.root, now=lambda: self.clock[0],
-                                    disk_usage=lambda _path: SimpleNamespace(free=self.free[0]))
+                                    disk_usage=lambda _path: SimpleNamespace(free=self.free[0]),
+                                    workspace=lambda agent: self.workspaces.get(agent))
         # Small pieces keep the tests fast; the math is the same.
         chunk = patch.object(nu, "CHUNK_BYTES", 1024)
         chunk.start()
@@ -70,7 +75,7 @@ class UploadStoreTests(unittest.TestCase):
         finished = self.store.finish(upload["uploadId"], OWNER)
         path = Path(finished["path"])
         self.assertEqual(path.name, "Clip.mov")
-        self.assertEqual(path.parent, self.root / upload["uploadId"] / "file")
+        self.assertEqual(path.parent.parent, self.workspace / "uploads")
         self.assertEqual(path.read_bytes(), self.data)
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
         # Finishing twice gives the same answer; the phone may not have heard the first.
@@ -197,7 +202,7 @@ class UploadStoreTests(unittest.TestCase):
         long = nu.safe_file_name("é" * 200 + ".mov")
         self.assertTrue(long.endswith(".mov"))
         self.assertLessEqual(len(long.encode("utf-8")), 180)
-        upload = _start(self.store, self.data, name="../../Clip.mov")
+        upload = _start(self.store, self.data, name="../../Clip.mov", agent="boxed")
         for index in range(4):
             _send(self.store, upload, self.data, index)
         path = Path(self.store.finish(upload["uploadId"], OWNER)["path"])
@@ -301,11 +306,61 @@ class UploadStoreTests(unittest.TestCase):
         finally:
             sys.modules["loopdy_plugin.native_uploads"] = saved
 
+    # Colt, 2026-10-31: a file in the chat opens in the agent's Files, so it lives in its working folder.
+
+    def test_a_finished_file_moves_into_the_agents_working_folder_under_a_unique_name(self):
+        day = time.strftime("%Y-%m-%d", time.localtime(self.clock[0]))
+        paths = []
+        for _ in range(2):
+            upload = _start(self.store, self.data)
+            for index in range(4):
+                _send(self.store, upload, self.data, index)
+            finished = self.store.finish(upload["uploadId"], OWNER)
+            self.assertTrue(finished["inWorkspace"])
+            paths.append(Path(finished["path"]))
+            # Finishing again names the same file; the phone may not have heard the first answer.
+            self.assertEqual(self.store.finish(upload["uploadId"], OWNER)["path"], finished["path"])
+            self.store.discard(upload["uploadId"], OWNER)
+        self.assertEqual(paths, [self.workspace / "uploads" / day / "Clip.mov",
+                                 self.workspace / "uploads" / day / "Clip-2.mov"])
+        self.assertTrue(all(path.read_bytes() == self.data for path in paths))
+        # The sweep and discard never touch a file the chat links to.
+        self.clock[0] += nu.EXPIRY_SECONDS * 3
+        self.store.prune()
+        self.assertTrue(all(path.exists() for path in paths))
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_an_agent_without_a_folder_on_this_computer_keeps_the_staged_copy(self):
+        upload = _start(self.store, self.data, agent="boxed")
+        for index in range(4):
+            _send(self.store, upload, self.data, index)
+        finished = self.store.finish(upload["uploadId"], OWNER)
+        self.assertFalse(finished["inWorkspace"])
+        self.assertEqual(Path(finished["path"]).parent, self.root / upload["uploadId"] / "file")
+
+    def test_a_planted_link_in_the_working_folder_is_never_followed(self):
+        outside = self.root.parent / "outside"
+        outside.mkdir()
+        (self.workspace / "uploads").symlink_to(outside, target_is_directory=True)
+        upload = _start(self.store, self.data)
+        for index in range(4):
+            _send(self.store, upload, self.data, index)
+        finished = self.store.finish(upload["uploadId"], OWNER)
+        self.assertFalse(finished["inWorkspace"])
+        self.assertEqual(list(outside.iterdir()), [])
+
 
 class NativeUploadRouteTests(unittest.TestCase):
     """The route as the app calls it, through Hermes' own auth middleware."""
 
-    setUp = test_native_api.NativeAPITests.setUp
+    def setUp(self):
+        test_native_api.NativeAPITests.setUp(self)
+        self.agent_folder = self.home / "agent-folder"
+        self.agent_folder.mkdir()
+        folder = patch.object(nu, "_agent_workspace", lambda agent: self.agent_folder if agent == "default" else None)
+        folder.start()
+        self.addCleanup(folder.stop)
+
     context = test_native_api.NativeAPITests.context
     headers = test_native_api.NativeAPITests.headers
 
@@ -339,11 +394,14 @@ class NativeUploadRouteTests(unittest.TestCase):
         self.assertEqual(finished.status_code, 200, finished.text)
         path = Path(finished.json()["path"])
         self.assertEqual(path.read_bytes(), data)
-        self.assertTrue(path.is_relative_to(self.home / "plugin-data" / "loopdy" / "uploads"))
+        self.assertTrue(finished.json()["inWorkspace"])
+        self.assertEqual((path.parent.parent, path.name), (self.agent_folder / "uploads", "Trip.mov"))
         discarded = self.client.post(PREFIX + "/uploads/discard", headers=self.headers(),
                                      json={"uploadId": upload["uploadId"]})
         self.assertEqual(discarded.status_code, 200, discarded.text)
-        self.assertFalse(path.exists())
+        # The record goes; the file the chat links to stays in the agent's folder.
+        self.assertTrue(path.exists())
+        self.assertFalse((self.home / "plugin-data" / "loopdy" / "uploads" / upload["uploadId"]).exists())
 
     def test_a_piece_needs_exact_headers_and_size(self):
         data = os.urandom(2048)
