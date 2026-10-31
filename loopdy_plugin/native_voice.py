@@ -22,7 +22,7 @@ import time
 from typing import Literal
 
 from fastapi import Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationInfo, field_validator
 
 from . import gemini_live, voice_brief
 from .native_context import NativeAPIError, NativeContext, native_context
@@ -128,8 +128,7 @@ class NativeVoiceHub:
             try:
                 async with asyncio.timeout(self.setup_seconds):
                     with _profile_scope(fields["agentId"]):
-                        instructions = self.brief(fields["agentId"], delegation="client",
-                                                  language=fields.get("language", "English"))
+                        instructions = self.brief(fields["agentId"], delegation="client", **_brief_context(fields))
                         answer = await call.provider.create(
                             fields["sdp"], instructions=instructions, voice=fields["voice"])
             except TimeoutError:
@@ -157,7 +156,7 @@ class NativeVoiceHub:
         def brief_and_key():
             # Reading another profile's secrets can wait on its secret source: never on the event loop.
             with _profile_scope(fields["agentId"]):
-                return (self.brief(fields["agentId"], delegation="tools", language=fields.get("language", "English")),
+                return (self.brief(fields["agentId"], delegation="tools", **_brief_context(fields)),
                         self.gemini_key())
         try:
             instructions, key = await asyncio.to_thread(brief_and_key)
@@ -324,6 +323,28 @@ class _Offer(_Voice):
     voice: str = Field(min_length=1, max_length=32)
     # GPT-Live only: Gemini's media never passes through the host.
     sdp: str = Field(default="", max_length=180_000)
+    # native-voice-context-v1: who is talking and where (`voice_brief` cleans and bounds each one).
+    agentName: str = ""
+    personName: str = ""
+    place: str = ""
+    timeZone: str = ""
+
+    @field_validator("agentName", "personName", "place", "timeZone", mode="before")
+    @classmethod
+    def _shorten(cls, value: object, info: ValidationInfo) -> object:
+        # Untrusted and optional: an over-long value is cut, never a refused call. The app counts
+        # characters and Python counts code points, so a name of family emoji was three times too long.
+        return value[:_CONTEXT_LIMITS[info.field_name]] if isinstance(value, str) else value
+
+
+_CONTEXT_LIMITS = {"agentName": 200, "personName": 200, "place": 300, "timeZone": 64}
+
+
+def _brief_context(fields: dict) -> dict:
+    """What the brief takes from the offer besides the agent: the language and the phone's context."""
+    return {"language": fields.get("language", "English"), "agent_name": fields.get("agentName", ""),
+            "person": fields.get("personName", ""), "place": fields.get("place", ""),
+            "time_zone": fields.get("timeZone", "")}
 
 
 class _Poll(_Voice):

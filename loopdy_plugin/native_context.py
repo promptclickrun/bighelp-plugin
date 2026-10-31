@@ -495,4 +495,9 @@ def _native_features(
         features.append("native-voice-gemini-v1")
     else:
         skip("native-voice-gemini-v1", "live voice is unavailable on this host.")
+    # Who is talking and where, in the voice offer: the same routes again.
+    if "native-voice-v1" in features:
+        features.append("native-voice-context-v1")
+    else:
+        skip("native-voice-context-v1", "live voice is unavailable on this host.")
     return profile, tuple(features)
