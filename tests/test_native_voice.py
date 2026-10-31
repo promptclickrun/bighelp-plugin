@@ -41,9 +41,10 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
             self.providers.append(provider)
             return provider
         self.briefs = []
-        def brief(profile, *, delegation, language="English"):
+        def brief(profile, *, delegation, language="English", agent_name="", person="", place="", time_zone=""):
             self.briefs.append((profile, delegation))
             self.languages = getattr(self, "languages", []) + [language]
+            self.contexts = getattr(self, "contexts", []) + [(agent_name, person, place, time_zone)]
             return f"You are {profile}."
         self.mints = []
         async def mint(instructions, voice, *, key):
@@ -162,6 +163,20 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.briefs, [("default", "client")])
         self.assertEqual(self.providers[0].create_kwargs["instructions"], "You are default.")
         self.assertEqual(self.providers[0].create_kwargs["voice"], "cove")
+
+    async def test_the_phones_context_reaches_both_providers_briefs(self):
+        context = {"agentName": "Alfie", "personName": "Sam", "place": "Austin, Texas, United States",
+                   "timeZone": "America/Chicago"}
+        await self.hub.offer(self.owner, dict(self.fields, **context))
+        await self.hub.close(self.owner, self.fields)
+        await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp="",
+                                              voiceId="voice_fixture_gemini", **context))
+        self.assertEqual(self.contexts, [("Alfie", "Sam", "Austin, Texas, United States", "America/Chicago")] * 2)
+        self.assertEqual(self.briefs, [("default", "client"), ("default", "tools")])
+
+    async def test_an_offer_without_context_briefs_as_before(self):
+        await self.offer()
+        self.assertEqual(self.contexts, [("", "", "", "")])
 
     async def test_gemini_offer_is_a_locked_token_and_holds_nothing_here(self):
         fields = dict(self.fields, provider="gemini", voice="Charon", sdp="")

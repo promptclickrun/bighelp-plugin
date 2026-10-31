@@ -13,6 +13,7 @@ current code. It isn't legal advice or an independent audit.
 | Workspace files | Only folders you grant | To the app, read on request |
 | iPhone tool results | In the chat's normal history, like any tool result | Come from your phone; go to your AI provider with the chat |
 | Live voice audio | Not stored | Flows directly between your phone and the voice provider |
+| Live voice context | Not stored | On each voice call: the agent's name, your name in bighelp, your phone's time zone and, only while you share your location with bighelp, your city, region and country. They go to the voice provider in the call's instructions. Never your exact location |
 | Notification content | Pending events under `plugin-data/loopdy/managed-notifications/` | Sealed for your phone with current app builds; see below |
 | Agents talking to each other | Not stored: read from the other agent's own history | To the app on request: chat IDs, times and the tool running, matched by a hash of each message; never words. See [Agents talking](AGENT_TALK.md) |
 | A chat busy in another process | Not stored: read from Hermes' chat leases and the agent's history | To the app on request: whether another Hermes process runs the chat, the tool and its start time. Stop sends that process Ctrl-C, only when its pid and start time match Hermes' lease. See [Agents talking](AGENT_TALK.md) |

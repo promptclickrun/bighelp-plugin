@@ -33,6 +33,9 @@ from .live_voice_provider import (
 
 CAPABILITY = "native-voice-v1"
 GEMINI_CAPABILITY = "native-voice-gemini-v1"
+# The offer may say who is talking and where they are (`voice_brief`): the agent's name as the app
+# shows it, the person's name, a coarse place and the phone's time zone.
+CONTEXT_CAPABILITY = "native-voice-context-v1"
 logger = logging.getLogger(__name__)
 _FIXED_NAME = re.compile(r"[a-z_]{1,48}")
 
@@ -128,8 +131,7 @@ class NativeVoiceHub:
             try:
                 async with asyncio.timeout(self.setup_seconds):
                     with _profile_scope(fields["agentId"]):
-                        instructions = self.brief(fields["agentId"], delegation="client",
-                                                  language=fields.get("language", "English"))
+                        instructions = self.brief(fields["agentId"], delegation="client", **_brief_context(fields))
                         answer = await call.provider.create(
                             fields["sdp"], instructions=instructions, voice=fields["voice"])
             except TimeoutError:
@@ -157,7 +159,7 @@ class NativeVoiceHub:
         def brief_and_key():
             # Reading another profile's secrets can wait on its secret source: never on the event loop.
             with _profile_scope(fields["agentId"]):
-                return (self.brief(fields["agentId"], delegation="tools", language=fields.get("language", "English")),
+                return (self.brief(fields["agentId"], delegation="tools", **_brief_context(fields)),
                         self.gemini_key())
         try:
             instructions, key = await asyncio.to_thread(brief_and_key)
@@ -324,6 +326,18 @@ class _Offer(_Voice):
     voice: str = Field(min_length=1, max_length=32)
     # GPT-Live only: Gemini's media never passes through the host.
     sdp: str = Field(default="", max_length=180_000)
+    # native-voice-context-v1, all optional and untrusted: `voice_brief` cleans and bounds each one.
+    agentName: str = Field(default="", max_length=200)
+    personName: str = Field(default="", max_length=200)
+    place: str = Field(default="", max_length=300)
+    timeZone: str = Field(default="", max_length=64)
+
+
+def _brief_context(fields: dict) -> dict:
+    """What the brief takes from the offer besides the agent: the language and the phone's context."""
+    return {"language": fields.get("language", "English"), "agent_name": fields.get("agentName", ""),
+            "person": fields.get("personName", ""), "place": fields.get("place", ""),
+            "time_zone": fields.get("timeZone", "")}
 
 
 class _Poll(_Voice):
