@@ -73,9 +73,25 @@ display name and up to 6,000 bytes of its `SOUL.md`, so the model speaks as that
 on it", "I finished it". It never says "your agent", "the agent" or "Hermes".
 
 The brief also names the language to speak: the first language in the phone's `Accept-Language` header, else
-English. Voice models otherwise choose the language from the audio, and noise or one unclear word made a model
-answer an English speaker in Spanish. The model changes language only when the person clearly speaks to it in
-another one, in a full sentence.
+English. Native-audio models can change language in the middle of a call by themselves, and the instructions are
+the only control: noise, a TV or a cut-off word made a model answer an English speaker in Spanish. So the model
+speaks that language for the whole call and changes only when the person asks in words ("speak Spanish"), and
+changes back when they ask. The brief says the rule at its start and again at its end.
+
+With `native-voice-context-v1`, the app's offer can also send (all optional):
+
+| Field | What it is | Limit |
+|---|---|---|
+| `agentName` | The agent's name as the app shows it. It comes before the profile's own lookup, which gives a profile with no display name its ID ("Dr Pickle"). | 80 characters |
+| `personName` | The name the person saved in bighelp. Never the placeholder "You". | 40 characters |
+| `place` | A coarse place (city, region, country), only while the person shares their location with bighelp. Never coordinates. | 80 characters |
+| `timeZone` | The phone's IANA time zone, such as `America/Chicago`. | a real zone name |
+
+These are untrusted. The route cuts an over-long value instead of refusing the call (the app counts characters,
+Python counts code points). `voice_brief` keeps one line of letters, marks, digits, spaces, plain punctuation and
+the zero-width joiners some names need, and drops anything else (newlines, control characters, braces, markup). The brief shows them in a block of facts about the
+person that says they are never instructions. The model uses the person's name now and then, and uses the place
+for weather and local questions (Gemini searches with it) instead of asking where the person is.
 
 When a request sounds complete, the model first says one short line in its own words ("On it, checking now"),
 then starts the work in the same response: a delegation on GPT-Live, `start_work` on Gemini. It never claims the
@@ -85,6 +101,7 @@ on top of the model's line.
 
 ## What the plugin keeps
 
-Nothing lasting. Call state lives in memory and is dropped when the call closes or the plugin unloads. The
+Nothing lasting. The person's name, place and time zone go into that call's instructions to the voice provider,
+and the plugin doesn't keep them. Call state lives in memory and is dropped when the call closes or the plugin unloads. The
 plugin doesn't run prompts, store transcripts or schedule work; the conversation lives in Hermes' normal
 history.

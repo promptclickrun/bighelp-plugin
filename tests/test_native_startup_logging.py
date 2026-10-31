@@ -46,6 +46,7 @@ PROCESS_FEATURES = (
     "native-skills-import-v1",
     "native-vault-link-v1",
     "native-voice-gemini-v1",
+    "native-voice-context-v1",
 )
 
 
@@ -206,7 +207,8 @@ class NativeStartupLoggingTests(unittest.TestCase):
 
     def test_optional_import_failures_match_context_and_warn(self):
         missing = {
-            "hermes_cli.profiles": ("native-card-templates-v1", "native-voice-v1", "native-voice-gemini-v1"),
+            "hermes_cli.profiles": ("native-card-templates-v1", "native-voice-v1", "native-voice-gemini-v1",
+                                    "native-voice-context-v1"),
             "loopdy_plugin.native_device_tools": ("native-device-tools-v1", "native-device-location-v1",
                                                   "native-device-appearance-v1", *PROCESS_FEATURES[7:17]),
             "loopdy_plugin.agent_templates": ("native-agent-templates-v1",),

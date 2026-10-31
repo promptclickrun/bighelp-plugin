@@ -6,7 +6,8 @@ import unittest
 
 from loopdy_plugin.live_voice_provider import LiveProviderError
 from loopdy_plugin.native_context import NativeContext, NativeAPIError
-from loopdy_plugin.native_voice import NativeVoiceHub
+from loopdy_plugin.native_voice import NativeVoiceHub, _Offer
+from pydantic import ValidationError
 
 SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 
@@ -41,9 +42,10 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
             self.providers.append(provider)
             return provider
         self.briefs = []
-        def brief(profile, *, delegation, language="English"):
+        def brief(profile, *, delegation, language="English", agent_name="", person="", place="", time_zone=""):
             self.briefs.append((profile, delegation))
             self.languages = getattr(self, "languages", []) + [language]
+            self.contexts = getattr(self, "contexts", []) + [(agent_name, person, place, time_zone)]
             return f"You are {profile}."
         self.mints = []
         async def mint(instructions, voice, *, key):
@@ -163,6 +165,20 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.providers[0].create_kwargs["instructions"], "You are default.")
         self.assertEqual(self.providers[0].create_kwargs["voice"], "cove")
 
+    async def test_the_phones_context_reaches_both_providers_briefs(self):
+        context = {"agentName": "Alfie", "personName": "Sam", "place": "Austin, Texas, United States",
+                   "timeZone": "America/Chicago"}
+        await self.hub.offer(self.owner, dict(self.fields, **context))
+        await self.hub.close(self.owner, self.fields)
+        await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp="",
+                                              voiceId="voice_fixture_gemini", **context))
+        self.assertEqual(self.contexts, [("Alfie", "Sam", "Austin, Texas, United States", "America/Chicago")] * 2)
+        self.assertEqual(self.briefs, [("default", "client"), ("default", "tools")])
+
+    async def test_an_offer_without_context_briefs_as_before(self):
+        await self.offer()
+        self.assertEqual(self.contexts, [("", "", "", "")])
+
     async def test_gemini_offer_is_a_locked_token_and_holds_nothing_here(self):
         fields = dict(self.fields, provider="gemini", voice="Charon", sdp="")
         value = await self.hub.offer(self.owner, fields)
@@ -188,6 +204,30 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NativeAPIError) as caught:
             await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp=""))
         self.assertEqual(caught.exception.code, "voice_provider_authentication_failed")
+
+
+class OfferModelTests(unittest.TestCase):
+    """The offer as the route parses it (`extra="forbid"`), so a misspelled field can't pass by."""
+    BASE = {"agentId": "default", "sessionId": "stored", "voiceId": "voice_fixture", "provider": "gemini",
+            "voice": "Charon"}
+
+    def test_an_offer_takes_the_four_context_fields_or_none(self):
+        offer = _Offer.model_validate({**self.BASE, "agentName": "Alfie", "personName": "Sam",
+                                       "place": "Austin, Texas, United States", "timeZone": "America/Chicago"})
+        self.assertEqual((offer.agentName, offer.personName, offer.place, offer.timeZone),
+                         ("Alfie", "Sam", "Austin, Texas, United States", "America/Chicago"))
+        plain = _Offer.model_validate(self.BASE)
+        self.assertEqual((plain.agentName, plain.personName, plain.place, plain.timeZone), ("", "", "", ""))
+
+    def test_a_misspelled_field_is_refused(self):
+        with self.assertRaises(ValidationError):
+            _Offer.model_validate({**self.BASE, "personname": "Sam"})
+
+    def test_an_over_long_field_is_cut_instead_of_failing_the_call(self):
+        # 30 family emoji: 30 characters in the app, 210 code points here.
+        offer = _Offer.model_validate({**self.BASE, "personName": "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+                                       "\u200d\U0001F466" * 30, "place": "x" * 1_000, "timeZone": "y" * 100})
+        self.assertEqual((len(offer.personName), len(offer.place), len(offer.timeZone)), (200, 300, 64))
 
 
 class NativeVoiceProviderFailureTests(unittest.IsolatedAsyncioTestCase):
