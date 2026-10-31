@@ -54,16 +54,22 @@ Headers:
 
 - `X-Loopdy-Upload-ID`: the upload.
 - `X-Loopdy-Upload-Offset`: where the piece starts, a multiple of `chunkBytes`.
-- `X-Loopdy-Chunk-SHA256` (optional): the piece's SHA-256. A piece that doesn't match is refused.
+- `X-Loopdy-Chunk-SHA256`: the piece's SHA-256. A piece without it, or one that doesn't match, is refused.
 
 Each piece is `chunkBytes` long, except the last one. The host records a piece only after all of it arrived and
 was written to disk, so a piece cut off by a drop is simply sent again.
 
 ### `status`, `finish`, `discard`
 
-`{"uploadId": "<32 lowercase hex>"}`. `finish` adds `"path"`, the staged file for `file.attach`. It is the
-only answer with a host path, because `file.attach` needs one; Hermes' own upload route
-(`/api/chat/file-upload`) answers the same way. Calling `finish` or `discard` again is safe.
+`{"uploadId": "<32 lowercase hex>"}`. `finish` adds `"path"`, the staged file for `file.attach`
+(`plugin-data/loopdy/uploads/<uploadId>/file/<name>`). Calling `finish` or `discard` again is safe.
+
+This is the one plugin answer with a host path, an exception to the rule in AGENTS.md. The reasons:
+
+- Hermes' `file.attach` takes a host path or the file's bytes in one frame. Bytes are what this route avoids.
+- The plugin can't attach a file for a chat session itself. Only Hermes' gateway holds the session.
+- `file.attach` answers the app with the attached file's absolute path and `@file:` reference anyway.
+- Hermes' own upload route (`/api/chat/file-upload`) answers with its staged path the same way.
 
 ## Errors
 
@@ -77,16 +83,20 @@ only answer with a host path, because `file.attach` needs one; Hermes' own uploa
 | 422 | `upload_offset_invalid`, `upload_length_invalid` | A piece that isn't one whole piece of this file. |
 | 422 | `upload_chunk_corrupt` | A piece that doesn't match its SHA-256. |
 | 422 | `upload_corrupt` | The pieces don't add up to the file's SHA-256. The host forgets the pieces; send them again. |
-| 429 | `uploads_busy` | The host already holds 8 uploads, or 1 GiB of them. |
+| 408 | `upload_chunk_timeout` | A piece's body took over 2 minutes to arrive. Send it again. |
+| 429 | `uploads_busy` | The host already holds 8 uploads (3 for one person), or 1 GiB of them. |
 | 503 | `uploads_unavailable` | The host can't stage files. |
-| 409 | `upload_no_space` | Less free disk than twice the file plus 512 MiB. |
+| 409 | `upload_no_space` | Not enough free disk: twice the file, plus what started uploads still need, plus 512 MiB. Also when the disk fills while a piece or the record is written. |
 
 ## Limits and cleanup
 
-- 256 MiB a file, pieces of 4 MiB, 8 uploads and 1 GiB at once for each host.
+- 256 MiB a file, pieces of 4 MiB, 8 uploads (3 for one person) and 1 GiB at once for each host.
 - The host checks free space before it accepts a file: room for the staged copy, Hermes' copy into the
-  attachments, and 512 MiB more.
+  attachments, what uploads already started still need (staged files are sparse until their pieces
+  arrive), and 512 MiB more.
 - Staged files live in `plugin-data/loopdy/uploads/<uploadId>/`, owner-only (`0700` folders, `0600` files).
   The phone never names a path. Symbolic links there are never followed, and are removed.
-- An upload idle for a day is removed, finished or not.
+- An upload idle for a day is removed, finished or not. Any upload call sweeps them, at most once a minute,
+  and a call that finds one expired removes it at once.
+- A piece's body must arrive within 2 minutes, so a stalled phone frees its memory slot.
 - At most 4 pieces are held in memory at once in each process.

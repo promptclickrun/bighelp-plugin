@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import telemetry_off  # noqa: F401  (no test run posts host telemetry)
 
+import asyncio
+import errno
 import hashlib
+import importlib
 import json
+import sys
 import os
 import tempfile
 import unittest
@@ -66,7 +70,7 @@ class UploadStoreTests(unittest.TestCase):
         finished = self.store.finish(upload["uploadId"], OWNER)
         path = Path(finished["path"])
         self.assertEqual(path.name, "Clip.mov")
-        self.assertEqual(path.parent, self.root / upload["uploadId"])
+        self.assertEqual(path.parent, self.root / upload["uploadId"] / "file")
         self.assertEqual(path.read_bytes(), self.data)
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
         # Finishing twice gives the same answer; the phone may not have heard the first.
@@ -108,7 +112,7 @@ class UploadStoreTests(unittest.TestCase):
         upload = _start(self.store, self.data)
         for index in range(4):
             piece = bytes(wrong[index * 1024:(index + 1) * 1024])
-            self.store.write_chunk(upload["uploadId"], OWNER, index, piece, None)
+            self.store.write_chunk(upload["uploadId"], OWNER, index, piece, hashlib.sha256(piece).hexdigest())
         with self.assertRaises(NativeAPIError) as caught:
             self.store.finish(upload["uploadId"], OWNER)
         self.assertEqual((caught.exception.status, caught.exception.code), (422, "upload_corrupt"))
@@ -129,17 +133,17 @@ class UploadStoreTests(unittest.TestCase):
                       byteCount=nu.MAX_UPLOAD_BYTES + 1, sha256="0" * 64)
         self.assertGreaterEqual(nu.MAX_UPLOAD_BYTES, 100 * 1000 * 1000)
         for number in range(nu.MAX_ACTIVE_UPLOADS):
-            _start(self.store, self.data, name=f"clip-{number}.mov")
+            _start(self.store, self.data, name=f"clip-{number}.mov", owner=f"fixture\x1fperson-{number}")
         with self.assertRaises(NativeAPIError) as caught:
-            _start(self.store, self.data, name="one-more.mov")
+            _start(self.store, self.data, name="one-more.mov", owner="fixture\x1fsomeone-else")
         self.assertEqual((caught.exception.status, caught.exception.code), (429, "uploads_busy"))
 
     def test_staged_bytes_together_are_bounded(self):
         with patch.object(nu, "MAX_STAGED_BYTES", len(self.data) * 2):
             _start(self.store, self.data, name="a.mov")
-            _start(self.store, self.data, name="b.mov")
+            _start(self.store, self.data, name="b.mov", owner="fixture\x1fbob")
             with self.assertRaises(NativeAPIError) as caught:
-                _start(self.store, self.data, name="c.mov")
+                _start(self.store, self.data, name="c.mov", owner="fixture\x1fcarol")
         self.assertEqual(caught.exception.code, "uploads_busy")
 
     def test_idle_and_discarded_uploads_are_removed(self):
@@ -197,7 +201,105 @@ class UploadStoreTests(unittest.TestCase):
         for index in range(4):
             _send(self.store, upload, self.data, index)
         path = Path(self.store.finish(upload["uploadId"], OWNER)["path"])
-        self.assertEqual(path.parent, self.root / upload["uploadId"])
+        self.assertEqual(path.parent, self.root / upload["uploadId"] / "file")
+
+    # Review of #250
+
+    def test_parallel_uploads_count_what_they_still_need_against_free_space(self):
+        # Sparse files: free space doesn't drop until pieces arrive, so the host counts what's owed.
+        self.free[0] = 2 * len(self.data) * 2 + nu.FREE_SPACE_RESERVE_BYTES - 1
+        _start(self.store, self.data, name="a.mov")
+        with self.assertRaises(NativeAPIError) as caught:
+            _start(self.store, self.data, name="b.mov")
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "upload_no_space"))
+
+    def test_a_disk_that_fills_while_writing_says_no_space(self):
+        upload = _start(self.store, self.data)
+        with patch.object(nu.os, "pwrite", side_effect=OSError(errno.ENOSPC, "full")), \
+                self.assertRaises(NativeAPIError) as caught:
+            _send(self.store, upload, self.data, 0)
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "upload_no_space"))
+        for index in range(4):
+            _send(self.store, upload, self.data, index)
+        with patch.object(nu.os, "replace", side_effect=OSError(errno.ENOSPC, "full")), \
+                self.assertRaises(NativeAPIError) as finishing:
+            self.store.finish(upload["uploadId"], OWNER)
+        self.assertEqual((finishing.exception.status, finishing.exception.code), (409, "upload_no_space"))
+
+    def test_an_expired_upload_found_by_any_call_is_deleted_with_the_other_idle_ones(self):
+        first = _start(self.store, self.data, name="one.mov")
+        second = _start(self.store, self.data, name="two.mov")
+        self.clock[0] += nu.EXPIRY_SECONDS + nu.PRUNE_INTERVAL_SECONDS + 1
+        with self.assertRaises(NativeAPIError):
+            self.store.status(first["uploadId"], OWNER)
+        self.assertFalse((self.root / first["uploadId"]).exists())
+        self.assertFalse((self.root / second["uploadId"]).exists())
+
+    def test_unknown_upload_ids_leave_no_lock_behind(self):
+        before = len(nu._locks)
+        for _ in range(50):
+            with self.assertRaises(NativeAPIError):
+                self.store.status(os.urandom(16).hex(), OWNER)
+        self.assertEqual(len(nu._locks), before)
+
+    def test_one_person_holds_only_a_few_uploads_and_others_can_still_send(self):
+        for number in range(nu.MAX_UPLOADS_PER_PERSON):
+            _start(self.store, self.data, name=f"mine-{number}.mov")
+        with self.assertRaises(NativeAPIError) as caught:
+            _start(self.store, self.data, name="one-more.mov")
+        self.assertEqual(caught.exception.code, "uploads_busy")
+        _start(self.store, self.data, name="theirs.mov", owner="fixture\x1fbob")
+
+    def test_names_the_host_uses_itself_never_collide(self):
+        for name in ("upload.json", "data.part", "file"):
+            with self.subTest(name=name):
+                upload = _start(self.store, self.data, name=name)
+                for index in range(4):
+                    _send(self.store, upload, self.data, index)
+                path = Path(self.store.finish(upload["uploadId"], OWNER)["path"])
+                self.assertEqual((path.name, path.read_bytes()), (name, self.data))
+                self.store.discard(upload["uploadId"], OWNER)
+
+    def test_a_name_that_is_not_text_is_refused_as_invalid(self):
+        body = nu._Start.model_construct(agentId="default", fileName="clip\ud800.mov", mimeType="video/quicktime",
+                                         byteCount=len(self.data), sha256=hashlib.sha256(self.data).hexdigest())
+        with self.assertRaises(NativeAPIError) as caught:
+            self.store.start(body, OWNER)
+        self.assertEqual((caught.exception.status, caught.exception.code), (422, "invalid_request"))
+
+    def test_the_same_file_with_another_type_is_its_own_upload(self):
+        first = _start(self.store, self.data, mime="video/quicktime")
+        second = _start(self.store, self.data, mime="video/mp4")
+        self.assertNotEqual(first["uploadId"], second["uploadId"])
+        self.assertEqual(second["mimeType"], "video/mp4")
+
+    def test_a_piece_that_never_finishes_arriving_times_out(self):
+        async def slow():
+            yield b"x" * 10
+            await asyncio.sleep(5)
+            yield b"y"
+        with patch.object(nu, "CHUNK_READ_SECONDS", 0.05), self.assertRaises(NativeAPIError) as caught:
+            asyncio.run(nu._read_piece(slow(), 11))
+        self.assertEqual((caught.exception.status, caught.exception.code), (408, "upload_chunk_timeout"))
+        async def whole():
+            yield b"ab"
+            yield b"c"
+        self.assertEqual(asyncio.run(nu._read_piece(whole(), 3)), b"abc")
+
+    def test_a_host_without_fcntl_still_lists_its_other_features(self):
+        from loopdy_plugin import native_context
+        saved = sys.modules.pop("loopdy_plugin.native_uploads")
+        try:
+            with patch.dict(sys.modules, {"fcntl": None}):
+                fresh = importlib.import_module("loopdy_plugin.native_uploads")
+                self.assertFalse(fresh.available())
+                skipped = []
+                _profile, features = native_context._native_features(skipped=skipped)
+                self.assertIn("native-context-v1", features)
+                self.assertNotIn(nu.CAPABILITY, features)
+                self.assertIn(nu.CAPABILITY, [feature for feature, _ in skipped])
+        finally:
+            sys.modules["loopdy_plugin.native_uploads"] = saved
 
 
 class NativeUploadRouteTests(unittest.TestCase):
@@ -280,6 +382,22 @@ class NativeUploadRouteTests(unittest.TestCase):
                                       json={**body, "agentId": "default"})
         self.assertEqual((answer.status_code, answer.json()["error"]["code"]), (409, "upload_no_space"))
         self.assertNotIn(str(self.home), json.dumps(answer.json()))
+
+
+    def test_a_piece_without_its_checksum_or_a_name_that_is_not_text_is_refused(self):
+        data = os.urandom(2048)
+        upload = self.client.post(PREFIX + "/uploads/start", headers=self.headers(), json={
+            "agentId": "default", "fileName": "a.bin", "mimeType": "application/octet-stream",
+            "byteCount": len(data), "sha256": hashlib.sha256(data).hexdigest()}).json()
+        headers = {k: v for k, v in self.piece_headers(upload["uploadId"], 0, data).items()
+                   if k != "X-Loopdy-Chunk-SHA256"}
+        answer = self.client.post(PREFIX + "/uploads/chunk", content=data, headers=headers)
+        self.assertEqual(answer.status_code, 422, answer.text)
+        body = ('{"agentId":"default","fileName":"a\\ud800.bin","mimeType":"application/octet-stream",'
+                f'"byteCount":10,"sha256":"{"0" * 64}"}}')
+        answer = self.client.post(PREFIX + "/uploads/start", content=body,
+                                  headers={**self.headers(), "Content-Type": "application/json"})
+        self.assertEqual((answer.status_code, answer.json()["error"]["code"]), (422, "invalid_request"))
 
     def tearDown(self):
         nu._store = None

@@ -41,6 +41,10 @@ Many features span both repos. The app's side of each route lives in the app rep
   what an app build already uses.
 - **Private by default:**
   - Responses to the app never contain keys, tokens, emails, account IDs or host file paths.
+    One exception: `uploads/finish` names the staged copy of a big file, because Hermes' own `file.attach`
+    takes only a host path, and the plugin can't attach for a chat session without reaching into Hermes'
+    gateway. The path is in this plugin's own folder for that upload, and `file.attach` answers the app with
+    the attached file's path anyway (`docs/BIG_FILES.md`).
   - Log fixed error codes and stages, never exception text, because exception text can carry secrets or paths.
 - **Borrow, don't touch.**
   - When reading another tool's sign-in (Claude Code, Codex CLI, Copilot), read it and never refresh or rewrite it.

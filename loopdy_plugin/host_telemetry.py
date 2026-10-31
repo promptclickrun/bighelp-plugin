@@ -134,7 +134,7 @@ workspace_hermes_folder workspace_identity_changed workspace_identity_unavailabl
 workspace_not_configured workspace_on_remote workspace_unavailable workspace_unreadable
 workspace_windows_unsupported
 upload_chunk_corrupt upload_conflict upload_corrupt upload_finished upload_incomplete upload_length_invalid
-upload_no_space upload_not_found upload_offset_invalid uploads_busy uploads_unavailable
+upload_chunk_timeout upload_no_space upload_not_found upload_offset_invalid uploads_busy uploads_unavailable
 """.split())
 RESULT_WORDS = frozenset({"accepted", "duplicate"})
 # Where an error can come from. A code is accepted from these places only.
