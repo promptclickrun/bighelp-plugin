@@ -276,7 +276,7 @@ class UploadStore:
                 raise NativeAPIError(503, "uploads_unavailable", "Uploads are unavailable on this host.") from None
             # The staged copy, Hermes' copy into the agent's attachments, and room to spare.
             if free < 2 * body.byteCount + FREE_SPACE_RESERVE_BYTES:
-                raise NativeAPIError(507, "upload_no_space", "This computer doesn't have room for this file.")
+                raise NativeAPIError(409, "upload_no_space", "This computer doesn't have room for this file.")
             upload_id = secrets.token_hex(16)
             folder = self.root / upload_id
             folder.mkdir(mode=0o700)

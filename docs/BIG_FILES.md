@@ -79,7 +79,7 @@ only answer with a host path, because `file.attach` needs one; Hermes' own uploa
 | 422 | `upload_corrupt` | The pieces don't add up to the file's SHA-256. The host forgets the pieces; send them again. |
 | 429 | `uploads_busy` | The host already holds 8 uploads, or 1 GiB of them. |
 | 503 | `uploads_unavailable` | The host can't stage files. |
-| 507 | `upload_no_space` | Less free disk than twice the file plus 512 MiB. |
+| 409 | `upload_no_space` | Less free disk than twice the file plus 512 MiB. |
 
 ## Limits and cleanup
 

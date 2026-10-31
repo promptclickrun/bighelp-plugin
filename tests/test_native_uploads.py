@@ -118,7 +118,7 @@ class UploadStoreTests(unittest.TestCase):
         self.free[0] = 2 * len(self.data) + nu.FREE_SPACE_RESERVE_BYTES - 1
         with self.assertRaises(NativeAPIError) as caught:
             _start(self.store, self.data)
-        self.assertEqual((caught.exception.status, caught.exception.code), (507, "upload_no_space"))
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, "upload_no_space"))
         self.assertEqual(list(self.root.iterdir()), [])
         self.free[0] += 1
         _start(self.store, self.data)
@@ -278,7 +278,7 @@ class NativeUploadRouteTests(unittest.TestCase):
                 patch.object(nu, "_store", None):
             answer = self.client.post(PREFIX + "/uploads/start", headers=self.headers(),
                                       json={**body, "agentId": "default"})
-        self.assertEqual((answer.status_code, answer.json()["error"]["code"]), (507, "upload_no_space"))
+        self.assertEqual((answer.status_code, answer.json()["error"]["code"]), (409, "upload_no_space"))
         self.assertNotIn(str(self.home), json.dumps(answer.json()))
 
     def tearDown(self):
