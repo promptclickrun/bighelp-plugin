@@ -6,7 +6,8 @@ import unittest
 
 from loopdy_plugin.live_voice_provider import LiveProviderError
 from loopdy_plugin.native_context import NativeContext, NativeAPIError
-from loopdy_plugin.native_voice import NativeVoiceHub
+from loopdy_plugin.native_voice import NativeVoiceHub, _Offer
+from pydantic import ValidationError
 
 SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 
@@ -203,6 +204,30 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NativeAPIError) as caught:
             await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp=""))
         self.assertEqual(caught.exception.code, "voice_provider_authentication_failed")
+
+
+class OfferModelTests(unittest.TestCase):
+    """The offer as the route parses it (`extra="forbid"`), so a misspelled field can't pass by."""
+    BASE = {"agentId": "default", "sessionId": "stored", "voiceId": "voice_fixture", "provider": "gemini",
+            "voice": "Charon"}
+
+    def test_an_offer_takes_the_four_context_fields_or_none(self):
+        offer = _Offer.model_validate({**self.BASE, "agentName": "Alfie", "personName": "Sam",
+                                       "place": "Austin, Texas, United States", "timeZone": "America/Chicago"})
+        self.assertEqual((offer.agentName, offer.personName, offer.place, offer.timeZone),
+                         ("Alfie", "Sam", "Austin, Texas, United States", "America/Chicago"))
+        plain = _Offer.model_validate(self.BASE)
+        self.assertEqual((plain.agentName, plain.personName, plain.place, plain.timeZone), ("", "", "", ""))
+
+    def test_a_misspelled_field_is_refused(self):
+        with self.assertRaises(ValidationError):
+            _Offer.model_validate({**self.BASE, "personname": "Sam"})
+
+    def test_an_over_long_field_is_cut_instead_of_failing_the_call(self):
+        # 30 family emoji: 30 characters in the app, 210 code points here.
+        offer = _Offer.model_validate({**self.BASE, "personName": "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+                                       "\u200d\U0001F466" * 30, "place": "x" * 1_000, "timeZone": "y" * 100})
+        self.assertEqual((len(offer.personName), len(offer.place), len(offer.timeZone)), (200, 300, 64))
 
 
 class NativeVoiceProviderFailureTests(unittest.IsolatedAsyncioTestCase):

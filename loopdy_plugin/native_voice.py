@@ -22,7 +22,7 @@ import time
 from typing import Literal
 
 from fastapi import Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationInfo, field_validator
 
 from . import gemini_live, voice_brief
 from .native_context import NativeAPIError, NativeContext, native_context
@@ -33,9 +33,6 @@ from .live_voice_provider import (
 
 CAPABILITY = "native-voice-v1"
 GEMINI_CAPABILITY = "native-voice-gemini-v1"
-# The offer may say who is talking and where they are (`voice_brief`): the agent's name as the app
-# shows it, the person's name, a coarse place and the phone's time zone.
-CONTEXT_CAPABILITY = "native-voice-context-v1"
 logger = logging.getLogger(__name__)
 _FIXED_NAME = re.compile(r"[a-z_]{1,48}")
 
@@ -326,11 +323,21 @@ class _Offer(_Voice):
     voice: str = Field(min_length=1, max_length=32)
     # GPT-Live only: Gemini's media never passes through the host.
     sdp: str = Field(default="", max_length=180_000)
-    # native-voice-context-v1, all optional and untrusted: `voice_brief` cleans and bounds each one.
-    agentName: str = Field(default="", max_length=200)
-    personName: str = Field(default="", max_length=200)
-    place: str = Field(default="", max_length=300)
-    timeZone: str = Field(default="", max_length=64)
+    # native-voice-context-v1: who is talking and where (`voice_brief` cleans and bounds each one).
+    agentName: str = ""
+    personName: str = ""
+    place: str = ""
+    timeZone: str = ""
+
+    @field_validator("agentName", "personName", "place", "timeZone", mode="before")
+    @classmethod
+    def _shorten(cls, value: object, info: ValidationInfo) -> object:
+        # Untrusted and optional: an over-long value is cut, never a refused call. The app counts
+        # characters and Python counts code points, so a name of family emoji was three times too long.
+        return value[:_CONTEXT_LIMITS[info.field_name]] if isinstance(value, str) else value
+
+
+_CONTEXT_LIMITS = {"agentName": 200, "personName": 200, "place": 300, "timeZone": 64}
 
 
 def _brief_context(fields: dict) -> dict:

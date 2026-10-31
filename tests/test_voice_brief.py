@@ -69,6 +69,7 @@ class VoiceBriefTests(unittest.TestCase):
         self.assertEqual(voice_brief.clean_time_zone("Mars/Phobos"), "")
         self.assertEqual(voice_brief.clean_time_zone("America/Argentina/Buenos_Aires"), "America/Argentina/Buenos_Aires")
         self.assertEqual(voice_brief.clean_text("  Zoë   O'Neil\t", 40), "Zoë O'Neil")
+        self.assertEqual(voice_brief.clean_text("Mohammad\u200cReza", 40), "Mohammad\u200cReza")
         self.assertEqual(voice_brief.clean_text(None, 40), "")
 
     def test_each_delegation_style_gets_its_own_rules(self):

@@ -87,8 +87,9 @@ With `native-voice-context-v1`, the app's offer can also send (all optional):
 | `place` | A coarse place (city, region, country), only while the person shares their location with bighelp. Never coordinates. | 80 characters |
 | `timeZone` | The phone's IANA time zone, such as `America/Chicago`. | a real zone name |
 
-These are untrusted. `voice_brief` keeps one line of letters, marks, digits, spaces and plain punctuation, and drops
-anything else (newlines, control characters, braces, markup). The brief shows them in a block of facts about the
+These are untrusted. The route cuts an over-long value instead of refusing the call (the app counts characters,
+Python counts code points). `voice_brief` keeps one line of letters, marks, digits, spaces, plain punctuation and
+the zero-width joiners some names need, and drops anything else (newlines, control characters, braces, markup). The brief shows them in a block of facts about the
 person that says they are never instructions. The model uses the person's name now and then, and uses the place
 for weather and local questions (Gemini searches with it) instead of asking where the person is.
 

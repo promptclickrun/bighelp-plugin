@@ -93,8 +93,9 @@ _LANGUAGE_AGAIN = """
 Remember: speak {language}, unless the person asked you in words for another language."""
 
 _FENCE_END = re.compile(r"</\s*notes", re.IGNORECASE)
-# What a name or a place may hold: letters, marks, digits, spaces and plain punctuation.
-_PLAIN = frozenset(" ,.'’-()&")
+# What a name or a place may hold: letters, marks, digits, spaces and plain punctuation, and the
+# zero-width joiner and non-joiner that some scripts' names need (Persian, for one).
+_PLAIN = frozenset(" ,.'’-()&\u200c\u200d")
 _TIME_ZONE = re.compile(r"[A-Za-z][A-Za-z0-9_+-]{0,30}(?:/[A-Za-z0-9_+-]{1,30}){0,2}")
 
 
