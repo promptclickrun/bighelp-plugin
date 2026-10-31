@@ -119,12 +119,17 @@ class AttachmentStore:
             return cached
 
         media, cleaned = BasePlatformAdapter.extract_media(text)
-        validated_media = [
-            (safe_path, is_voice)
-            for path, is_voice in media
-            if (safe_path := BasePlatformAdapter.validate_media_delivery_path(path))
-        ]
+        # Why a `MEDIA:` file didn't become an attachment, so the app can say so instead of loading for good.
+        unavailable: list[dict[str, str]] = []
+        validated_media = []
+        for path, is_voice in media:
+            if safe_path := BasePlatformAdapter.validate_media_delivery_path(path):
+                validated_media.append((safe_path, is_voice))
+            else:
+                unavailable.append(_unavailable(path, "missing" if not _exists(path) else "refused"))
         safe_media = BasePlatformAdapter.filter_media_delivery_paths(validated_media)
+        kept = {path for path, _is_voice in safe_media}
+        unavailable += [_unavailable(path, "refused") for path, _is_voice in validated_media if path not in kept]
         local_files, cleaned = BasePlatformAdapter.extract_local_files(cleaned)
         validated_local_files = [
             safe_path
@@ -146,14 +151,19 @@ class AttachmentStore:
 
         attachments = []
         oversized_mime_types = []
+        media_paths = kept
         for source_path in paths[:MAX_ATTACHMENTS_PER_ITEM]:
             try:
                 attachment = self._cache_file(profile, session_id, item_id, source_path, max_bytes, stamp)
             except _OversizedAttachment as error:
                 oversized_mime_types.append(error.mime_type)
+                if source_path in media_paths:
+                    unavailable.append(_unavailable(source_path, "too_large"))
                 continue
             if attachment is not None:
                 attachments.append(attachment)
+            elif source_path in media_paths:
+                unavailable.append(_unavailable(source_path, "missing"))
 
         display_text = _remove_unresolved_directive_lines(
             BasePlatformAdapter.strip_media_directives_for_display(cleaned)
@@ -162,6 +172,8 @@ class AttachmentStore:
         if oversized_mime_types:
             # Internal diagnostics only; workspace projections never expose local paths.
             result["oversized_mime_types"] = oversized_mime_types
+        if unavailable:
+            result["unavailable"] = unavailable
         if attachments:
             self._cache_item(profile, session_id, item_id, text_digest, display_text, attachments)
         return result
@@ -469,6 +481,18 @@ def _safe_filename(value: str) -> str:
     budget = MAX_FILENAME_BYTES - len(suffix.encode("utf-8"))
     stem = Path(name).stem.encode("utf-8")[:budget].decode("utf-8", "ignore")
     return f"{stem}{suffix}" or "attachment"
+
+
+def _unavailable(path: str, reason: str) -> dict[str, str]:
+    """A file that didn't come, by its name only: never the path."""
+    return {"name": _safe_filename(path), "reason": reason}
+
+
+def _exists(path: str) -> bool:
+    try:
+        return os.path.lexists(os.path.expanduser(path))
+    except (OSError, ValueError):
+        return False
 
 
 def _is_attachment_id(value: str) -> bool:
