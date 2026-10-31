@@ -13,7 +13,10 @@ All routes are `POST /api/plugins/loopdy/native/attachments/<operation>` with th
   messaging platform uses, including `gateway.media_delivery_allow_dirs` and the other `gateway.*` media
   settings). It also requires that an assistant message in that chat, or in the chat it was compacted from,
   really sent that path. Approved files get an opaque ID, a file name, a type and a size, and the `MEDIA:` line is
-  removed from the displayed text.
+  removed from the displayed text. A `MEDIA:` file that doesn't come is listed in the message's `unavailable`, by
+  file name only, with a reason: `missing` (not on the computer), `refused` (the delivery rules refuse it, or no
+  assistant message in the chat sent it yet) or `too_large`. The app shows the reason with Try again instead of a
+  loading tile. Older apps ignore the list.
 - **`fetch`**: the app downloads an attachment by ID in chunks of about 3 MB, up to 25 MB per file.
 - **`recent`**: the pictures and videos an agent sent or generated lately, for the Files tab (see
   [Artifacts and media](APPS_ARTIFACTS_AND_MEDIA.md)). Advertised as `native-agent-media-v1`.
@@ -26,4 +29,4 @@ All routes are `POST /api/plugins/loopdy/native/attachments/<operation>` with th
 
 Approved files are copied into a per-profile cache
 (`<Hermes profile home>/plugin-data/loopdy/agent-attachments.sqlite3`), so reopening an old chat still works if
-the original file has moved. Missing, denied or oversized files simply show no attachment.
+the original file has moved. Missing, denied or oversized files show no attachment, and `unavailable` says which.

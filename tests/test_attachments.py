@@ -159,7 +159,8 @@ class AttachmentStoreTests(unittest.TestCase):
                     items=[{"id": "row-3", "text": f"Old file.\nMEDIA:{stale}"}],
                 )
 
-            self.assertEqual(result, [{"id": "row-3", "text": "Old file.", "attachments": []}])
+            self.assertEqual(result, [{"id": "row-3", "text": "Old file.", "attachments": [],
+                                       "unavailable": [{"name": "stale.pdf", "reason": "refused"}]}])
 
     def test_cache_evicts_oldest_profile_bytes_and_invalidates_message_projection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
