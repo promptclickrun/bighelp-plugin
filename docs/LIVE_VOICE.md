@@ -72,6 +72,11 @@ The plugin builds the voice model's instructions for each call (`voice_brief.py`
 display name and up to 6,000 bytes of its `SOUL.md`, so the model speaks as that agent, in the first person: "I'm
 on it", "I finished it". It never says "your agent", "the agent" or "Hermes".
 
+The brief also names the language to speak: the first language in the phone's `Accept-Language` header, else
+English. Voice models otherwise choose the language from the audio, and noise or one unclear word made a model
+answer an English speaker in Spanish. The model changes language only when the person clearly speaks to it in
+another one, in a full sentence.
+
 When a request sounds complete, the model first says one short line in its own words ("On it, checking now"),
 then starts the work in the same response: a delegation on GPT-Live, `start_work` on Gemini. It never claims the
 work is done and doesn't guess a result; it speaks the result only once it arrives, as its own work. On the Codex

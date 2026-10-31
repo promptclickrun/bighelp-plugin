@@ -128,7 +128,8 @@ class NativeVoiceHub:
             try:
                 async with asyncio.timeout(self.setup_seconds):
                     with _profile_scope(fields["agentId"]):
-                        instructions = self.brief(fields["agentId"], delegation="client")
+                        instructions = self.brief(fields["agentId"], delegation="client",
+                                                  language=fields.get("language", "English"))
                         answer = await call.provider.create(
                             fields["sdp"], instructions=instructions, voice=fields["voice"])
             except TimeoutError:
@@ -156,7 +157,8 @@ class NativeVoiceHub:
         def brief_and_key():
             # Reading another profile's secrets can wait on its secret source: never on the event loop.
             with _profile_scope(fields["agentId"]):
-                return self.brief(fields["agentId"], delegation="tools"), self.gemini_key()
+                return (self.brief(fields["agentId"], delegation="tools", language=fields.get("language", "English")),
+                        self.gemini_key())
         try:
             instructions, key = await asyncio.to_thread(brief_and_key)
             connect = await self.gemini_mint(instructions, fields["voice"], key=key)
@@ -353,6 +355,8 @@ async def request(operation: str, request: Request):
     request_id = _precondition(request, owner)
     body = await _body(request, models[operation])
     fields = body.model_dump()
+    # The phone's own language, so the voice model never guesses one from the audio.
+    fields["language"] = voice_brief.language_name(request.headers.get("accept-language"))
     from hermes_cli.profiles import profile_exists
     from hermes_constants import get_process_hermes_home, set_hermes_home_override, reset_hermes_home_override
     token = set_hermes_home_override(get_process_hermes_home())
