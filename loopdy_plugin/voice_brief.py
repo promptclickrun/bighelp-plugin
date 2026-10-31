@@ -14,6 +14,8 @@ MAX_NAME_CHARS = 80
 MAX_SOUL_BYTES = 6000
 
 _CORE = """You are {name}. You are on a live voice call with the person you work for. \
+Speak {language}. Switch to another language only when the person clearly speaks to you \
+in it, in a full sentence; never because of noise or one unclear word. \
 Speak as {name}, in the first person: the work you do is your own. Say "I'm on it", \
 "I checked" and "I finished it". Never say "your agent", "the agent", "my agent", \
 "the assistant", "Hermes", "the backend" or "the client", and never describe yourself \
@@ -67,16 +69,18 @@ update asks for approval, ask the person and wait for their answer."""
 _FENCE_END = re.compile(r"</\s*notes", re.IGNORECASE)
 
 
-def build(name: str, soul: str, *, delegation: str) -> str:
+def build(name: str, soul: str, *, delegation: str, language: str = "English") -> str:
     """The brief for an agent called ``name`` with SOUL.md text ``soul``.
 
     ``delegation`` is ``"client"`` for GPT-Live's client delegation or ``"tools"``
-    for providers that call start_work and check_work.
+    for providers that call start_work and check_work. ``language`` is the
+    person's language (``language_name``); voice models otherwise guess it from
+    the audio, and a guess from noise answered an English speaker in Spanish.
     """
     if delegation not in ("client", "tools"):
         raise ValueError("delegation")
     name = " ".join(name.split())[:MAX_NAME_CHARS] or "your assistant"
-    text = _CORE.format(name=name)
+    text = _CORE.format(name=name, language=language if language in _LANGUAGES.values() else "English")
     soul = _bounded(soul).strip()
     if soul:
         # The fence is ours: a SOUL.md that closes it early only ends its own notes.
@@ -84,14 +88,30 @@ def build(name: str, soul: str, *, delegation: str) -> str:
     return text + (_DELEGATION if delegation == "client" else _TOOLS)
 
 
-def for_profile(profile: str, *, delegation: str) -> str:
+_LANGUAGES = {
+    "en": "English", "es": "Spanish", "fr": "French", "de": "German", "it": "Italian", "pt": "Portuguese",
+    "nl": "Dutch", "sv": "Swedish", "da": "Danish", "nb": "Norwegian", "no": "Norwegian", "fi": "Finnish",
+    "pl": "Polish", "cs": "Czech", "sk": "Slovak", "hu": "Hungarian", "ro": "Romanian", "el": "Greek",
+    "tr": "Turkish", "ru": "Russian", "uk": "Ukrainian", "ar": "Arabic", "he": "Hebrew", "hi": "Hindi",
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "id": "Indonesian", "ms": "Malay", "vi": "Vietnamese",
+    "th": "Thai", "ca": "Catalan", "hr": "Croatian", "bg": "Bulgarian",
+}
+
+
+def language_name(accept_language: str | None) -> str:
+    """The person's language from the phone's Accept-Language header; English when unknown."""
+    first = (accept_language or "").split(",", 1)[0].split(";", 1)[0].strip()
+    return _LANGUAGES.get(first.split("-", 1)[0].lower(), "English")
+
+
+def for_profile(profile: str, *, delegation: str, language: str = "English") -> str:
     """The brief for Hermes profile ``profile``: its display name and SOUL.md."""
     try:
         from .adapter import profile_display_name
         name = profile_display_name(profile)
     except Exception:
         name = " ".join(part.capitalize() for part in profile.replace("-", "_").split("_") if part)
-    return build(name, read_soul(profile), delegation=delegation)
+    return build(name, read_soul(profile), delegation=delegation, language=language)
 
 
 def read_soul(profile: str) -> str:
