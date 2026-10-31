@@ -67,6 +67,31 @@ class NativeAttachmentTests(unittest.TestCase):
         self.assertEqual(first["attachments"], [])
         self.assertEqual([a["fileName"] for a in second["attachments"]], ["Report.pdf"])
 
+    def test_says_why_a_file_did_not_come_by_name_only(self):
+        """The app shows the reason instead of a loading tile that never ends."""
+        root = Path(self.tmp.name)
+        gone = root / "gone" / "panel.png"
+        big = root / "big.png"
+        big.write_bytes(b"\x89PNG" + b"x" * 64)
+        with sqlite3.connect(self.db) as c:
+            c.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
+                      ("parent", "assistant", f"Done.\nMEDIA:{gone}\nMEDIA:{big}"))
+        text = f"Done.\nMEDIA:{gone}\nMEDIA:{big}\nMEDIA:{self.secret}"
+        with patch("loopdy_plugin.attachments.MAX_ARTIFACT_BYTES", 16):
+            [item] = na.resolve(na._Resolve(agentId="default", storedId="child",
+                                            items=[na._Item(itemId="m1", text=text)]))["items"]
+        self.assertEqual(item["attachments"], [])
+        self.assertEqual(item["text"], text)
+        self.assertEqual(sorted((u["fileName"], u["reason"]) for u in item["unavailable"]),
+                         [("big.png", "too_large"), ("other.pdf", "refused"), ("panel.png", "missing")])
+        self.assertNotIn(self.tmp.name, repr(item["unavailable"]))
+
+        # A file that came has no reason; one that didn't, beside it, still has one.
+        [item] = na.resolve(na._Resolve(agentId="default", storedId="child", items=[
+            na._Item(itemId="m2", text=f"Here you go.\nMEDIA://{self.pdf}\nMEDIA:{gone}")]))["items"]
+        self.assertEqual([a["fileName"] for a in item["attachments"]], ["Report.pdf"])
+        self.assertEqual(item["unavailable"], [{"fileName": "panel.png", "reason": "missing"}])
+
     def test_unknown_session_and_other_profile_fail_closed(self):
         body = na._Resolve(agentId="default", storedId="nope",
                            items=[na._Item(itemId="m1", text=f"MEDIA:{self.pdf}")])

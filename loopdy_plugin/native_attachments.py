@@ -155,6 +155,7 @@ def _canonical(path: str) -> str:
 
 
 def resolve(body: _Resolve) -> dict[str, Any]:
+    from .attachments import _safe_filename
     db_path = _state_db(body.agentId)
     wanted = []
     for item in body.items:
@@ -166,9 +167,14 @@ def resolve(body: _Resolve) -> dict[str, Any]:
     store = attachment_store()
     projected = []
     for item in body.items:
-        paths = [p for p in _media_paths(item.text) if p in allowed]
+        named = _media_paths(item.text)
+        paths = [p for p in named if p in allowed]
+        # Why a file didn't come, by name only. "refused" also covers a reply Hermes hasn't saved yet; the app
+        # asks again a few times before it shows the reason.
+        unavailable = [{"fileName": _safe_filename(p), "reason": "refused"} for p in named if p not in allowed]
         if not paths:
-            projected.append({"itemId": item.itemId, "text": item.text, "attachments": []})
+            projected.append({"itemId": item.itemId, "text": item.text, "attachments": [],
+                              **({"unavailable": unavailable} if unavailable else {})})
             continue
         only_granted = granted.issuperset(paths)
         [result] = store.resolve(
@@ -178,6 +184,7 @@ def resolve(body: _Resolve) -> dict[str, Any]:
             # The app names every picture it saves "photo"; the same path saved again may be a new file.
             stamp="|".join(device_photos.file_stamp(path) for path in paths) if only_granted else "",
         )
+        unavailable += [{"fileName": u["name"], "reason": u["reason"]} for u in result.get("unavailable", [])]
         projected.append({
             "itemId": item.itemId,
             "text": result["text"] if result["attachments"] else item.text,
@@ -185,6 +192,7 @@ def resolve(body: _Resolve) -> dict[str, Any]:
                 {"id": a["id"], "fileName": a["name"], "mimeType": a["mime_type"], "byteCount": a["size"]}
                 for a in result["attachments"]
             ],
+            **({"unavailable": unavailable} if unavailable else {}),
         })
     return {"items": projected}
 
