@@ -500,4 +500,10 @@ def _native_features(
         features.append("native-voice-context-v1")
     else:
         skip("native-voice-context-v1", "live voice is unavailable on this host.")
+    # Big files from the phone are staged in this process' home and handed to Hermes' file.attach.
+    from .native_uploads import CAPABILITY as uploads_capability, available as uploads_available
+    if uploads_available():
+        features.append(uploads_capability)
+    else:
+        skip(uploads_capability, "the process home or POSIX file writes are unavailable.")
     return profile, tuple(features)
