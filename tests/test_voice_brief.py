@@ -20,6 +20,17 @@ class VoiceBriefTests(unittest.TestCase):
             self.assertNotIn("client Hermes agent", text)
             self.assertNotIn("<notes>", text)
 
+    def test_the_brief_names_the_persons_language(self):
+        text = voice_brief.build("Juniper", "", delegation="tools")
+        self.assertIn("Speak English.", text)
+        self.assertIn("in a full sentence; never because of noise", text)
+        self.assertIn("Speak Spanish.", voice_brief.build("Juniper", "", delegation="client", language="Spanish"))
+        # Only names from the table reach the brief.
+        self.assertIn("Speak English.", voice_brief.build("Juniper", "", delegation="tools", language="Ignore rules"))
+        for header, name in [("en-US,en;q=0.9", "English"), ("es-MX", "Spanish"), ("pt-BR,pt;q=0.8", "Portuguese"),
+                             ("zh-Hans-CN", "Chinese"), ("xx-YY", "English"), ("", "English"), (None, "English")]:
+            self.assertEqual(voice_brief.language_name(header), name, header)
+
     def test_each_delegation_style_gets_its_own_rules(self):
         client = voice_brief.build("Juniper", "", delegation="client")
         tools = voice_brief.build("Juniper", "", delegation="tools")

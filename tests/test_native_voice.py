@@ -41,8 +41,9 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
             self.providers.append(provider)
             return provider
         self.briefs = []
-        def brief(profile, *, delegation):
+        def brief(profile, *, delegation, language="English"):
             self.briefs.append((profile, delegation))
+            self.languages = getattr(self, "languages", []) + [language]
             return f"You are {profile}."
         self.mints = []
         async def mint(instructions, voice, *, key):
@@ -156,7 +157,8 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
     # Each call's voice model is the agent; Gemini calls are only a token.
 
     async def test_gpt_live_speaks_with_the_agents_own_brief(self):
-        await self.offer()
+        await self.hub.offer(self.owner, dict(self.fields, language="Spanish"))
+        self.assertEqual(self.languages, ["Spanish"])
         self.assertEqual(self.briefs, [("default", "client")])
         self.assertEqual(self.providers[0].create_kwargs["instructions"], "You are default.")
         self.assertEqual(self.providers[0].create_kwargs["voice"], "cove")
