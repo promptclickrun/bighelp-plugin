@@ -18,7 +18,9 @@ Agents can use thirteen tools that run on your iPhone:
 | `iphone_shortcuts` | List and run only the Shortcuts you chose. |
 | `iphone_navigation` | Open a page in bighelp to show you where something is, for things like "where do I change the voice?". It only moves between pages. |
 
-Current bighelp builds do not offer Health. Only app builds before 2.3.0 (105) can turn on `iphone_health`.
+bighelp builds from 2.3.0 (105) did not offer Health, and app builds that bring it back
+([promptclickrun/bighelp#750](https://github.com/promptclickrun/bighelp/issues/750)) turn it on again. The plugin's
+side of `iphone_health` and `health.read` did not change.
 
 Updates and deletes name the exact item and the revision the agent last saw, so a stale request can't
 overwrite a newer change.
@@ -27,6 +29,9 @@ overwrite a newer change.
 
 - Each data tool is off until you turn it on for a host in bighelp. Turning one on asks for the iOS permission at
   that moment; the iOS permission alone never gives an agent access.
+- When an agent calls a data tool that is off, a bighelp build that can ask shows a card in the chat with
+  **Turn on** and **Not now** (see Asking to turn a tool on). Turn on sets the same Device access switch and
+  then runs the call. The card only asks; it is not a second setting.
 - Appearance shares none of your data and every change is easy to undo, so it's on until you turn off "Let agents
   change how bighelp looks" in Settings › Device access. That switch counts for every host. You can change the look
   back at any time in Appearance.
@@ -234,6 +239,47 @@ same phone to open a channel for that chat again. The same phone means the same 
 call fails with `phone_unavailable`. With no recent channel, the call fails at once. Advertised as
 `native-device-tools-wait-v1`.
 
+### Asking to turn a tool on
+
+A phone can tell the plugin which tools are off but can be turned on with a card in the chat. The plugin
+advertises `native-device-permission-request-v1` for this, under the same condition as `native-device-tools-v1`,
+and leaves it out (with the same reason) when device tools are unavailable.
+
+- `connect` takes an optional `askable` list. It holds the kinds the phone can ask the person to turn on: only
+  the kinds that share data, `health`, `calendar`, `reminders`, `location`, `contacts`, `photos`, `geofences`,
+  `alarms`, `music`, `focus` and `shortcuts` (never `appearance` or `navigation`). The list is unique, has at most
+  11 kinds and must not share a kind with `enabled`; otherwise `connect` fails with `invalid_request`. It is empty
+  when left out, and `enabled` may be empty while `askable` is not. The body of `connect` refuses fields it does
+  not know, so an app sends `askable` only when the plugin lists the feature.
+- A call for a kind in `enabled` works as before. A call for a kind in `askable` is queued as usual, but its
+  request has a window of 300 seconds (`expiresAt` is `sentAt` + 300; Hermes' `manage_connections` also waits
+  5 minutes). The channel's lease lasts until that deadline, because the phone stops polling while its card is
+  open. The host waits for the result up to that deadline. A call for any other kind fails with
+  `authorization_required`, as before.
+- The phone shows the card. After Turn on it runs the call and returns the call's own result on the same
+  channel. A `result` is accepted for a kind in `enabled` or `askable`. A new `connect` (to send the new `enabled`
+  list, say) ends the old channel, and a request the phone already received then fails, as in the table below,
+  so the phone answers first and connects again after.
+- Otherwise the phone answers `failed` with one of these codes. The plugin puts a `payload.note` on each, so
+  the agent knows what to say:
+
+  | Code | When | `payload.note` |
+  | --- | --- | --- |
+  | `permission_declined` | The person tapped Not now, now or earlier in this chat. | The person chose not to turn on this iPhone tool in this chat. Answer without it, and don't call it again in this chat unless they ask. |
+  | `permission_denied` | iOS said no. | iOS didn't allow bighelp to use this. The person can allow it in the iPhone's Settings app under bighelp, then ask again. |
+  | `permission_timeout` | Nobody answered the card. | Nobody answered the request to turn on this iPhone tool. Ask the person if they want to try again. |
+
+- If the phone never answers by the deadline, the host gives up as for any other call: `phone_unavailable` for a
+  pure read, `outcome_unknown` for anything else the phone received.
+- A call that waits for its phone (see above) remembers the chat's `askable` list too. It gets the 300-second
+  window, and the new channel takes it if the kind is in its `enabled` or `askable` list. The channel's lease
+  then lasts until the call's deadline when the kind is still askable.
+- Every other request keeps `20 <= expiresAt - sentAt <= 60`; only these permission requests may have up to 300.
+- An older phone sends no `askable` list and gets `authorization_required` for a tool that is off. An older
+  plugin does not list the feature, so the phone does not send `askable` to it.
+
+The card stores none of the person's data. It only asks, and Turn on changes the one Device access switch.
+
 A channel can end in four ways:
 
 | How it ends | A request the phone has not received | A request the phone already received |
@@ -268,8 +314,8 @@ checks every bound in the table above, and `invalid_arguments` names the field t
 
 The phone opens a short-lived channel for the exact agent and chat it has open, then keeps it alive:
 
-- `POST /api/plugins/loopdy/native/device-tools/connect` with the chat's agent and session and the tools you
-  enabled
+- `POST /api/plugins/loopdy/native/device-tools/connect` with the chat's agent and session, the tools you
+  enabled and, on plugins that list `native-device-permission-request-v1`, the tools it may ask for (`askable`)
 - `…/poll` to pick up requests, and `…/result` to return each answer
 - `…/close` when the chat closes. The optional `reason: "paused"` says the app went to the background and will
   be back; no other reason is accepted (`invalid_request`, like any other unknown field). The body of `close`
