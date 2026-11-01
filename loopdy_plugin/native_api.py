@@ -143,6 +143,12 @@ async def agent_attachments(operation: str, request: Request) -> Response:
     return await attachments_request(operation, request, auth_module=sys.modules[__name__])
 
 
+@router.post("/uploads/{operation}")
+async def uploads(operation: str, request: Request) -> Response:
+    from .native_uploads import request as uploads_request
+    return await uploads_request(operation, request, auth_module=sys.modules[__name__])
+
+
 @router.post("/workspace-files/{operation}")
 async def workspace_files(operation: str, request: Request) -> Response:
     from .workspace_artifacts import request as workspace_files_request

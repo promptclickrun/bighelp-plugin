@@ -230,6 +230,9 @@ class NativeAPITests(unittest.TestCase):
         if vault_link_available():
             expected.append("native-vault-link-v1")
         expected.extend(("native-voice-gemini-v1", "native-voice-context-v1"))
+        from loopdy_plugin.native_uploads import available as uploads_available
+        if uploads_available():
+            expected.append("native-uploads-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
