@@ -189,7 +189,7 @@ class TeamTests(unittest.TestCase):
         with patch.object(team, "brief", side_effect=old_brief):
             self.team.set_enabled(True)
         self.assertIn('few minutes): hermes -p <id> chat -Q -q', self.hermes.hint("nova"), "The fixture is the old brief")
-        open_chat(self.hermes.root, "You are Gordie.\n\n" + self.hermes.hint("default"))
+        open_chat(self.hermes.root, "You are the default agent.\n\n" + self.hermes.hint("default"))
         team_patch = patch.object(team, "team", return_value=self.team)
         team_patch.start()
         self.addCleanup(team_patch.stop)
