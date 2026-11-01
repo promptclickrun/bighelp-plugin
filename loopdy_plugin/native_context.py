@@ -214,6 +214,7 @@ def _native_features(
             CAPABILITY as device_tools_capability,
             AGENTS_CAPABILITY as device_agents_capability,
             WAIT_CAPABILITY as device_wait_capability,
+            PERMISSION_REQUEST_CAPABILITY as device_permission_request_capability,
             LOCATION_CAPABILITY as device_location_capability,
             APPEARANCE_CAPABILITY as device_appearance_capability,
             KIND_CAPABILITIES as device_kind_capabilities,
@@ -221,7 +222,8 @@ def _native_features(
         )
         if profile is not None and device_tools_available(profile):
             features.extend((device_tools_capability, device_location_capability, device_appearance_capability,
-                             *device_kind_capabilities.values(), device_agents_capability, device_wait_capability))
+                             *device_kind_capabilities.values(), device_agents_capability, device_wait_capability,
+                             device_permission_request_capability))
         else:
             reason = ("no unique lifecycle-owned middleware registration matches the "
                       "verified serving profile (missing profile/registration, "
@@ -230,7 +232,8 @@ def _native_features(
             skip(device_tools_capability, reason)
             skip(device_location_capability, reason)
             skip(device_appearance_capability, reason)
-            for feature in (*device_kind_capabilities.values(), device_agents_capability, device_wait_capability):
+            for feature in (*device_kind_capabilities.values(), device_agents_capability, device_wait_capability,
+                            device_permission_request_capability):
                 skip(feature, reason)
     except ImportError:
         reason = "native device-tool support is unimportable."
@@ -241,6 +244,7 @@ def _native_features(
             skip(f"native-device-{feature}-v1", reason)
         skip("native-device-tools-agents-v1", reason)
         skip("native-device-tools-wait-v1", reason)
+        skip("native-device-permission-request-v1", reason)
     from .room_activity import CAPABILITY, PEER_TYPING_CAPABILITY, TYPING_CAPABILITY, activity_hub
     if activity_hub().available:
         features.extend((CAPABILITY, TYPING_CAPABILITY))

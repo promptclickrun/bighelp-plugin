@@ -30,12 +30,14 @@ import types
 from typing import Any, Callable, Literal
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from . import device_photos
 from .device_tool_contract import (
     DEVICE_TOOL_LONG_OPERATIONS,
     DEVICE_TOOL_OPERATIONS,
+    MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS,
+    MAX_DEVICE_TOOL_REQUEST_SECONDS,
     device_tool_request,
     parse_device_tool_result,
 )
@@ -64,6 +66,15 @@ KIND_CAPABILITIES = {
 AGENTS_CAPABILITY = "native-device-tools-agents-v1"
 # A call waits for the same phone to open the chat again, and a paused phone keeps what it never received.
 WAIT_CAPABILITY = "native-device-tools-wait-v1"
+# A tool that is off but that the phone can turn on with a card in the chat (`askable` in connect).
+PERMISSION_REQUEST_CAPABILITY = "native-device-permission-request-v1"
+# Such a call waits this long for the person, as Hermes' manage_connections does.
+PERMISSION_REQUEST_SECONDS = MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS
+# The kinds the phone may ask for: the ones that share the person's data. Appearance and navigation are on.
+ASKABLE_KINDS = (
+    "health", "calendar", "reminders", "location", "contacts", "photos", "geofences", "alarms", "music",
+    "focus", "shortcuts",
+)
 LEASE_SECONDS = 30
 # A call finds no channel but the chat had one this recently: it waits for that phone to come back.
 LAPSE_MEMORY_SECONDS = 120
@@ -130,6 +141,8 @@ class _Pending:
     channel: "_Channel | None" = None
     # While no channel holds the request: the phone whose next channel for this chat may take it.
     phone: _Phone | None = None
+    # The tool was off but askable when the call came: the phone asks the person, so it has the longer window.
+    asks: bool = False
 
 
 @dataclass
@@ -143,8 +156,11 @@ class _Channel:
     session_id: str
     enabled: frozenset[str]
     lease_expires: float
-    # While a long call waits, the phone may be in another app and unable to poll.
+    # While a long call waits, the phone may be in another app and unable to poll. While a permission card is
+    # open, the phone doesn't poll either.
     hold_until: float = 0.0
+    # Tools that are off, but that the phone can turn on with a card when an agent calls one.
+    askable: frozenset[str] = frozenset()
     sequence: int = 0
     requests: deque[tuple[int, dict[str, Any]]] = field(default_factory=deque)
     pending: dict[str, _Pending] = field(default_factory=dict)
@@ -165,6 +181,7 @@ class _Lapse:
     phone: _Phone
     enabled: frozenset[str]
     ended_at: float
+    askable: frozenset[str] = frozenset()
 
 
 _CONTRACT_PREFIX = "bighelp device tool "
@@ -172,6 +189,15 @@ PHONE_UNAVAILABLE_NOTE = "bighelp isn't open on the phone right now. Ask the per
 # The phone refuses contacts.create and calendar.create in a chat holding the person's picture (docs/IMAGE_DRAFTS.md).
 REVIEW_REQUIRED_NOTE = ("Something read from a picture is saved only after the person reviews it. Make a draft "
                         "with bighelp_draft_contact or bighelp_draft_event instead. Don't try again with this tool.")
+# The phone's answers to a call for a tool that was off and that it asked the person to turn on.
+PERMISSION_NOTES = {
+    "permission_declined": ("The person chose not to turn on this iPhone tool in this chat. Answer without it, "
+                            "and don't call it again in this chat unless they ask."),
+    "permission_denied": ("iOS didn't allow bighelp to use this. The person can allow it in the iPhone's Settings "
+                          "app under bighelp, then ask again."),
+    "permission_timeout": ("Nobody answered the request to turn on this iPhone tool. Ask the person if they want "
+                           "to try again."),
+}
 
 
 def _grace(operation: str) -> int:
@@ -212,6 +238,8 @@ def _failed_result(request_id: str | None, code: str, note: str | None = None) -
         note = PHONE_UNAVAILABLE_NOTE
     elif code == "review_required":
         note = REVIEW_REQUIRED_NOTE
+    elif code in PERMISSION_NOTES:
+        note = PERMISSION_NOTES[code]
     if note:
         result["payload"] = {"note": note}
     if request_id:
@@ -471,7 +499,8 @@ class NativeDeviceToolHub:
             # The phone comes back, and a retry of a call it received must not run that call again.
             for call in channel.ended_calls:
                 self._remember_call(call)
-            self._lapses.append(_Lapse(channel.profile, channel.session_id, phone, channel.enabled, ended_at))
+            self._lapses.append(_Lapse(
+                channel.profile, channel.session_id, phone, channel.enabled, ended_at, channel.askable))
             del self._lapses[:max(0, len(self._lapses) - MAX_LAPSES)]
 
     def _remember_call(self, call: _Call) -> None:
@@ -561,6 +590,7 @@ class NativeDeviceToolHub:
                 session_id=session_id,
                 enabled=frozenset(fields["enabled"]),
                 lease_expires=self.clock() + self.lease_seconds,
+                askable=frozenset(fields.get("askable") or ()),
             )
             self.channels[channel_id] = channel
             # The chat has a channel again, so the memory of the old one has done its work.
@@ -592,7 +622,8 @@ class NativeDeviceToolHub:
         profile, session_id, turn_id, tool_call_id = pending.call
         refusal = None
         request = None
-        if operation.split(".", 1)[0] not in channel.enabled:
+        capability = operation.split(".", 1)[0]
+        if capability not in channel.enabled and capability not in channel.askable:
             refusal = "authorization_required"
         elif len(channel.pending) >= MAX_QUEUE:
             refusal = "busy"
@@ -610,6 +641,7 @@ class NativeDeviceToolHub:
                     arguments=old["arguments"],
                     sent_at=old["sentAt"],
                     expires_at=old["expiresAt"],
+                    max_window=PERMISSION_REQUEST_SECONDS if pending.asks else MAX_DEVICE_TOOL_REQUEST_SECONDS,
                 )
             except ValueError:
                 refusal = "invalid_arguments"
@@ -619,7 +651,7 @@ class NativeDeviceToolHub:
         if operation == "photos.save":
             device_photos.grant_save_path(
                 profile, self._stored_ids(session_id, channel.session_id), request["arguments"]["path"])
-        if operation in DEVICE_TOOL_LONG_OPERATIONS:
+        if operation in DEVICE_TOOL_LONG_OPERATIONS or capability in channel.askable:
             channel.hold_until = max(channel.hold_until, pending.deadline)
         pending.request, pending.channel, pending.phone, pending.delivered = request, channel, None, False
         channel.pending[request["requestId"]] = pending
@@ -710,7 +742,8 @@ class NativeDeviceToolHub:
                 )
             ):
                 raise NativeDeviceToolError("result_coordinates_mismatch")
-            if parsed["operation"].split(".", 1)[0] not in channel.enabled:
+            capability = parsed["operation"].split(".", 1)[0]
+            if capability not in channel.enabled and capability not in channel.askable:
                 raise NativeDeviceToolError("authorization_required")
             if parsed["sentAt"] < pending.request["sentAt"]:
                 raise NativeDeviceToolError("result_timestamp_invalid")
@@ -787,7 +820,7 @@ class NativeDeviceToolHub:
             # No channel now is not the end if the chat's phone had one a moment ago: the call then waits
             # for that phone to open the chat again (_target). With no recent channel it fails at once.
             channel, lapse = self._target(profile, session_id)
-            if capability not in (channel.enabled if channel is not None else lapse.enabled):
+            if self._permission(capability, channel, lapse) is None:
                 return _failed_result(None, "authorization_required")
             if not isinstance(arguments, dict):
                 raise ValueError
@@ -796,13 +829,21 @@ class NativeDeviceToolHub:
                 # In the asking agent's own home: the gateway's delivery rules are read from there.
                 with device_photos.profile_scope(profile):
                     arguments = {**arguments, "path": device_photos.check_save_path(arguments.get("path"))}
-            timeout = LONG_OPERATION_SECONDS if operation in DEVICE_TOOL_LONG_OPERATIONS else self.lease_seconds
             fingerprint = _fingerprint(operation, arguments)
             with self._lock:
                 # Look again: the channel may have ended, or come back, while the arguments were checked.
                 channel, lapse = self._target(profile, session_id)
-                if capability not in (channel.enabled if channel is not None else lapse.enabled):
+                permission = self._permission(capability, channel, lapse)
+                if permission is None:
                     return _failed_result(None, "authorization_required")
+                # A tool that is off but askable: the phone shows the person a card, and the call waits for them.
+                asks = permission == "askable"
+                if asks:
+                    timeout = PERMISSION_REQUEST_SECONDS
+                elif operation in DEVICE_TOOL_LONG_OPERATIONS:
+                    timeout = LONG_OPERATION_SECONDS
+                else:
+                    timeout = self.lease_seconds
                 request_id = _request_id(channel, session_id, turn_id, tool_call_id) if channel is not None else None
                 existing = self._parked.get(call)
                 if existing is None and channel is not None:
@@ -810,6 +851,9 @@ class NativeDeviceToolHub:
                 if existing is not None:
                     if existing.fingerprint != fingerprint:
                         return _failed_result(request_id, "request_conflict")
+                    if existing.asks:
+                        # It waits for the person even if the tool is on by now: giving up sooner fails it for all.
+                        timeout = PERMISSION_REQUEST_SECONDS
                     existing.waiters += 1
                     pending = existing
                 elif call in self._finished or (channel is not None and request_id in channel.completed):
@@ -832,6 +876,7 @@ class NativeDeviceToolHub:
                         arguments=arguments,
                         sent_at=sent_at,
                         expires_at=sent_at + timeout,
+                        max_window=PERMISSION_REQUEST_SECONDS if asks else MAX_DEVICE_TOOL_REQUEST_SECONDS,
                     )
                     if channel is not None:
                         crowded = len(channel.pending) >= MAX_QUEUE
@@ -847,10 +892,10 @@ class NativeDeviceToolHub:
                             profile, self._stored_ids(session_id, coordinate), arguments["path"])
                     pending = _Pending(
                         request, fingerprint, Future(), call=call, chat=(session_id, coordinate),
-                        deadline=request["expiresAt"] + _grace(operation),
+                        deadline=request["expiresAt"] + _grace(operation), asks=asks,
                     )
                     if channel is not None:
-                        if operation in DEVICE_TOOL_LONG_OPERATIONS:
+                        if operation in DEVICE_TOOL_LONG_OPERATIONS or asks:
                             channel.hold_until = max(channel.hold_until, self.clock() + timeout + _grace(operation))
                         pending.channel = channel
                         channel.pending[request_id] = pending
@@ -890,6 +935,14 @@ class NativeDeviceToolHub:
             text = str(exc)
             return _failed_result(None, "invalid_arguments", text.removeprefix(_CONTRACT_PREFIX)
                                   if isinstance(exc, ValueError) and text.startswith(_CONTRACT_PREFIX) else None)
+
+    @staticmethod
+    def _permission(capability: str, channel: _Channel | None, lapse: _Lapse | None) -> str | None:
+        """Whether the phone has this tool on ("enabled"), can ask the person for it ("askable"), or neither."""
+        holder = channel if channel is not None else lapse
+        if capability in holder.enabled:
+            return "enabled"
+        return "askable" if capability in holder.askable else None
 
     def _give_up(self, pending: _Pending) -> dict[str, Any]:
         """The call's own deadline came and the phone did not answer."""
@@ -935,9 +988,12 @@ class NativeDeviceToolHub:
     def _for_agent(self, operation: str, result: dict[str, Any], profile: str | None = None,
                    session_id: str | None = None) -> dict[str, Any]:
         """What the agent reads. A photo from photos.get becomes a file on this host; the bytes end here."""
-        if result.get("status") == "failed" and result.get("code") == "review_required":
-            kept = result.get("payload") if isinstance(result.get("payload"), dict) else {}
-            return {**result, "payload": {**kept, "note": REVIEW_REQUIRED_NOTE}}
+        if result.get("status") == "failed" and result.get("code") in {"review_required", *PERMISSION_NOTES}:
+            payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+            # A refusal never carries a picture on to the agent.
+            kept = {key: value for key, value in payload.items() if key != "image"}
+            note = REVIEW_REQUIRED_NOTE if result["code"] == "review_required" else PERMISSION_NOTES[result["code"]]
+            return {**result, "payload": {**kept, "note": note}}
         payload = result.get("payload")
         if operation != "photos.get" or not isinstance(payload, dict) or "image" not in payload:
             return result
@@ -1120,7 +1176,7 @@ def register_middleware(
 
 # Bump when the hub's state or methods change in a way another copy of this module can't use. Copies of
 # different versions each keep their own hub.
-HUB_PROTOCOL_VERSION = 1
+HUB_PROTOCOL_VERSION = 2
 _HUB_REGISTRY_NAME = "_bighelp_device_tool_hubs"
 
 
@@ -1238,12 +1294,24 @@ class _Connect(_Scope):
         "contacts", "photos", "geofences", "alarms", "music", "focus", "shortcuts", "navigation",
     ]] = Field(min_length=0, max_length=13)
 
-    @field_validator("enabled")
+    # Sent only to plugins that list native-device-permission-request-v1: older ones refuse unknown fields.
+    askable: list[Literal[
+        "health", "calendar", "reminders", "location", "contacts", "photos", "geofences", "alarms", "music",
+        "focus", "shortcuts",
+    ]] = Field(default_factory=list, min_length=0, max_length=len(ASKABLE_KINDS))
+
+    @field_validator("enabled", "askable")
     @classmethod
     def unique_enabled(cls, value: list[str]) -> list[str]:
         if len(set(value)) != len(value):
-            raise ValueError("enabled capabilities must be unique")
+            raise ValueError("capabilities must be unique")
         return value
+
+    @model_validator(mode="after")
+    def askable_is_off(self) -> "_Connect":
+        if set(self.askable) & set(self.enabled):
+            raise ValueError("an askable capability must not be enabled")
+        return self
 
 
 class _Close(_Scope):
@@ -1328,6 +1396,6 @@ async def request(
 
 
 __all__ = [
-    "AGENTS_CAPABILITY", "CAPABILITY", "WAIT_CAPABILITY", "NativeDeviceToolError", "NativeDeviceToolHub", "available",
-    "register_middleware", "request",
+    "AGENTS_CAPABILITY", "CAPABILITY", "PERMISSION_REQUEST_CAPABILITY", "WAIT_CAPABILITY", "NativeDeviceToolError",
+    "NativeDeviceToolHub", "available", "register_middleware", "request",
 ]
