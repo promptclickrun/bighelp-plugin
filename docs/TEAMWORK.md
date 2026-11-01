@@ -18,9 +18,14 @@ Each agent gets a short brief in its instructions for bighelp chats:
   when it's quick, conversation, nobody fits better, or the person asks for it
 - how to ask: the `message_agent` tool (Hermes Bot Mode), which reaches a
   teammate's Bot Chat even while bighelp has it open; the reply arrives later
-  as a message. Without it, `hermes -p <id> chat -Q -q "Message from <Name> (@<id>): <message>"`
+  as a message. Without it,
+  `env -uHERMES_SESSION_SOURCE hermes -p <id> chat -Q -q "Message from <Name> (@<id>): <message>"`
   in the terminal, which starts a new chat (never the teammate's open Bot
-  Chat, which Hermes would refuse); the answer is the command's output
+  Chat, which Hermes would refuse); the answer is the command's output.
+  `env -u` removes the `bighelp` session source that the asking chat's
+  terminal has: Hermes refuses a new chat with that source (`invalid_params`).
+  There is no space after `-u`, so the app still shows the command as a
+  message to that teammate
 - that the asking agent still owns the person's final answer: a queued
   message isn't an answer
 - to brief a teammate like a coworker, share only what the task needs, tell
