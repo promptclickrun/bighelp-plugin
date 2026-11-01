@@ -105,7 +105,11 @@ class TeamTests(unittest.TestCase):
         self.assertIn("- Gordie (@default): Chief of staff.", text)
         self.assertIn("- Havok (@havok): Builds and fixes code.", text)
         self.assertNotIn("- Nova (@nova)", text, "Not its own teammate")
-        self.assertIn('hermes -p <id> chat -Q -q "Message from Nova (@nova): <message>"', text)
+        # A bighelp chat's terminal has HERMES_SESSION_SOURCE=bighelp, which Hermes' gateway refuses for the
+        # teammate's run (invalid_params, #253). No space after -u: the app's agent-talk parser skips `env` and
+        # its options, but a bare NAME would stop it before `hermes`.
+        self.assertIn('env -uHERMES_SESSION_SOURCE hermes -p <id> chat -Q -q "Message from Nova (@nova): <message>"',
+                      text)
         # Bot Mode's message_agent reaches a teammate whose Bot Chat bighelp has open; a CLI run against that
         # chat is refused (SESSION_NOT_OWNED), so the brief must never steer agents away from it.
         self.assertIn("message_agent", text)
@@ -174,6 +178,31 @@ class TeamTests(unittest.TestCase):
             self.assertIn("## Your team (v2)", self.hermes.hint(profile))
             self.assertEqual(self.hermes.hint(profile).count("## Your team"), 1, "The old words are replaced")
         self.assertNotEqual(old, self.hermes.hint("nova"))
+
+    def test_hosts_with_the_old_teammate_command_get_the_new_one(self):
+        """Agents hold the brief 3.41.0 wrote, whose bare `hermes -p` fails from a bighelp chat (#253). The first
+        due bighelp turn after the update rewrites every agent's hint, and a chat that started with the old
+        brief gets the new one as a note."""
+        current_brief = team.brief
+        old_brief = lambda agent_id, agents: current_brief(agent_id, agents).replace(
+            "env -uHERMES_SESSION_SOURCE hermes -p", "hermes -p")
+        with patch.object(team, "brief", side_effect=old_brief):
+            self.team.set_enabled(True)
+        self.assertIn('few minutes): hermes -p <id> chat -Q -q', self.hermes.hint("nova"), "The fixture is the old brief")
+        open_chat(self.hermes.root, "You are Gordie.\n\n" + self.hermes.hint("default"))
+        team_patch = patch.object(team, "team", return_value=self.team)
+        team_patch.start()
+        self.addCleanup(team_patch.stop)
+        self.addCleanup(team._delivered.clear)
+        self.clock[0] += team.REFRESH_SECONDS + 1
+        with patch("hermes_constants.get_hermes_home", return_value=self.hermes.root):
+            note = team._pre_llm_call(platform="bighelp", session_id="20261018_015701_f81784", is_first_turn=False)
+        for profile in ("default", "havok", "nova"):
+            hint = self.hermes.hint(profile)
+            self.assertIn('few minutes): env -uHERMES_SESSION_SOURCE hermes -p <id> chat -Q -q', hint, profile)
+            self.assertEqual(hint.count("## Your team"), 1, "The old brief is replaced, not kept")
+        self.assertIsNotNone(note, "The open chat's instructions still have the old command")
+        self.assertIn("env -uHERMES_SESSION_SOURCE hermes -p <id> chat -Q -q", note["context"])
 
     def refresh(self):
         team_patch = patch.object(team, "team", return_value=self.team)
