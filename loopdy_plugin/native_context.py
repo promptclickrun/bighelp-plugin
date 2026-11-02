@@ -17,6 +17,13 @@ from .version import PLUGIN_VERSION
 
 logger = logging.getLogger("hermes.plugins.bighelp")
 RUNTIME_ID = uuid.uuid4().hex
+# App releases before the full feature list refuse a context with more than this many features, and
+# with them every plugin feature. A request without `X-Bighelp-Features: all` gets at most this many.
+LEGACY_FEATURE_LIMIT = 64
+# Features added after the list reached LEGACY_FEATURE_LIMIT. They go last, so they're the ones an older
+# app doesn't get, and it doesn't know them anyway. Add each new feature here.
+LATE_FEATURES = ("native-device-permission-request-v1",)
+FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
 
@@ -50,7 +57,12 @@ class NativeContext:
     # (feature, fixed reason code) for features this computer can't offer and the app can explain.
     unavailable: tuple[tuple[str, str], ...] = ()
 
-    def payload(self) -> dict:
+    def payload(self, *, full: bool = True) -> dict:
+        """What the app reads. ``full`` is false for an app that didn't ask for every feature."""
+        features = [name for name in self.features if name not in LATE_FEATURES]
+        features += [name for name in self.features if name in LATE_FEATURES]
+        if not full:
+            features = features[:LEGACY_FEATURE_LIMIT]
         return {
             "schemaVersion": 1,
             "pluginVersion": PLUGIN_VERSION,
@@ -61,7 +73,7 @@ class NativeContext:
                 "userId": self.user_id,
                 "displayName": self.display_name,
             } if self.provider is not None else None,
-            "features": list(self.features),
+            "features": features,
             **({"unavailable": dict(self.unavailable)} if self.unavailable else {}),
         }
 
@@ -70,6 +82,11 @@ class NativeContext:
         encoded = json.dumps(self.payload(), ensure_ascii=False, sort_keys=True,
                              separators=(",", ":"), allow_nan=False).encode("utf-8")
         return '"sha256:' + hashlib.sha256(encoded).hexdigest() + '"'
+
+
+def wants_every_feature(headers) -> bool:
+    """Whether the app asked for the full feature list (`X-Bighelp-Features: all`)."""
+    return str(headers.get(FULL_FEATURES_HEADER, "")).strip().lower() == "all"
 
 
 def log_native_feature_startup(profile: str | None = None) -> None:

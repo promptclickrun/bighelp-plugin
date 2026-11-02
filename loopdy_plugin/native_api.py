@@ -15,7 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Valida
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
-from .native_context import NativeAPIError, NativeContext, PROFILE_ID, log_native_feature_startup, native_context
+from .native_context import (
+    NativeAPIError, NativeContext, PROFILE_ID, log_native_feature_startup, native_context, wants_every_feature,
+)
 from .native_skills_import import MAX_DATA_CHARS as MAX_SKILL_IMPORT_DATA_CHARS
 from .native_skills_import import MAX_REQUEST_BYTES as MAX_SKILL_IMPORT_BYTES
 from .store import CardTemplateConflict, CardTemplateLimit
@@ -294,7 +296,8 @@ async def context(request: Request) -> Response:
     async for chunk in request.stream():
         if chunk:
             raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
-    return _response(owner.payload(), owner)
+    # Older apps refuse more than 64 features; the ETag stays the full context's either way.
+    return _response(owner.payload(full=wants_every_feature(request.headers)), owner)
 
 
 class _TelemetryBody(BaseModel):
