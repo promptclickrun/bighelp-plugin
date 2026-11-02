@@ -199,7 +199,9 @@ def register(ctx: Any) -> None:
     definitions = (
         (
             "iphone_health",
-            "Read raw HealthKit samples from the iPhone (read-only, app in the foreground). Empty or denied does not prove zero.",
+            "Read raw Apple Health samples from the iPhone: read-only, up to 31 days and 200 records a call, app "
+            "open. Show trends over days or weeks (sleep, steps, heart rate) as a chart. Empty can mean no data or no "
+            "access.",
             health_schema,
         ),
         (
