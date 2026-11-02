@@ -39,6 +39,8 @@ class GeminiLiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(setup["generationConfig"]["responseModalities"], ["AUDIO"])
         names = [f["name"] for tool in setup["tools"] for f in tool.get("functionDeclarations", [])]
         self.assertEqual(names, ["start_work", "check_work"])
+        start_work = setup["tools"][1]["functionDeclarations"][0]["description"]
+        self.assertIn("in their home", start_work, "a smart-home request is work to hand off")
         self.assertIn({"googleSearch": {}}, setup["tools"])
         self.assertIn("slidingWindow", setup["contextWindowCompression"])
         self.assertEqual(len(gemini_live.VOICES), 30)
