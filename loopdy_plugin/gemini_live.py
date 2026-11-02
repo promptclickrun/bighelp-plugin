@@ -35,8 +35,11 @@ TOOLS = [
     {"googleSearch": {}},
     {"functionDeclarations": [
         {"name": "start_work",
-         "description": "Start real work on the person's computer or accounts in the background, with all of "
-                        "your tools. Returns at once; the result arrives later as an UPDATE.",
+         "description": "Do something for the person in the background, with all of your tools: on their "
+                        "computer and accounts (files, email, calendar, messages, reminders) and in their home "
+                        "(TV, lights, locks, thermostat, speakers and other smart devices). Use it for every "
+                        "request to do, change, check or find something that a quick search can't answer. "
+                        "Returns at once; the result arrives later as an UPDATE.",
          "parameters": {"type": "OBJECT", "properties": {
              "request": {"type": "STRING", "description": "The complete request, in the person's words."}},
              "required": ["request"]}},
