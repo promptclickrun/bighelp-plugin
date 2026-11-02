@@ -141,6 +141,10 @@ private hub, and its phone tools answer `phone_unavailable` even though `/native
    - Responses are `no-store`.
 2. **Capability:** add a constant like `native-<name>-v1`. In `native_context.py`, list it only when the feature can
    actually work, and otherwise `skip(...)` it with a reason.
+   - Older app releases refuse a context that lists more than 64 features, and then every plugin feature stops
+     working on them. So add each new feature to `LATE_FEATURES` in `native_context.py`: an app that doesn't send
+     `X-Bighelp-Features: all` gets at most 64, without those. `tests/test_native_context_feature_limit.py` fails if
+     a new feature would push out one that older apps know.
 3. **Tests:**
    - Add the feature to the expected list in `tests/test_native_api.py`.
    - Add it to `PROCESS_FEATURES` in `tests/test_native_startup_logging.py`.

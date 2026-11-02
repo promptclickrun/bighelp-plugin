@@ -26,6 +26,11 @@ short-lived phone channel on the same routes.
 }
 ```
 
+`features` lists at most 64 names unless the request sends `X-Bighelp-Features: all`, because older app releases
+refuse a longer list. Features added after the list reached 64 (`LATE_FEATURES` in `native_context.py`) come last,
+so those are the ones left out; older apps don't know them. The `ETag` is the full context's either way. Every new
+feature goes in `LATE_FEATURES`.
+
 `unavailable` is present only when a feature this plugin has can't work on this computer for a known reason. Each
 value is a fixed reason code, never free text, so the app can say what to do. Workflows use it
 (`native-workflows-v1`: `not_posix`, `profile_helpers_missing`, `chat_runner_missing` or `store_unavailable`; see

@@ -1014,7 +1014,7 @@ class ReviewRequiredNoteTests(unittest.TestCase):
                 self.assertIn("Don't try again", note)
 
     def test_other_results_are_left_alone(self) -> None:
-        result = {"status": "failed", "code": "permission_denied", "payload": {}}
+        result = {"status": "failed", "code": "not_found", "payload": {}}
         self.assertEqual(result, ndt.NativeDeviceToolHub._for_agent(None, "contacts.create", result))
 
 

@@ -138,9 +138,9 @@ only the reaction.
 ## iPhone tools
 
 `iphone_calendar`, `iphone_reminders`, `iphone_health` and `iphone_location`
-work only after the user turns each one on in bighelp, and only while the app is
-open. If the phone isn't available you get a clear "phone unavailable" result:
-say so rather than guessing. Health is read-only. For calendar and reminder
+work only while the app is open, and each one starts off (see "A tool that is
+off" below). If the phone isn't available you get a clear "phone unavailable"
+result: say so rather than guessing. Health is read-only. For calendar and reminder
 changes, use the exact `id` and `expectedRevision` from a list result, and read
 again before retrying anything uncertain.
 
@@ -166,11 +166,39 @@ the name isn't one of `colors`. The color is for the user's message bubbles and
 buttons; the page itself stays light or dark. Tell the user they can change it
 back in bighelp's Appearance. Don't make a theme file for this.
 
+### A tool that is off
+
+Every phone tool that shares the user's data starts off. When you call one that
+is off, bighelp shows the user a card in the chat with **Turn on** and **Not
+now**, and your call waits up to 5 minutes for the answer. So call the tool the
+request needs; don't tell the user to open Settings first. After Turn on you get
+the tool's real result. Otherwise the call fails with one of these codes, and
+`payload.note` says what to do:
+
+- `permission_declined`: the user tapped Not now, now or earlier in this chat.
+  Answer without the tool, and don't call it again in this chat unless they ask.
+- `permission_denied`: iOS didn't allow it. The user can allow it in the
+  iPhone's Settings app under bighelp, then ask again.
+- `permission_timeout`: nobody answered the card. Ask if they want to try again.
+- `authorization_required`: the tool is off and this copy of bighelp can't ask
+  (an older app). Tell the user they can turn it on in bighelp > Settings >
+  Device access.
+
+### Apple Health
+
+`iphone_health` reads raw Apple Health samples and never changes them. Give
+`start`, `end` and `timeZone`, at most 31 days apart, and optionally `types`
+(such as `step_count`, `sleep_analysis`, `heart_rate`) and `limit`, at most
+200 records per call. For a longer stretch, read it in parts. Answer trends over
+days or weeks (sleep, steps, heart rate) with a chart card
+(`bighelp_render_chart`), not a list of numbers. Apple doesn't say whether read
+access was refused, so an empty result can mean no data or no access: say that,
+and don't call it zero.
+
 ### More phone tools
 
-Each one is off until the user turns it on in bighelp > Settings > Device access,
-and works only while the app is open. An unavailable phone or a switch that's off
-comes back as a clear result: say so, and don't guess. Use them only when the user
+Each one starts off (see "A tool that is off") and works only while the app is
+open. An unavailable phone comes back as a clear result: say so, and don't guess. Use them only when the user
 asked. A `stale_revision` means it changed: read again. If a write is uncertain,
 read before you retry; never repeat it blindly. `outcome_unknown` (from `iphone_shortcuts` `run` or
 `iphone_photos` `save`) means the phone didn't answer and it may have happened: check first, and don't run it again.

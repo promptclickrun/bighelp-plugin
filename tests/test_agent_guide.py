@@ -165,6 +165,18 @@ class AgentGuideTests(unittest.TestCase):
         self.assertIn("## Files on a post", skill)
         self.assertIn("`files`", skill)
 
+    def test_a_phone_tool_that_is_off_asks_with_a_card_and_health_trends_get_a_chart(self) -> None:
+        brief = agent_guide.prompt_section({"platform": "bighelp"})
+        self.assertIn("iphone_health", brief)
+        self.assertIn("card", brief)
+        self.assertIn("permission_declined", brief)
+        self.assertIn("bighelp_render_chart", brief)
+        skill = (ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in ("Turn on", "permission_declined", "permission_denied", "permission_timeout",
+                       "31 days", "200 records", "bighelp_render_chart", "no data or no access"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, skill)
+
     def test_reminder_guidance_matches_how_alerts_reach_the_phone(self) -> None:
         skill = (ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn('`deliver: "local"`', skill)

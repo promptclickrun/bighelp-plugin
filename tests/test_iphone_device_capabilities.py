@@ -361,6 +361,12 @@ class ToolSchemaTests(unittest.TestCase):
                 with self.subTest(kind=kind, phrase=phrase):
                     self.assertIn(phrase, self.schemas[f"iphone_{kind}"]["description"])
 
+    def test_health_says_its_bounds_and_how_to_show_trends(self):
+        description = self.schemas["iphone_health"]["description"]
+        for phrase in ("read-only", "31 days", "200 records", "chart", "no data or no access"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, description)
+
     def test_all_iphone_schemas_stay_within_eleven_kilobytes(self):
         # Sent with every request to the serving agent, whatever the Device access switches say.
         total = sum(len(json.dumps(schema, separators=(",", ":"))) for schema in self.schemas.values())
