@@ -235,10 +235,10 @@ class AdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             (home / "profile.yaml").write_text(
-                "display_name: Hermes\nui_meta:\n  hermes-bots:\n    title: Alfie\n", encoding="utf-8")
+                "display_name: Hermes\nui_meta:\n  hermes-bots:\n    title: Juno\n", encoding="utf-8")
             with patch("loopdy_plugin.adapter.get_hermes_home", return_value=home), \
                     patch.dict(sys.modules, {"yaml": None}):
-                self.assertEqual(profile_display_name("default"), "Alfie")
+                self.assertEqual(profile_display_name("default"), "Juno")
             (home / "profile.yaml").write_text("description: no name here\n", encoding="utf-8")
             with patch("loopdy_plugin.adapter.get_hermes_home", return_value=home):
                 self.assertEqual(profile_display_name("default"), "Default")
@@ -295,7 +295,7 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(asyncio.run(adapter.connect()))
         result = asyncio.run(adapter.send(
             "home", wrapped,
-            metadata={"job_id": "morning-briefing", "profile": "default", "agent_name": "Gordie"},
+            metadata={"job_id": "morning-briefing", "profile": "default", "agent_name": "Juno"},
         ))
 
         self.assertTrue(result.success)

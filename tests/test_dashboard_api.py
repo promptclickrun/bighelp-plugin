@@ -210,7 +210,7 @@ class DashboardApiTests(unittest.TestCase):
                 profile="default",
                 session_id="cron_job-123_20260815_120000",
                 job_id="job-123",
-                detail={"agent_name": "Gordie"},
+                detail={"agent_name": "Juno"},
             )
             store.record_event(completion)
             stored_push = store.get_event(completion.event_id)["push"]
@@ -250,7 +250,7 @@ class DashboardApiTests(unittest.TestCase):
             event = response.json()["events"][0]
             self.assertEqual(event["task_id"], "job-123")
             self.assertEqual(event["detail"], {
-                "agent_name": "Gordie",
+                "agent_name": "Juno",
                 "title": "Morning weather",
                 "status": "completed",
                 "summary": "Bring an umbrella after 4 PM.",

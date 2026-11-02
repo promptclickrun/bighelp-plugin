@@ -665,11 +665,11 @@ class NativeAPITests(unittest.TestCase):
                                     headers=self.headers() if headers is None else headers, json=payload)
 
         noted = speaking({"agentId": "default", "sessionId": "20260930_101500_abc123",
-                          "personId": person, "name": " Colt\nCoan "})
+                          "personId": person, "name": " Juno\nMira "})
         self.assertEqual(noted.status_code, 200, noted.text)
         self.assertEqual(noted.json(), {"agentId": "default", "sessionId": "20260930_101500_abc123",
-                                        "name": "Colt Coan"})
-        self.assertEqual(store_for_profile("default").brief_owner("20260930_101500_abc123"), (True, "Colt Coan"))
+                                        "name": "Juno Mira"})
+        self.assertEqual(store_for_profile("default").brief_owner("20260930_101500_abc123"), (True, "Juno Mira"))
         for bad in ({"agentId": "default", "sessionId": "../x", "personId": person},
                     {"agentId": "default", "sessionId": "s1", "personId": "not-a-uuid"},
                     {"agentId": "default", "sessionId": "s1", "personId": person, "name": "x" * 401},

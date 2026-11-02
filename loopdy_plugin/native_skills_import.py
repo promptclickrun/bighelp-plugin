@@ -55,7 +55,7 @@ _SCAN_NAMES = ("scan_skill", "should_allow_install")
 _UNSAFE_PATH = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029\\\"]")
 _DRIVE = re.compile(r"[A-Za-z]:")
 # An absolute path inside a Hermes message (two or more segments), for scrubbing before it reaches the app.
-# Folders in the middle may hold spaces and apostrophes ("/Volumes/Gordie's Codebox/..."); the last name ends
+# Folders in the middle may hold spaces and apostrophes ("/Volumes/Example's Drive/..."); the last name ends
 # at the first space, since the text after a path is a sentence again.
 _MIDDLE = r"[^/\"():;<>]*"
 _LAST = r"[^\s'\"():;,<>]*"

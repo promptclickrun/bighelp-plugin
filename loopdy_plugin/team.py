@@ -189,7 +189,7 @@ class TeamStore:
 
 
 # The plugin's block in an agent's hint, between these lines. Cloning an agent copies its config.yaml, so a new
-# agent starts with another agent's block ("You're Alfie…"); the markers let the plugin find and replace any
+# agent starts with another agent's block ("You're Juno…"); the markers let the plugin find and replace any
 # copy, not only the words it last wrote for that agent.
 BLOCK_START = "<!-- bighelp Teamwork: written by the bighelp plugin for this agent -->"
 BLOCK_END = "<!-- end bighelp Teamwork -->"

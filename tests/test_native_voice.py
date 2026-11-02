@@ -166,13 +166,13 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.providers[0].create_kwargs["voice"], "cove")
 
     async def test_the_phones_context_reaches_both_providers_briefs(self):
-        context = {"agentName": "Alfie", "personName": "Sam", "place": "Austin, Texas, United States",
+        context = {"agentName": "Juno", "personName": "Sam", "place": "Austin, Texas, United States",
                    "timeZone": "America/Chicago"}
         await self.hub.offer(self.owner, dict(self.fields, **context))
         await self.hub.close(self.owner, self.fields)
         await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp="",
                                               voiceId="voice_fixture_gemini", **context))
-        self.assertEqual(self.contexts, [("Alfie", "Sam", "Austin, Texas, United States", "America/Chicago")] * 2)
+        self.assertEqual(self.contexts, [("Juno", "Sam", "Austin, Texas, United States", "America/Chicago")] * 2)
         self.assertEqual(self.briefs, [("default", "client"), ("default", "tools")])
 
     async def test_an_offer_without_context_briefs_as_before(self):
@@ -212,10 +212,10 @@ class OfferModelTests(unittest.TestCase):
             "voice": "Charon"}
 
     def test_an_offer_takes_the_four_context_fields_or_none(self):
-        offer = _Offer.model_validate({**self.BASE, "agentName": "Alfie", "personName": "Sam",
+        offer = _Offer.model_validate({**self.BASE, "agentName": "Juno", "personName": "Sam",
                                        "place": "Austin, Texas, United States", "timeZone": "America/Chicago"})
         self.assertEqual((offer.agentName, offer.personName, offer.place, offer.timeZone),
-                         ("Alfie", "Sam", "Austin, Texas, United States", "America/Chicago"))
+                         ("Juno", "Sam", "Austin, Texas, United States", "America/Chicago"))
         plain = _Offer.model_validate(self.BASE)
         self.assertEqual((plain.agentName, plain.personName, plain.place, plain.timeZone), ("", "", "", ""))
 
