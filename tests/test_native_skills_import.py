@@ -297,7 +297,7 @@ class SkillImportTests(unittest.TestCase):
 
     def test_a_message_never_carries_a_host_path_even_one_with_spaces(self):
         scrub = skills_import._reason
-        self.assertEqual(scrub("Exists at /Volumes/Gordie's Codebox/Gordie/skills/x. Pick another."),
+        self.assertEqual(scrub("Exists at /Volumes/Example's Drive/Juno/skills/x. Pick another."),
                          "Exists at <path> Pick another.")
         self.assertEqual(scrub("File '/Users/some one/.hermes/skills/a b/SKILL.md' is bad"), "File '<path>' is bad")
         self.assertEqual(scrub("Use lowercase and/or digits; see /tmp/x/y"), "Use lowercase and/or digits; see <path>")

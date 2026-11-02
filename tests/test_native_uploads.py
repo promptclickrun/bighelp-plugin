@@ -306,7 +306,7 @@ class UploadStoreTests(unittest.TestCase):
         finally:
             sys.modules["loopdy_plugin.native_uploads"] = saved
 
-    # Colt, 2026-10-31: a file in the chat opens in the agent's Files, so it lives in its working folder.
+    # Maintainer-approved, 2026-10-31: a file in the chat opens in the agent's Files, so it lives in its working folder.
 
     def test_a_finished_file_moves_into_the_agents_working_folder_under_a_unique_name(self):
         day = time.strftime("%Y-%m-%d", time.localtime(self.clock[0]))

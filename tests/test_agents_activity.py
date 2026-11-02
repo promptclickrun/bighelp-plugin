@@ -78,7 +78,7 @@ class AgentsActivityTests(unittest.TestCase):
         self.addCleanup(agents_activity.forget)
         self.nova = self.agent("nova")
         self.nova.chat(BOT_CHAT, title="Bot Chat")
-        self.nova.say(BOT_CHAT, "user", "Message from Alfie (@default): Check the PRs.")
+        self.nova.say(BOT_CHAT, "user", "Message from Juno (@default): Check the PRs.")
         self.nova.say(BOT_CHAT, "assistant", "Done.")
 
     def agent(self, name):
@@ -117,7 +117,7 @@ class AgentsActivityTests(unittest.TestCase):
 
     def test_a_turn_in_another_process_counts_until_that_process_is_gone(self):
         process, end = self.child()
-        self.nova.say(BOT_CHAT, "user", "Message from Alfie (@default): And #25?")
+        self.nova.say(BOT_CHAT, "user", "Message from Juno (@default): And #25?")
         self.nova.turn(BOT_CHAT, pid=process.pid, platform="cli")
         self.nova.say(BOT_CHAT, "assistant", tool=("call_2", "terminal"))
         self.assertEqual(self.states("nova"), {"nova": ("working", "terminal")},

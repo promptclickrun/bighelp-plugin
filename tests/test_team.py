@@ -76,7 +76,7 @@ def open_chat(home: Path, prompt: str, notes: list[str] = (), sidecar: bool = Tr
         db.commit()
 
 
-GORDIE = "ui_meta:\n  hermes-bots:\n    title: Gordie\ndescription: Chief of staff\n"
+JUNO = "ui_meta:\n  hermes-bots:\n    title: Juno\ndescription: Chief of staff\n"
 NOVA = "ui_meta:\n  hermes-bots:\n    title: Nova\n    description: Warm and precise\ndescription: Calendar and email\n"
 HAVOK = "display_name: Havok\ndescription: Builds and fixes code\n"
 
@@ -86,7 +86,7 @@ class TeamTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         root = Path(folder.name)
-        self.hermes = FakeHermes(root / "home", {"default": GORDIE, "nova": NOVA, "havok": HAVOK})
+        self.hermes = FakeHermes(root / "home", {"default": JUNO, "nova": NOVA, "havok": HAVOK})
         self.clock = [0.0]
         self.team = Team(TeamStore(lambda: root / "team.json"), hermes=self.hermes.namespace,
                          monotonic=lambda: self.clock[0])
@@ -94,7 +94,7 @@ class TeamTests(unittest.TestCase):
     def test_roster_names_and_roles_like_the_app(self):
         agents = roster(self.hermes.namespace())
         self.assertEqual([(agent["id"], agent["name"], agent["role"]) for agent in agents],
-                         [("default", "Gordie", "Chief of staff"), ("havok", "Havok", "Builds and fixes code"),
+                         [("default", "Juno", "Chief of staff"), ("havok", "Havok", "Builds and fixes code"),
                           ("nova", "Nova", "Calendar and email")])
         self.assertEqual(agents[2]["about"], "Warm and precise")
 
@@ -102,7 +102,7 @@ class TeamTests(unittest.TestCase):
         agents = roster(self.hermes.namespace())
         text = brief("nova", agents)
         self.assertIn("You're Nova (@nova)", text)
-        self.assertIn("- Gordie (@default): Chief of staff.", text)
+        self.assertIn("- Juno (@default): Chief of staff.", text)
         self.assertIn("- Havok (@havok): Builds and fixes code.", text)
         self.assertNotIn("- Nova (@nova)", text, "Not its own teammate")
         # A bighelp chat's terminal has HERMES_SESSION_SOURCE=bighelp, which Hermes' gateway refuses for the
@@ -216,21 +216,21 @@ class TeamTests(unittest.TestCase):
         it is the agent it was copied from; everything else it copied (the person's own hint text) stays."""
         self.hermes.configs["default"]["platform_hints"] = {"bighelp": {"append": "Answer in French."}}
         self.team.set_enabled(True)
-        self.hermes.add("benson", "display_name: Benson\ndescription: Research\n")
-        self.hermes.configs["benson"] = copy.deepcopy(self.hermes.configs["default"])
-        self.assertIn("You're Gordie (@default)", self.hermes.hint("benson"), "The fixture is a real copy")
+        self.hermes.add("mira", "display_name: Mira\ndescription: Research\n")
+        self.hermes.configs["mira"] = copy.deepcopy(self.hermes.configs["default"])
+        self.assertIn("You're Juno (@default)", self.hermes.hint("mira"), "The fixture is a real copy")
         self.refresh()
-        hint = self.hermes.hint("benson")
-        self.assertNotIn("You're Gordie", hint)
-        self.assertIn("You're Benson (@benson)", hint)
+        hint = self.hermes.hint("mira")
+        self.assertNotIn("You're Juno", hint)
+        self.assertIn("You're Mira (@mira)", hint)
         self.assertEqual(hint.count("## Your team"), 1)
         self.assertTrue(hint.startswith("Answer in French."), "Copied hint text the person wrote stays")
         self.assertEqual(self.hermes.hint("default").count("## Your team"), 1)
 
     def test_briefs_from_earlier_plugin_versions_are_recognized_and_replaced(self):
-        old_style = ("## Your team\nYou're Gordie (@default), one of several agents on this computer.\n"
+        old_style = ("## Your team\nYou're Juno (@default), one of several agents on this computer.\n"
                      "- Nova (@nova): Calendar and email.\n- The person sees these conversations in bighelp.")
-        newer_style = ("## Your team\nYou're Gordie (@default). You don't work alone: these agents on this computer "
+        newer_style = ("## Your team\nYou're Juno (@default). You don't work alone: these agents on this computer "
                        "are your teammates.\n- Ask with message_agent.\n- The person sees these conversations in "
                        "bighelp. If they ask how you work with your team, explain this.")
         for copied in (old_style, newer_style):
@@ -239,7 +239,7 @@ class TeamTests(unittest.TestCase):
                     "bighelp": {"append": f"Be brief.\n\n{copied}\n\nSign off as Nova."}}
                 self.team.set_enabled(True)
                 hint = self.hermes.hint("nova")
-                self.assertNotIn("You're Gordie", hint)
+                self.assertNotIn("You're Juno", hint)
                 self.assertEqual(hint.count("## Your team"), 1)
                 self.assertIn("Be brief.", hint)
                 self.assertIn("Sign off as Nova.", hint)
@@ -255,7 +255,7 @@ class TeamTests(unittest.TestCase):
         self.team.status()
         hint = self.hermes.hint("nova")
         self.assertEqual(hint, remembered)
-        self.assertNotIn("You're Gordie", hint)
+        self.assertNotIn("You're Juno", hint)
 
     def test_a_brief_the_person_wrote_themselves_is_never_touched(self):
         own = "## Your team\nWork with Havok on code."
@@ -293,7 +293,7 @@ class TeamTests(unittest.TestCase):
     def test_a_chat_open_before_teamwork_gets_the_brief_once(self):
         self.team.set_enabled(True)
         home = self.hermes.root
-        open_chat(home, "You are Gordie.")
+        open_chat(home, "You are Juno.")
         team_patch = patch.object(team, "team", return_value=self.team)
         team_patch.start()
         self.addCleanup(team_patch.stop)
@@ -302,7 +302,7 @@ class TeamTests(unittest.TestCase):
         with patch("hermes_constants.get_hermes_home", return_value=home):
             note = team._pre_llm_call(**turn)
             self.assertIn("## Your team", note["context"])
-            self.assertIn("You're Gordie (@default)", note["context"])
+            self.assertIn("You're Juno (@default)", note["context"])
             self.assertIsNone(team._pre_llm_call(**turn), "Hermes replays the note: once is enough")
             team._delivered.clear()
             with closing(sqlite3.connect(home / "state.db")) as db:
@@ -317,7 +317,7 @@ class TeamTests(unittest.TestCase):
     def test_a_chat_whose_instructions_have_the_brief_gets_nothing(self):
         self.team.set_enabled(True)
         home = self.hermes.root
-        open_chat(home, "You are Gordie.\n\n" + self.hermes.hint("default"))
+        open_chat(home, "You are Juno.\n\n" + self.hermes.hint("default"))
         with patch.object(team, "team", return_value=self.team), \
                 patch("hermes_constants.get_hermes_home", return_value=home):
             self.addCleanup(team._delivered.clear)
@@ -329,7 +329,7 @@ class TeamTests(unittest.TestCase):
     def test_an_older_hermes_without_replay_gets_the_brief_every_turn(self):
         self.team.set_enabled(True)
         home = self.hermes.root
-        open_chat(home, "You are Gordie.", sidecar=False)
+        open_chat(home, "You are Juno.", sidecar=False)
         with patch.object(team, "team", return_value=self.team), \
                 patch("hermes_constants.get_hermes_home", return_value=home):
             self.addCleanup(team._delivered.clear)
@@ -361,7 +361,7 @@ class RealHermesTests(unittest.TestCase):
         (home / "profiles" / "nova" / "config.yaml").write_text("model:\n  default: fixture-model\n",
                                                                 encoding="utf-8")
         (home / "profiles" / "nova" / "profile.yaml").write_text(NOVA, encoding="utf-8")
-        (home / "profile.yaml").write_text(GORDIE, encoding="utf-8")
+        (home / "profile.yaml").write_text(JUNO, encoding="utf-8")
         with patch.dict(os.environ, {"HERMES_HOME": str(home)}):
             real = Team(TeamStore(lambda: home / "team.json"))
             status = real.set_enabled(True)
@@ -393,19 +393,19 @@ class RealHermesTests(unittest.TestCase):
                                           "    append: Answer in French.\n", encoding="utf-8")
         (home / "profiles" / "nova" / "config.yaml").write_text("model:\n  default: fixture-model\n", encoding="utf-8")
         (home / "profiles" / "nova" / "profile.yaml").write_text(NOVA, encoding="utf-8")
-        (home / "profile.yaml").write_text(GORDIE, encoding="utf-8")
+        (home / "profile.yaml").write_text(JUNO, encoding="utf-8")
         with patch.dict(os.environ, {"HERMES_HOME": str(home)}):
             real = Team(TeamStore(lambda: home / "team.json"))
             real.set_enabled(True)
-            profiles.create_profile(name="benson", clone_from="default", no_alias=True)
-            with _profile_scope("benson"):
+            profiles.create_profile(name="mira", clone_from="default", no_alias=True)
+            with _profile_scope("mira"):
                 copied = load_config()["platform_hints"]["bighelp"]["append"]
-            self.assertIn("You're Gordie (@default)", copied, "Hermes' clone really copies the brief")
+            self.assertIn("You're Juno (@default)", copied, "Hermes' clone really copies the brief")
             real.status()
-            with _profile_scope("benson"):
+            with _profile_scope("mira"):
                 hint = load_config()["platform_hints"]["bighelp"]["append"]
-        self.assertNotIn("You're Gordie", hint)
-        self.assertIn("You're Benson (@benson)", hint)
+        self.assertNotIn("You're Juno", hint)
+        self.assertIn("You're Mira (@mira)", hint)
         self.assertEqual(hint.count("## Your team"), 1)
         self.assertTrue(hint.startswith("Answer in French."))
 
@@ -419,10 +419,10 @@ class RealHermesTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         root = Path(folder.name)
-        hermes = FakeHermes(root / "home", {"default": GORDIE, "nova": NOVA})
+        hermes = FakeHermes(root / "home", {"default": JUNO, "nova": NOVA})
         teamwork = Team(TeamStore(lambda: root / "team.json"), hermes=hermes.namespace)
         teamwork.set_enabled(True)
-        open_chat(hermes.root, "You are Gordie.")
+        open_chat(hermes.root, "You are Juno.")
         hooks = get_plugin_manager()._hooks
         hooks.setdefault("pre_llm_call", []).append(team._pre_llm_call)
         self.addCleanup(hooks["pre_llm_call"].remove, team._pre_llm_call)
@@ -447,7 +447,7 @@ class TeamRouteTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         root = Path(folder.name)
-        self.hermes = FakeHermes(root / "home", {"default": GORDIE, "nova": NOVA})
+        self.hermes = FakeHermes(root / "home", {"default": JUNO, "nova": NOVA})
         self.team = Team(TeamStore(lambda: root / "team.json"), hermes=self.hermes.namespace)
         patcher = patch.object(team, "team", return_value=self.team)
         patcher.start()
@@ -462,7 +462,7 @@ class TeamRouteTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(result.headers["cache-control"], "no-store")
         self.assertEqual(result.json(), {"enabled": False, "reached": [], "failed": [], "agents": [
-            {"id": "default", "name": "Gordie", "role": "Chief of staff"},
+            {"id": "default", "name": "Juno", "role": "Chief of staff"},
             {"id": "nova", "name": "Nova", "role": "Calendar and email"}]})
         self.assertEqual(self.call({"agentId": "default", "enabled": True}).json()["reached"], ["default", "nova"])
         self.assertIn("## Your team", self.hermes.hint("default"))

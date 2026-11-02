@@ -154,12 +154,12 @@ class PluginLinkTests(unittest.TestCase):
         (home / "config.yaml").write_text("model:\n  default: fixture-model\nplugins:\n  enabled:\n    - weather\n")
         self.install(home / "plugins")
         with mock.patch.dict(os.environ, {"HERMES_HOME": str(home)}):
-            profiles.create_profile(name="benson", clone_from="default", no_alias=True)
-            copy = home / "profiles" / "benson" / "plugins" / "weather"
+            profiles.create_profile(name="mira", clone_from="default", no_alias=True)
+            copy = home / "profiles" / "mira" / "plugins" / "weather"
             self.assertTrue(copy.is_dir() and not copy.is_symlink(), "Hermes' clone really copies the plugin")
-            self.assertEqual(plugin_links.link_agent("benson"), {"linked": ["weather"], "kept": []})
+            self.assertEqual(plugin_links.link_agent("mira"), {"linked": ["weather"], "kept": []})
             self.assertTrue(copy.is_symlink())
-            profiles.create_profile(name="carla", clone_from="benson", no_alias=True)
+            profiles.create_profile(name="carla", clone_from="mira", no_alias=True)
             self.assertTrue((home / "profiles" / "carla" / "plugins" / "weather").is_symlink(),
                             "An agent cloned from a sharing one keeps the link")
             self.assertEqual(plugin_links.link_every_agent(), {"linked": 0, "kept": 0, "failed": 0})

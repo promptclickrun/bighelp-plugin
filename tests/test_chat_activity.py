@@ -30,7 +30,7 @@ class ChatActivityTests(unittest.TestCase):
         (self.home / "runtime").mkdir()
         self.history = AgentHistory(self.home / "state.db")
         self.history.session(SESSION, 100.0, title="Bot Chat")
-        self.history.message(SESSION, "user", 100.0, "Message from Alfie (@default): Check the PRs.")
+        self.history.message(SESSION, "user", 100.0, "Message from Juno (@default): Check the PRs.")
         self.history.message(SESSION, "assistant", 110.0, "Done.")
         patcher = patch.object(chat_activity, "_home", return_value=self.home)
         patcher.start()
@@ -62,7 +62,7 @@ class ChatActivityTests(unittest.TestCase):
         self.assertEqual(value, {"working": True, "tool": None, "since": 200.0, "canStop": True},
                          "It took the chat after its last message: its own message isn't saved yet")
 
-        self.history.message(SESSION, "user", 205.0, "Message from Alfie (@default): And #25?")
+        self.history.message(SESSION, "user", 205.0, "Message from Juno (@default): And #25?")
         self.history.message(SESSION, "assistant", 206.0, tool=("call_1", "web_search"))
         value = chat_activity.activity("bob", SESSION, now=lambda: 210.0)
         self.assertEqual((value["working"], value["tool"]), (True, "web_search"))

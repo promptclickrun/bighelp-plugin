@@ -120,10 +120,10 @@ class PeopleSessionTests(unittest.TestCase):
             self.skipTest("Hermes profile helpers unavailable")
 
     def test_knows_who_is_talking_when_the_turn_lost_its_session_env(self):
-        people.store_for_profile("default").note(CHAT, "11111111-1111-4111-8111-111111111111", "Colt")
+        people.store_for_profile("default").note(CHAT, "11111111-1111-4111-8111-111111111111", "Juno")
         handler = _registered_handler(people)
         value = json.loads(_blanked_turn(lambda: handler({}, task_id=CHAT, session_id=CHAT)))
-        self.assertEqual((value["success"], value["talking_with"]), (True, "Colt"))
+        self.assertEqual((value["success"], value["talking_with"]), (True, "Juno"))
 
 
 if __name__ == "__main__":

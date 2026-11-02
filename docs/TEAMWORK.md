@@ -85,7 +85,7 @@ Response:
 
 ```json
 {"enabled": true,
- "agents": [{"id": "default", "name": "Gordie", "role": "Chief of staff"},
+ "agents": [{"id": "default", "name": "Juno", "role": "Chief of staff"},
             {"id": "nova", "name": "Nova", "role": "Calendar and email"}],
  "reached": ["default", "nova"], "failed": []}
 ```
