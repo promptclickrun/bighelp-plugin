@@ -64,6 +64,10 @@ DEVICE_TOOL_KINDS = (
 )
 # Wait longer than the usual 30 seconds: a shortcut can run that long, and a file is fetched from the host.
 DEVICE_TOOL_LONG_OPERATIONS = frozenset({"shortcuts.run", "photos.save"})
+# A request may wait this long for the phone. One for a tool that is off, which the phone asks the person to
+# turn on with a card, may wait up to the second bound (native-device-permission-request-v1).
+MAX_DEVICE_TOOL_REQUEST_SECONDS = 60
+MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS = 300
 
 # iphone_appearance: the app's light or dark mode, and its chat color as one of
 # the app's own color names (the phone checks the name) or #rrggbb.
@@ -109,6 +113,7 @@ def device_tool_request(
     arguments: dict[str, Any],
     sent_at: int,
     expires_at: int,
+    max_window: int = MAX_DEVICE_TOOL_REQUEST_SECONDS,
 ) -> dict[str, Any]:
     """Build one bounded host-to-phone device-tool request."""
     value = {
@@ -126,10 +131,13 @@ def device_tool_request(
         "sentAt": sent_at,
         "expiresAt": expires_at,
     }
-    return parse_device_tool_request(value)
+    return parse_device_tool_request(value, max_window=max_window)
 
 
-def parse_device_tool_request(value: Any) -> dict[str, Any]:
+def parse_device_tool_request(value: Any, *, max_window: int = MAX_DEVICE_TOOL_REQUEST_SECONDS) -> dict[str, Any]:
+    """Check one request. ``max_window`` is longer only for a permission request, and never past its bound."""
+    if not MAX_DEVICE_TOOL_REQUEST_SECONDS <= max_window <= MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS:
+        raise ValueError("bighelp device tool expiry is invalid")
     expected = {
         "version", "type", "requestId", "deviceId", "hostId", "authorizationEpoch",
         "sessionId", "agentId", "turnId", "operation", "arguments", "sentAt", "expiresAt",
@@ -157,7 +165,7 @@ def parse_device_tool_request(value: Any) -> dict[str, Any]:
         raise ValueError("bighelp device tool arguments are too large")
     sent_at = _positive(value.get("sentAt"), "sentAt")
     expires_at = _positive(value.get("expiresAt"), "expiresAt")
-    if not 20 <= expires_at - sent_at <= 60:
+    if not 20 <= expires_at - sent_at <= max_window:
         raise ValueError("bighelp device tool expiry is invalid")
     result = dict(value)
     result.update(
@@ -182,7 +190,8 @@ def device_tool_result(
     *, request: dict[str, Any], status: str, payload: dict[str, Any], sent_at: int,
     code: str | None = None,
 ) -> dict[str, Any]:
-    request = parse_device_tool_request(request)
+    # It answers a request the host built, which may be a permission request.
+    request = parse_device_tool_request(request, max_window=MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS)
     result_sent_at = _positive(sent_at, "sentAt")
     if result_sent_at < request["sentAt"]:
         raise ValueError("bighelp device tool result timestamp is invalid")

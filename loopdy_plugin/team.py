@@ -119,6 +119,9 @@ def brief(agent_id: str, agents: list[dict[str, str]]) -> str:
         what = ". ".join(part for part in (agent["role"], agent["about"]) if part).rstrip(".")
         lines.append(f"- {agent['name']} (@{agent['id']})" + (f": {what}." if what else ""))
     who = f"{me['name']} (@{me['id']})"
+    # A bighelp chat's terminal has HERMES_SESSION_SOURCE=bighelp, which the teammate's run would keep and Hermes'
+    # gateway refuses (invalid_params). No space after -u: the app's agent-talk parser skips `env` and its
+    # options, but a bare NAME would stop it before `hermes`.
     return "\n".join([
         "## Your team",
         f"You're {who}. You don't work alone: these agents on this computer are your teammates. Each has its "
@@ -135,7 +138,8 @@ def brief(agent_id: str, agents: list[dict[str, str]]) -> str:
         "person asks for you.",
         "- To ask a teammate, use the message_agent tool. It reaches their Bot Chat even while it's open in "
         "bighelp, and their reply arrives later as a message. Without message_agent, run in the terminal (it "
-        f'can take a few minutes): hermes -p <id> chat -Q -q "Message from {who}: <message>". Escape double '
+        f'can take a few minutes): env -uHERMES_SESSION_SOURCE hermes -p <id> chat -Q -q "Message from {who}: '
+        '<message>". Escape double '
         "quotes. Their reply is the output.",
         "- You still own the person's final answer: a queued message isn't an answer. When the teammate's reply "
         "arrives, continue the request and give the person the combined result.",
