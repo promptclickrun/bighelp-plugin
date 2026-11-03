@@ -102,9 +102,10 @@ logger = logging.getLogger("hermes.plugins.bighelp.notifications")
 
 
 class ManagedNotificationError(ValueError):
-    def __init__(self, code: str, status: int = 409):
+    """`remote` is the notification service's own error code, when it refused a request with one."""
+    def __init__(self, code: str, status: int = 409, remote: str | None = None):
         super().__init__(code)
-        self.code, self.status = code, status
+        self.code, self.status, self.remote = code, status, remote
 
 
 def _short_turn_ids(payload: dict[str, Any]) -> dict[str, Any]:
@@ -253,6 +254,30 @@ class _NoRedirect(HTTPRedirectHandler):
         raise ManagedNotificationError("notification_redirect_rejected", 502)
 
 
+_REMOTE_CODE = re.compile(r"notification_[a-z_]{1,64}")
+# Refusals about one card, picture or route, never about the phone's setup. The service ends a
+# Live Activity at its terminal update and answers a later one 403 notification_activity_inactive:
+# read as "grant gone", one late update turned off every alert for that phone.
+_NOT_GRANT_REFUSALS = frozenset({"notification_activity_inactive", "notification_activity_unknown",
+                                 "notification_asset_unknown", "notification_route_unknown"})
+
+
+def _remote_code(error: HTTPError) -> str | None:
+    try:
+        value = json.loads(error.read(4097)[:4096])
+    except (OSError, ValueError):
+        return None
+    code = value.get("error") if isinstance(value, dict) else None
+    if isinstance(code, dict):  # the notification routes answer {"error": {"code": …}}
+        code = code.get("code")
+    return code if isinstance(code, str) and _REMOTE_CODE.fullmatch(code) else None
+
+
+def _grant_gone(error: ManagedNotificationError) -> bool:
+    """The service no longer holds this phone's grant, so the host stops alerting through it."""
+    return error.status in (403, 404) and error.remote not in _NOT_GRANT_REFUSALS
+
+
 def _https_request(method: str, path: str, raw: bytes, headers: dict[str, str]) -> dict[str, Any]:
     if not path.startswith(ROOT + "/") or "?" in path or "#" in path:
         raise ManagedNotificationError("notification_path_invalid", 400)
@@ -267,8 +292,9 @@ def _https_request(method: str, path: str, raw: bytes, headers: dict[str, str]) 
                 raise ManagedNotificationError("notification_response_invalid", 502)
             return value
     except HTTPError as error:
-        # Do not copy server bodies, tokens, grant contents or headers into logs.
-        raise ManagedNotificationError("notification_remote_rejected", error.code) from None
+        # Do not copy server bodies, tokens, grant contents or headers into logs. Only the
+        # service's fixed error code is kept, so a refusal that ends one card can't end the grant.
+        raise ManagedNotificationError("notification_remote_rejected", error.code, _remote_code(error)) from None
     except (OSError, json.JSONDecodeError) as error:
         raise ManagedNotificationError("notification_service_unavailable", 503) from error
 
@@ -567,7 +593,7 @@ class ManagedNotifications:
         try:
             remote = self._validate_grant(self._request("GET", grant_id).get("grant"), grant_id)
         except ManagedNotificationError as error:
-            if error.status in (403, 404): self.remove(grant_id)
+            if _grant_gone(error): self.remove(grant_id)
             raise
         if remote != local:
             self.remove(grant_id)
@@ -1697,8 +1723,14 @@ class ManagedNotifications:
                 with self._db() as db:
                     db.execute("UPDATE pending SET state='failed',attempts=attempts+1 WHERE intent_id=? AND state='sending'", (row["intent_id"],))
                 return
-            if error.status in (403, 404):
+            if _grant_gone(error):
                 self.remove(row["grant_id"])
+            elif row["activity_id"] and error.status in (403, 404, 410):
+                # The service ended this card (its terminal update, a lease or the phone):
+                # stop sending for it and keep every other alert.
+                with self._db() as db:
+                    db.execute("UPDATE pending SET state='failed',attempts=attempts+1 WHERE activity_id=? AND state IN ('pending','sending')", (row["activity_id"],))
+                    db.execute("DELETE FROM activities WHERE activity_id=? AND grant_id=?", (row["activity_id"], row["grant_id"]))
             else:
                 with self._db() as db:
                     state = "failed" if error.status in (400, 401, 410, 422) else "pending"

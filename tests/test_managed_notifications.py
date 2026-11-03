@@ -609,6 +609,61 @@ class ManagedNotificationTests(unittest.TestCase):
         self.assertEqual({props["eventType"] for props in queued}, {"liveactivity"})
         self.assertNotIn("secret", json.dumps(heard))
 
+    def test_a_late_update_for_a_finished_card_never_costs_the_phone_its_alerts(self):
+        # The service ends a card at its terminal update and answers a later one 403
+        # notification_activity_inactive. Read as "grant gone", it turned off every alert.
+        reference = session_reference("default", "native-session")
+        original = self.service.transport
+        def transport(method, path, raw, headers):
+            if method == "GET" and "/live-activities/" in path:
+                return {"version": 1, "activity": {"grantId": self.grant_id, "activityId": "phone-activity",
+                    "sessionReference": reference, "status": "active", "leaseExpires": self.now + 600}}
+            if "/live-activities/" in path and path.endswith("/updates"):
+                self.calls.append((method, path, raw, headers))
+                raise ManagedNotificationError("notification_remote_rejected", 403, remote="notification_activity_inactive")
+            return original(method, path, raw, headers)
+        self.service.transport = transport
+        self.service.subscribe_activity(self.grant_id, "phone-activity", "default", "native-session", reference, self.now + 600)
+        self.service.observe("pre_llm_call", profile="default", session_id="native-session", turn_id="turn-a", platform="desktop")
+        self.service.drain_pending()
+        updates = [path for _, path, _, _ in self.calls if path.endswith("/updates")]
+        self.assertEqual(len(updates), 1)
+
+        self.assertEqual(self.service.enrollment(self.grant_id)["grant"]["grantId"], self.grant_id)
+        self.service.observe("pre_tool_call", profile="default", session_id="native-session", turn_id="turn-a", tool_name="terminal", args={})
+        self.service.observe("post_llm_call", profile="default", session_id="native-session", turn_id="turn-a",
+                             assistant_response="Done.", platform="desktop")
+        self.service.observe("on_session_end", profile="default", session_id="native-session", turn_id="turn-a", completed=True, platform="desktop")
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()], ["session.completed"])
+        # The refused card is over: nothing more is sent for it.
+        self.assertEqual(len([path for _, path, _, _ in self.calls if path.endswith("/updates")]), 1)
+
+    def test_a_grant_the_service_no_longer_holds_is_removed(self):
+        def transport(method, path, raw, headers):
+            raise ManagedNotificationError("notification_remote_rejected", 403, remote="notification_grant_inactive")
+        self.service.transport = transport
+        self.service.observe("on_session_end", profile="default", session_id="native-session", turn_id="turn-a", failed=True, error="x", platform="desktop")
+        self.service.drain_pending()
+        with self.assertRaises(ManagedNotificationError) as gone:
+            self.service.enrollment(self.grant_id)
+        self.assertEqual(gone.exception.code, "notification_enrollment_inactive")
+
+    def test_the_services_error_code_is_read_from_its_answer(self):
+        from io import BytesIO
+        from urllib.error import HTTPError
+        from loopdy_plugin import managed_notifications
+        # The service's own answer (services/link notification-grants.ts).
+        body = json.dumps({"version": 1, "error": {"code": "notification_activity_inactive",
+                                                   "message": "notification_activity_inactive"}}).encode()
+        refused = HTTPError("https://link.loopdy.app/x", 403, "Forbidden", {}, BytesIO(body))
+        opener = types.SimpleNamespace(open=lambda request, timeout: (_ for _ in ()).throw(refused))
+        with patch.object(managed_notifications, "build_opener", return_value=opener):
+            with self.assertRaises(ManagedNotificationError) as error:
+                managed_notifications._https_request("POST", managed_notifications.ROOT + "/" + self.grant_id + "/events", b"{}", {})
+        self.assertEqual((error.exception.code, error.exception.status, error.exception.remote),
+                         ("notification_remote_rejected", 403, "notification_activity_inactive"))
+
     def test_a_phone_without_a_content_key_is_not_woken(self):
         with self.service._db() as db:
             db.execute("DELETE FROM recipients")
