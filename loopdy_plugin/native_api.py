@@ -737,6 +737,26 @@ async def agents_activity(request: Request) -> Response:
     return _response(value, owner, request_id, maximum=32_768)
 
 
+class _MarketplacePlugins(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+@router.post("/marketplace/plugins")
+async def marketplace_plugins(request: Request) -> Response:
+    """Stars, featured ranks and dates from Hermes' marketplace feed, and the catalog plugins this computer
+    would refuse to install, in Hermes' words. Read-only."""
+    from . import marketplace
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if marketplace.CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "marketplace_unavailable", "The plugin marketplace isn't available on this host.")
+    await _body(request, _MarketplacePlugins)
+    value = await run_in_threadpool(marketplace.plugins)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=1_048_576)
+
+
 class _BotChat(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     profile: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
