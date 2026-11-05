@@ -236,6 +236,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.marketplace import available as marketplace_available
         if marketplace_available():
             expected.append("native-marketplace-v1")
+        from loopdy_plugin.core_files import available as core_files_available
+        if core_files_available():
+            expected.append("native-core-files-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

@@ -49,6 +49,7 @@ PROCESS_FEATURES = (
     "native-voice-context-v1",
     "native-uploads-v1",
     "native-marketplace-v1",
+    "native-core-files-v1",
 )
 
 
@@ -139,12 +140,14 @@ class NativeStartupLoggingTests(unittest.TestCase):
                               available=Mock(return_value=True))
         self.marketplace = module("loopdy_plugin.marketplace", CAPABILITY=PROCESS_FEATURES[55],
                                   available=Mock(return_value=True))
+        self.core_files = module("loopdy_plugin.core_files", CAPABILITY=PROCESS_FEATURES[56],
+                                 available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
                    self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.agents_activity, self.team,
                    self.my_templates, self.plugin_links, self.image_drafts, self.telemetry,
                    self.bot_chat, self.voice_catalog, self.skills_import, self.vault_link,
-                   self.uploads, self.marketplace, module("hermes_cli.dashboard_auth.base", Session=Session)]
+                   self.uploads, self.marketplace, self.core_files, module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
         self.stack.enter_context(patch.object(native_context, "_journal_problem", return_value=None))
@@ -206,6 +209,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.vault_link.available.return_value = False
         self.uploads.available.return_value = False
         self.marketplace.available.return_value = False
+        self.core_files.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
         expected = PROCESS_FEATURES[:2]
