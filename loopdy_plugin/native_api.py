@@ -737,6 +737,69 @@ async def agents_activity(request: Request) -> Response:
     return _response(value, owner, request_id, maximum=32_768)
 
 
+class _CoreFiles(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    profile: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+class _CoreFile(_CoreFiles):
+    kind: Literal["soul", "user", "memory", "agents"]
+
+
+class _CoreFileWrite(_CoreFile):
+    text: str = Field(max_length=600_000)
+    expectedSha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+_CORE_FILE_ERRORS = {
+    "not_found": (404, "file_not_found", "This file isn't on the computer."),
+    "changed": (409, "file_changed", "The file changed on the computer. Open it again."),
+    "too_large": (413, "file_too_large", "This file is too long to save from the app."),
+    "invalid": (422, "invalid_path", "This file can't be opened from the app."),
+}
+
+
+async def _core_files_route(request: Request, model: type[BaseModel], run) -> Response:
+    from . import core_files
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if core_files.CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "core_files_unavailable", "Core files aren't available on this host.")
+    body = await _body(request, model, maximum=700_000)
+    try:
+        value = await run_in_threadpool(run, body)
+    except core_files.CoreFileError as error:
+        status, code, message = _CORE_FILE_ERRORS.get(error.reason, _CORE_FILE_ERRORS["invalid"])
+        raise NativeAPIError(status, code, message) from None
+    except ValueError:
+        raise NativeAPIError(404, "agent_not_found", "That agent isn't on this computer.") from None
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=1_200_000)
+
+
+@router.post("/core-files/list")
+async def core_files_list(request: Request) -> Response:
+    """An agent's SOUL.md, USER.md, MEMORY.md and its active project's AGENTS.md, with whether each exists."""
+    from . import core_files
+    return await _core_files_route(request, _CoreFiles, lambda body: core_files.files(body.profile))
+
+
+@router.post("/core-files/read")
+async def core_files_read(request: Request) -> Response:
+    from . import core_files
+    return await _core_files_route(request, _CoreFile, lambda body: core_files.read(body.profile, body.kind))
+
+
+@router.post("/core-files/write")
+async def core_files_write(request: Request) -> Response:
+    """Saves one core file whole; refused when it changed since the hash the app read."""
+    from . import core_files
+    return await _core_files_route(
+        request, _CoreFileWrite,
+        lambda body: core_files.write(body.profile, body.kind, body.text, body.expectedSha256))
+
+
 class _MarketplacePlugins(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
