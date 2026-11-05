@@ -50,6 +50,7 @@ PROCESS_FEATURES = (
     "native-uploads-v1",
     "native-marketplace-v1",
     "native-core-files-v1",
+    "native-core-files-chat-v1",
 )
 
 
@@ -141,7 +142,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.marketplace = module("loopdy_plugin.marketplace", CAPABILITY=PROCESS_FEATURES[55],
                                   available=Mock(return_value=True))
         self.core_files = module("loopdy_plugin.core_files", CAPABILITY=PROCESS_FEATURES[56],
-                                 available=Mock(return_value=True))
+                                 CHAT_CAPABILITY=PROCESS_FEATURES[57], available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
                    self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.agents_activity, self.team,

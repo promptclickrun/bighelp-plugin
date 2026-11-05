@@ -120,6 +120,58 @@ class CoreFilesTests(unittest.TestCase):
         self.assertEqual(linked.exception.reason, "invalid")
         self.assertNotIn("soul", [row["kind"] for row in core_files.files("nova")["files"]])
 
+    def test_agents_md_is_the_chats_not_the_active_projects(self):
+        """A chat moved to another project showed the active project's AGENTS.md: Hermes loads the one in the
+        chat's own folder, so Core Files shows that one."""
+        (self.project / "AGENTS.md").write_text("# Rules of A\n")
+        moved = self.home.parent / "project-b"
+        moved.mkdir()
+        (moved / "AGENTS.md").write_text("# Rules of B\n")
+        with patch.object(core_files, "_chat_folder", return_value=moved) as folder:
+            rows = core_files.files("nova", "local-chat")["files"]
+            self.assertEqual(rows[-1]["project"], "project-b")
+            read = core_files.read("nova", "agents", "local-chat")
+            self.assertEqual(read["text"], "# Rules of B\n")
+            core_files.write("nova", "agents", "# Rules of B, edited\n", read["sha256"], "local-chat")
+        folder.assert_called_with("nova", "local-chat")
+        self.assertEqual((moved / "AGENTS.md").read_text(), "# Rules of B, edited\n")
+        self.assertEqual((self.project / "AGENTS.md").read_text(), "# Rules of A\n")
+        self.assertEqual(core_files.read("nova", "agents")["text"], "# Rules of A\n", "Without a chat: the active project")
+        with patch.object(core_files, "_chat_folder", return_value=None):
+            self.assertNotIn("agents", [row["kind"] for row in core_files.files("nova", "gone")["files"]])
+
+    def test_the_deepest_agents_md_on_the_chats_git_chain_wins(self):
+        repo = self.home.parent / "repo"
+        nested = repo / "apps" / "garden"
+        nested.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (repo / "AGENTS.md").write_text("# Repo rules\n")
+        with patch.object(core_files, "_chat_folder", return_value=nested):
+            self.assertEqual(core_files.read("nova", "agents", "local-chat")["text"], "# Repo rules\n")
+            (nested / "AGENTS.md").write_text("# Garden rules\n")
+            self.assertEqual(core_files.read("nova", "agents", "local-chat")["text"], "# Garden rules\n")
+
+    def test_a_chats_folder_is_read_from_the_agents_state_and_its_live_part(self):
+        try:
+            from hermes_state import SessionDB
+        except Exception:
+            self.skipTest("this Hermes has no session store")
+        first, moved = self.home.parent / "first", self.home.parent / "moved"
+        first.mkdir()
+        moved.mkdir()
+        db = SessionDB(db_path=self.home / "state.db")
+        try:
+            db.create_session("chat-1", "bighelp", cwd=str(first), profile_name="nova")
+            db.create_session("other", "bighelp", cwd=str(first), profile_name="sage")
+            self.assertEqual(core_files._chat_folder("nova", "chat-1"), first)
+            db.end_session("chat-1", "compression")
+            db.create_session("chat-2", "bighelp", parent_session_id="chat-1", cwd=str(moved), profile_name="nova")
+        finally:
+            db.close()
+        self.assertEqual(core_files._chat_folder("nova", "chat-1"), moved, "A compressed chat goes on in its live part")
+        self.assertIsNone(core_files._chat_folder("nova", "other"), "Another agent's chat")
+        self.assertIsNone(core_files._chat_folder("nova", "missing"))
+
     def test_too_long_and_unknown_kinds_are_refused(self):
         with self.assertRaises(core_files.CoreFileError) as long:
             core_files.write("nova", "user", "x" * (core_files.MAX_BYTES + 1), sha("Likes short answers."))
@@ -147,14 +199,19 @@ class CoreFilesRouteTests(unittest.TestCase):
             result = self.call("list", {"profile": "nova"})
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(result.json()["files"][0]["name"], "SOUL.md")
-        listed.assert_called_once_with("nova")
+        listed.assert_called_once_with("nova", None)
+        self.assertIn(core_files.CHAT_CAPABILITY, self.fixture.context().json()["features"])
+        with patch.object(core_files, "files", return_value={"files": []}) as listed:
+            self.assertEqual(self.call("list", {"profile": "nova", "sessionId": "local-1a2b"}).status_code, 200)
+        listed.assert_called_once_with("nova", "local-1a2b")
         with patch.object(core_files, "write", side_effect=core_files.CoreFileError("changed")):
             changed = self.call("write", {"profile": "nova", "kind": "soul", "text": "x", "expectedSha256": "a" * 64})
         self.assertEqual(changed.status_code, 409)
         self.assertEqual(changed.json()["error"]["code"], "file_changed")
         for route, body in (("read", {"profile": "nova", "kind": "config"}), ("read", {"profile": "../x", "kind": "soul"}),
                             ("write", {"profile": "nova", "kind": "soul", "text": "x", "expectedSha256": "nothex"}),
-                            ("list", {"profile": "nova", "path": "/etc/passwd"})):
+                            ("list", {"profile": "nova", "path": "/etc/passwd"}),
+                            ("list", {"profile": "nova", "sessionId": "../state.db"})):
             self.assertEqual(self.call(route, body).status_code, 422, body)
 
 
