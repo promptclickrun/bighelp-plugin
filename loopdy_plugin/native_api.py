@@ -740,6 +740,8 @@ async def agents_activity(request: Request) -> Response:
 class _CoreFiles(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     profile: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    # The chat whose AGENTS.md to use (``native-core-files-chat-v1``).
+    sessionId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
 class _CoreFile(_CoreFiles):
@@ -780,15 +782,17 @@ async def _core_files_route(request: Request, model: type[BaseModel], run) -> Re
 
 @router.post("/core-files/list")
 async def core_files_list(request: Request) -> Response:
-    """An agent's SOUL.md, USER.md, MEMORY.md and its active project's AGENTS.md, with whether each exists."""
+    """An agent's SOUL.md, USER.md, MEMORY.md and the AGENTS.md of its chat (else its active project), with whether
+    each exists."""
     from . import core_files
-    return await _core_files_route(request, _CoreFiles, lambda body: core_files.files(body.profile))
+    return await _core_files_route(request, _CoreFiles, lambda body: core_files.files(body.profile, body.sessionId))
 
 
 @router.post("/core-files/read")
 async def core_files_read(request: Request) -> Response:
     from . import core_files
-    return await _core_files_route(request, _CoreFile, lambda body: core_files.read(body.profile, body.kind))
+    return await _core_files_route(request, _CoreFile,
+                                   lambda body: core_files.read(body.profile, body.kind, body.sessionId))
 
 
 @router.post("/core-files/write")
@@ -797,7 +801,7 @@ async def core_files_write(request: Request) -> Response:
     from . import core_files
     return await _core_files_route(
         request, _CoreFileWrite,
-        lambda body: core_files.write(body.profile, body.kind, body.text, body.expectedSha256))
+        lambda body: core_files.write(body.profile, body.kind, body.text, body.expectedSha256, body.sessionId))
 
 
 class _MarketplacePlugins(BaseModel):

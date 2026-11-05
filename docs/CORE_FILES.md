@@ -8,10 +8,21 @@ The person can read and edit them:
 | `soul` | `SOUL.md` in the Hermes home of the agent | Who the agent is |
 | `user` | `memories/USER.md` | What the agent remembers about the person |
 | `memory` | `memories/MEMORY.md` | The notes of the agent |
-| `agents` | `AGENTS.md` in the main folder of the active Hermes project of the agent | The rules of the project |
+| `agents` | The `AGENTS.md` that Hermes loads for a chat | The rules of the chat's project |
 
-The route takes a kind, not a path, so it cannot reach other files. It shows `agents` only when the active project
-has an `AGENTS.md`, and it saves `AGENTS.md` only where it exists. The other three files can be new.
+The route takes a kind, not a path, so it cannot reach other files. It shows `agents` only when there is an
+`AGENTS.md`, and it saves `AGENTS.md` only where it exists. The other three files can be new.
+
+## Which AGENTS.md
+
+Hermes loads `AGENTS.md` from the working folder of the chat: the chain from the git root down to that folder,
+where the deepest file wins. The route shows that deepest `AGENTS.md`. When the app sends `sessionId`, the route
+reads the folder of that chat from the state of the agent. For a compressed chat, it reads the live part. When a
+chat moves to another project, its folder changes, so the file changes with it. The `project` field is the name of
+the Hermes project that holds the folder, or else the name of the folder.
+
+Without `sessionId` (apps before `native-core-files-chat-v1`), the route shows the `AGENTS.md` in the main folder
+of the active project of the agent.
 
 ## How it works
 
@@ -30,7 +41,9 @@ has an `AGENTS.md`, and it saves `AGENTS.md` only where it exists. The other thr
 All three are `POST /api/plugins/loopdy/native/core-files/…`, feature `native-core-files-v1`, with the usual native
 headers (`If-Match` context ETag and a lowercase `X-Loopdy-Request-ID`).
 
-`list`, request `{"profile": "nova"}`:
+Each request can add `"sessionId": "…"`, the stored ID of the chat whose `AGENTS.md` to use.
+
+`list`, request `{"profile": "nova", "sessionId": "local-…"}`:
 
 ```json
 {"files": [{"kind": "soul", "name": "SOUL.md", "exists": true, "size": 412, "updatedAt": 1790000000},
@@ -55,5 +68,6 @@ Errors:
 
 ## Feature
 
-The plugin lists `native-core-files-v1` when the profile helpers of Hermes import. The feature is in
-`LATE_FEATURES`.
+The plugin lists `native-core-files-v1` and `native-core-files-chat-v1` when the profile helpers of Hermes import.
+`native-core-files-chat-v1` tells the app that the routes take `sessionId`. Older plugins refuse the field. Both
+features are in `LATE_FEATURES`.

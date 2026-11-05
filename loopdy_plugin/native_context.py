@@ -22,7 +22,8 @@ RUNTIME_ID = uuid.uuid4().hex
 LEGACY_FEATURE_LIMIT = 64
 # Features added after the list reached LEGACY_FEATURE_LIMIT. They go last, so they're the ones an older
 # app doesn't get, and it doesn't know them anyway. Add each new feature here.
-LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1", "native-core-files-v1")
+LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1", "native-core-files-v1",
+                 "native-core-files-chat-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -532,9 +533,11 @@ def _native_features(
         features.append(marketplace_capability)
     else:
         skip(marketplace_capability, "Hermes has no plugin catalog here.")
-    from .core_files import CAPABILITY as core_files_capability, available as core_files_available
+    from .core_files import CAPABILITY as core_files_capability, CHAT_CAPABILITY as core_files_chat_capability
+    from .core_files import available as core_files_available
     if core_files_available():
-        features.append(core_files_capability)
+        features.extend((core_files_capability, core_files_chat_capability))
     else:
         skip(core_files_capability, "Hermes' profile helpers are unimportable.")
+        skip(core_files_chat_capability, "Hermes' profile helpers are unimportable.")
     return profile, tuple(features)
