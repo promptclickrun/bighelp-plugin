@@ -124,6 +124,18 @@ class StoreTests(unittest.TestCase):
                 self.refused(code, lambda: self.store.write(PERSON, PHONE, {"bots.layout": change(value, 1, 0)}))
         self.store.write(PERSON, PHONE, {"bots.layout": change({"note": "Line one\nLine two\tend"}, 1, 0)})
 
+    def test_ids_and_links_are_not_mistaken_for_keys(self):
+        # The app's own values: computer/profile IDs and https links with digits. Prose rules would refuse them.
+        value = {"order": ["bot:5f0c2a9e-7d1b-4e5a-9c3f-2b8d6e4a1f07/juniper"],
+                 "pack": "https://avatars.example.com/v2/packs/5f0c2a9e7d1b4e5a/pack.json"}
+        self.store.write(PERSON, PHONE, {"bots.settings": change(value, 1, 0)})
+        for secret in ("token: abcdefghij1234567890XYZ", "password=hunter2hunter2",
+                       "sk-proj-abcdefghijklmnop1234", "https://user:pass@example.com/x",
+                       "-----BEGIN PRIVATE KEY-----"):
+            with self.subTest(secret=secret):
+                self.refused("secret_scan_blocked",
+                             lambda: self.store.write(PERSON, PHONE, {"bots.layout": change({"x": secret}, 9, 8)}))
+
     def test_keys_and_people_are_bounded(self):
         self.store.write(PERSON, PHONE, {f"key{index}": change(index, 1, 0) for index in range(24)})
         self.refused("store_full", lambda: self.store.write(PERSON, PHONE, {"key24": change(1, 1, 0)}))

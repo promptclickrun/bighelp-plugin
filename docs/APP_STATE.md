@@ -9,7 +9,7 @@ The plugin stores them for each person, not for the computer: two people who
 share a computer keep their own layouts. A person is the app's person ID (a
 random UUID in the person's iCloud Keychain, the same on all their Apple
 devices). The plugin doesn't read the values. It checks only their size and
-shape, and that no text in them looks like a key or password.
+shape, and that no text in them is shaped like a credential (see Limits).
 
 A person who uses several computers (the app's Multi-gateway) has the same
 copy on each one. Every key carries a revision. The app reads each computer,
@@ -58,6 +58,13 @@ that still has an older value doesn't bring it back.
 
 Values are any JSON: objects, arrays, strings, finite numbers, booleans and
 `null`. Text with control characters is refused, except tab and line breaks.
+
+Text shaped like a credential is refused (`secret_scan_blocked`): a private key
+header, `token=` / `password=` / `api_key:` and similar with a value, a link
+with a password in it, and known key formats (GitHub, AWS, Slack, `sk-`,
+Stripe, JWTs). The free-text rule that also refuses any `name: <long mix of
+letters and digits>` is not used here, because the app's values are IDs and
+links (`https://…/v2/…`, `<computer>/<profile>`) that it would refuse.
 
 ## Routes
 

@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterator, Mapping
 import unicodedata
 import uuid
 
-from .sensitive import contains_sensitive_credential
+from .sensitive import contains_credential_shape
 
 try:
     import fcntl
@@ -101,7 +101,8 @@ def _check_text(text: str) -> None:
         raise _too_large()
     if any(character not in _TEXT_CONTROLS and unicodedata.category(character) == "Cc" for character in text):
         raise _invalid("Text in the app state has control characters.")
-    if contains_sensitive_credential(text):
+    # IDs and links are the data here, so the prose rule for `name: <long token>` would refuse them.
+    if contains_credential_shape(text):
         raise AppStateError(422, "secret_scan_blocked", "The app state can't hold keys or passwords.")
 
 
