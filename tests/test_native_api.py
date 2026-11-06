@@ -239,6 +239,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.core_files import available as core_files_available
         if core_files_available():
             expected.extend(("native-core-files-v1", "native-core-files-chat-v1"))
+        from loopdy_plugin.app_state import available as app_state_available
+        if app_state_available():
+            expected.append("native-app-state-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

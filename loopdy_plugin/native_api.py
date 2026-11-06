@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Valida
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
+from .app_state import KEY_PATTERN as _APP_STATE_KEY, UUID_PATTERN as _APP_STATE_ID
 from .native_context import (
     NativeAPIError, NativeContext, PROFILE_ID, log_native_feature_startup, native_context, wants_every_feature,
 )
@@ -1267,6 +1268,58 @@ async def my_templates_request(operation: str, request: Request) -> Response:
         raise NativeAPIError(503, "my_templates_unavailable", "Saved templates aren't available on this host.")
     body = await _body(request, models[operation])
     value = await run_in_threadpool(_my_templates, operation, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=MAX_RESPONSE_BYTES)
+
+
+# MARK: App state (docs/APP_STATE.md)
+
+class _AppStateRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    person: str = Field(pattern=_APP_STATE_ID)
+    keys: list[Annotated[str, Field(pattern=_APP_STATE_KEY, max_length=64)]] | None = Field(default=None, max_length=24)
+
+
+class _AppStateChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    value: Any
+    revision: int
+    baseRevision: int
+
+
+class _AppStateWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    person: str = Field(pattern=_APP_STATE_ID)
+    device: str = Field(pattern=_APP_STATE_ID)
+    keys: dict[Annotated[str, Field(pattern=_APP_STATE_KEY, max_length=64)], _AppStateChange] = Field(
+        min_length=1, max_length=24)
+
+
+def _app_state(operation: str, body: BaseModel) -> dict:
+    from . import app_state
+    try:
+        if operation == "write":
+            return app_state.store().write(body.person, body.device,
+                                           {key: change.model_dump() for key, change in body.keys.items()})
+        return app_state.store().read(body.person, body.keys)
+    except app_state.AppStateError as error:
+        raise NativeAPIError(error.status, error.code, error.message, error.details) from None
+
+
+@router.post("/app-state/{operation}")
+async def app_state_request(operation: str, request: Request) -> Response:
+    """App state: the app's own layout and bot settings for one person, so another device gets them back."""
+    from .app_state import CAPABILITY, MAX_RESPONSE_BYTES
+    models = {"read": _AppStateRead, "write": _AppStateWrite}
+    if operation not in models:
+        raise NativeAPIError(404, "operation_not_found", "The operation is not supported.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "app_state_unavailable", "App state isn't available on this host.")
+    body = await _body(request, models[operation])
+    value = await run_in_threadpool(_app_state, operation, body)
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response(value, owner, request_id, maximum=MAX_RESPONSE_BYTES)
