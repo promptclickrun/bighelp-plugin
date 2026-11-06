@@ -188,7 +188,8 @@ class AskThePersonTests(PermissionRequestCase):
         await asyncio.sleep(0)
         [request] = self.feed(channel)
         self.assertEqual(request["expiresAt"] - request["sentAt"], ndt.LEASE_SECONDS)
-        self.assertEqual(self.hub.channels[channel["channelId"]].hold_until, 0.0)
+        # The phone received it, so the channel lasts until the call's own deadline, never an ask's.
+        self.assertEqual(self.hub.channels[channel["channelId"]].hold_until, request["expiresAt"])
         self.answer(channel, request)
         await asyncio.wait_for(task, 2)
 

@@ -36,6 +36,7 @@ from . import device_photos
 from .device_tool_contract import (
     DEVICE_TOOL_LONG_OPERATIONS,
     DEVICE_TOOL_OPERATIONS,
+    DEVICE_TOOL_SLOW_READ_OPERATIONS,
     MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS,
     MAX_DEVICE_TOOL_REQUEST_SECONDS,
     device_tool_request,
@@ -78,7 +79,8 @@ ASKABLE_KINDS = (
 LEASE_SECONDS = 30
 # A call finds no channel but the chat had one this recently: it waits for that phone to come back.
 LAPSE_MEMORY_SECONDS = 120
-# A shortcut can run a minute, and photos.save has the phone download the file from this host.
+# A shortcut can run a minute, photos.save has the phone download the file from this host, and iOS may ask
+# about precise location before the phone finds itself (DEVICE_TOOL_SLOW_READ_OPERATIONS).
 LONG_OPERATION_SECONDS = 60
 # The host waits this much longer than the request it sent allows. A late answer is then still taken, and a
 # long operation that never answers is "outcome_unknown", not "nothing happened".
@@ -157,7 +159,8 @@ class _Channel:
     enabled: frozenset[str]
     lease_expires: float
     # While a long call waits, the phone may be in another app and unable to poll. While a permission card is
-    # open, the phone doesn't poll either.
+    # open, or while the phone works on any call it received, the phone doesn't poll either. Each hold ends at
+    # a call's own deadline, so a phone that stops answering still loses the channel.
     hold_until: float = 0.0
     # Tools that are off, but that the phone can turn on with a card when an agent calls one.
     askable: frozenset[str] = frozenset()
@@ -686,6 +689,8 @@ class NativeDeviceToolHub:
                 return matches[0], None
             lapse = self._recent_lapse(profile, session_id)
             if lapse is None:
+                # Fixed words only: the agent, chat and call are the person's.
+                logger.warning("bighelp phone tool call failed: phone_unavailable (no_channel)")
                 raise NativeDeviceToolError("phone_unavailable")
             return None, lapse
 
@@ -705,8 +710,11 @@ class NativeDeviceToolHub:
             # so the phone never runs a request whose agent was already told it did not arrive.
             live = [(sequence, request) for sequence, request in rows if request["requestId"] in channel.pending]
             for _sequence, request in live:
+                pending = channel.pending[request["requestId"]]
                 # From here the phone may have run it, even if the answer never comes back.
-                channel.pending[request["requestId"]].delivered = True
+                pending.delivered = True
+                # The phone doesn't poll while it works on a call, so the channel lasts until the call's deadline.
+                channel.hold_until = max(channel.hold_until, pending.deadline)
             channel.lease_expires = self.clock() + self.lease_seconds
             return {
                 "channelId": channel.channel_id,
@@ -806,9 +814,13 @@ class NativeDeviceToolHub:
         if not all(isinstance(value, str) and value for value in (profile, session_id, turn_id, tool_call_id)):
             return _failed_result(None, "call_identity_missing")
         try:
-            if not self.profile_session_validator(profile, session_id):
-                return _failed_result(None, "phone_unavailable")
+            known = self.profile_session_validator(profile, session_id)
         except Exception:
+            # Never the error's text: it can name the chat or a path.
+            logger.warning("bighelp phone tool call failed: phone_unavailable (session_check_failed)")
+            return _failed_result(None, "phone_unavailable")
+        if not known:
+            logger.warning("bighelp phone tool call failed: phone_unavailable (session_unknown)")
             return _failed_result(None, "phone_unavailable")
         if operation in _REVIEWED_CREATES and self._holds_picture(profile, session_id):
             # Something read from a picture is saved only after the person reviews it: answered here, so the
@@ -840,7 +852,7 @@ class NativeDeviceToolHub:
                 asks = permission == "askable"
                 if asks:
                     timeout = PERMISSION_REQUEST_SECONDS
-                elif operation in DEVICE_TOOL_LONG_OPERATIONS:
+                elif operation in DEVICE_TOOL_LONG_OPERATIONS or operation in DEVICE_TOOL_SLOW_READ_OPERATIONS:
                     timeout = LONG_OPERATION_SECONDS
                 else:
                     timeout = self.lease_seconds

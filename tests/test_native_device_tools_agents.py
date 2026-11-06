@@ -744,7 +744,7 @@ WRITE_CALLS = (
     ("appearance.set", {"mode": "dark"}, "appearance"),
     ("shortcuts.run", {"name": "Log Water"}, "shortcuts"),
 )
-ALL_KINDS = ("calendar", "contacts", "alarms", "geofences", "photos", "music", "appearance", "shortcuts")
+ALL_KINDS = ("calendar", "contacts", "alarms", "geofences", "photos", "music", "appearance", "shortcuts", "location")
 
 
 class DeliveredWriteTests(WaitCase):
@@ -777,15 +777,17 @@ class DeliveredWriteTests(WaitCase):
 
     async def test_a_delivered_read_may_be_tried_again(self) -> None:
         for how in ("lease lapse", "paused close", "same-phone replacement", "plain close"):
-            with self.subTest(how=how):
-                channel = self.connect(enabled=ALL_KINDS)
-                task = self.call("calendar.list", call_id=f"read-{how}")
-                await asyncio.sleep(0)
-                self.assertEqual(len(self.feed(channel)), 1)
-                self.end(how, channel)
-                result = await asyncio.wait_for(task, 2)
-                self.assertEqual((result["code"], result["payload"]), ("phone_unavailable", {"note": NOTE}))
-                self.hub.close_profile("research")
+            # Location holds its channel while the phone works on it, and still ends the same ways.
+            for operation in ("calendar.list", "location.current"):
+                with self.subTest(how=how, operation=operation):
+                    channel = self.connect(enabled=ALL_KINDS)
+                    task = self.call(operation, call_id=f"read-{how}-{operation}")
+                    await asyncio.sleep(0)
+                    self.assertEqual(len(self.feed(channel)), 1)
+                    self.end(how, channel)
+                    result = await asyncio.wait_for(task, 2)
+                    self.assertEqual((result["code"], result["payload"]), ("phone_unavailable", {"note": NOTE}))
+                    self.hub.close_profile("research")
 
     async def test_a_write_the_phone_never_received_may_be_tried_again(self) -> None:
         channel = self.connect(enabled=ALL_KINDS)
@@ -835,6 +837,88 @@ class DeliveredWriteTests(WaitCase):
         # An operation nobody listed counts as a write.
         self.assertEqual(ndt._unanswered("future.list", delivered=True), "outcome_unknown")
         self.assertEqual(ndt._unanswered("future.list", delivered=False), "phone_unavailable")
+
+
+class SlowCallTests(WaitCase):
+    """The phone doesn't poll while it works on a call, and a location call can take most of a minute: iOS may
+    ask about precise location, then finds the phone and names the place."""
+
+    async def test_location_has_a_minute_and_an_unanswered_one_may_be_asked_again(self) -> None:
+        channel = self.connect(enabled=("location",))
+        windows, waits = [], []
+
+        async def fake_wait_for(awaitable, timeout):
+            [request] = self.feed(channel)  # The phone received it, then went quiet.
+            windows.append(request["expiresAt"] - request["sentAt"])
+            waits.append(timeout)
+            raise asyncio.TimeoutError
+
+        with patch("loopdy_plugin.native_device_tools.asyncio.wait_for", fake_wait_for):
+            result = await self.call("location.current")
+        # It only reads: no extra grace, and a lost answer is a plain failure, not "outcome_unknown".
+        self.assertEqual((windows, waits), ([60], [60]))
+        self.assertEqual((result["code"], result["payload"]), ("phone_unavailable", {"note": NOTE}))
+
+    async def test_a_call_the_phone_received_keeps_its_channel_while_it_works(self) -> None:
+        channel = self.connect(enabled=("location",))
+        task = self.call("location.current")
+        await asyncio.sleep(0)
+        [request] = self.feed(channel)
+        self.clock.advance(45)  # Longer than a lease, without a poll.
+        self.answer(channel, request, {"latitude": 12.5, "longitude": -65.5})
+        self.assertEqual((await asyncio.wait_for(task, 2))["status"], "completed")
+        # The channel is still the chat's, so the next poll and the next call reach it.
+        self.assertEqual(self.feed(channel), [])
+        self.assertEqual(self.hub.native_channel_count("research", "chat-1"), 1)
+
+    async def test_a_phone_that_stops_answering_loses_its_channel_at_the_calls_deadline(self) -> None:
+        channel = self.connect(enabled=("location",))
+        task = self.call("location.current")
+        await asyncio.sleep(0)
+        [request] = self.feed(channel)
+        self.clock.advance(59)
+        self.assertEqual(self.hub.native_channel_count("research", "chat-1"), 1)
+        self.clock.advance(2)
+        self.assertEqual(self.hub.native_channel_count("research", "chat-1"), 0)
+        self.assertEqual((await asyncio.wait_for(task, 2))["code"], "phone_unavailable")
+        with self.assertRaises(NativeDeviceToolError) as late:
+            self.answer(channel, request, {"latitude": 12.5, "longitude": -65.5})
+        self.assertEqual(late.exception.code, "phone_unavailable")
+
+    async def test_a_call_the_phone_has_not_received_holds_nothing(self) -> None:
+        self.connect(enabled=("location",))
+        task = self.call("location.current")
+        await asyncio.sleep(0)
+        self.clock.advance(31)
+        self.assertEqual(self.hub.native_channel_count("research", "chat-1"), 0)
+        self.assertFalse(task.done())  # It waits for the same phone to open the chat again.
+        self.hub.close_profile("research")
+        self.assertEqual((await asyncio.wait_for(task, 2))["code"], "phone_unavailable")
+
+
+class ImmediateFailureLogTests(WaitCase):
+    """A call that fails at once leaves one line in fixed words, never the agent, chat or call it was."""
+
+    async def logged(self, *, session: str = "chat-1") -> list[str]:
+        with self.assertLogs("hermes.plugins.bighelp", level="WARNING") as logs:
+            result = await asyncio.wait_for(self.call(session=session), 2)
+        self.assertEqual((result["code"], result["payload"]), ("phone_unavailable", {"note": NOTE}))
+        return [record.getMessage() for record in logs.records]
+
+    async def test_a_chat_with_no_channel(self) -> None:
+        self.assertEqual(await self.logged(), ["bighelp phone tool call failed: phone_unavailable (no_channel)"])
+
+    async def test_a_chat_hermes_does_not_know(self) -> None:
+        self.assertEqual(await self.logged(session="chat-9"),
+                         ["bighelp phone tool call failed: phone_unavailable (session_unknown)"])
+
+    async def test_a_session_check_that_breaks(self) -> None:
+        def broken(_profile: str, _session: str) -> bool:
+            raise OSError("state.db for research/chat-1 is unreadable")
+
+        self.hub.profile_session_validator = broken
+        self.assertEqual(await self.logged(),
+                         ["bighelp phone tool call failed: phone_unavailable (session_check_failed)"])
 
 
 class SessionValidatorFallbackTests(unittest.TestCase):
