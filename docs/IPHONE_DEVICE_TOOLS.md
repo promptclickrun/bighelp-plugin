@@ -84,6 +84,8 @@ location contents.
   can be missing.
 - Failures use the usual codes: `authorization_required` when Location is off or iOS access was denied,
   `phone_unavailable` or `device_unavailable` when bighelp isn't open, and `unavailable` when iOS can't get a fix.
+- A location call has 60 seconds, not 30, because iOS may first ask whether to share the precise location (see
+  Waiting).
 
 ## Appearance
 
@@ -225,17 +227,20 @@ reaches the phone as before; when the history can't be read, the phone decides. 
 
 ### Waiting
 
-A call waits up to 30 seconds for the phone. `shortcuts.run` and `photos.save` give the phone 60 seconds (the
-request's `expiresAt` stays within 60) and the host waits 10 seconds longer, so a slightly late answer still
-counts. While one of those waits, the channel's lease lasts for the whole wait: the phone may be in another app.
-If the phone never answers one of them, the agent gets `outcome_unknown` (not `phone_unavailable`): the shortcut
-may have run or the file may have been saved. The result says not to run it again and to check first.
+A call waits up to 30 seconds for the phone. `location.current` gives the phone 60 seconds, because iOS may first
+ask whether to share the precise location, and the host waits as long. `shortcuts.run` and `photos.save` also give
+the phone 60 seconds (the request's `expiresAt` stays within 60) and the host waits 10 seconds longer, so a
+slightly late answer still counts. While one of those two waits, the channel's lease lasts for the whole wait: the
+phone may be in another app. If the phone never answers one of them, the agent gets `outcome_unknown` (not
+`phone_unavailable`): the shortcut may have run or the file may have been saved. The result says not to run it
+again and to check first. A location call the phone never answers fails with `phone_unavailable`, as any read
+does, and the agent may ask again.
 
 If a call finds no open channel for its chat but the chat's phone had one in the last 120 seconds (the lease
 lapsed, the app went to the background, or the same phone is opening the chat again), the call waits for that
 same phone to open a channel for that chat again. The same phone means the same signed-in person, `deviceId` and
-`hostId`. The wait ends at the call's own deadline, 30 seconds from the call (70 for `shortcuts.run` and
-`photos.save`), and never later. A different phone or person that opens the chat does not get the call, and the
+`hostId`. The wait ends at the call's own deadline, 30 seconds from the call (60 for `location.current`, 70 for
+`shortcuts.run` and `photos.save`), and never later. A different phone or person that opens the chat does not get the call, and the
 call fails with `phone_unavailable`. With no recent channel, the call fails at once. Advertised as
 `native-device-tools-wait-v1`.
 
@@ -284,7 +289,7 @@ A channel can end in four ways:
 
 | How it ends | A request the phone has not received | A request the phone already received |
 | --- | --- | --- |
-| The lease lapses (no poll for 30 seconds) | Waits for the same phone's next channel for the chat | Fails |
+| The lease lapses (no poll for 30 seconds, and no call the phone received is still before its deadline) | Waits for the same phone's next channel for the chat | Fails |
 | The same phone opens the chat again | Moves to the new channel at once | Fails |
 | `close` with `reason: "paused"` (the app went to the background and will be back) | Waits for the same phone's next channel for the chat | Fails |
 | `close` without a reason, an owner change, or the plugin unloading | Fails | Fails |
@@ -321,11 +326,18 @@ The phone opens a short-lived channel for the exact agent and chat it has open, 
   be back; no other reason is accepted (`invalid_request`, like any other unknown field). The body of `close`
   refuses fields it does not know, so an app sends `reason` only when `native-device-tools-wait-v1` is listed.
 
-A channel expires after 30 seconds without a poll. When an agent calls an `iphone_*` tool, Hermes' public tool
-execution middleware hands the call to the phone that holds a channel for that exact agent and session, using
-Hermes' own session, turn and tool-call IDs. Nothing is taken from the model's arguments to decide which phone
-to use. With no open channel and no recent one (see Waiting), the tool fails with `phone_unavailable`. A call the phone doesn't answer in time fails
-rather than being retried.
+A channel expires after 30 seconds without a poll. The phone doesn't poll while it works on a call, so a call that
+a `poll` handed to the phone keeps the channel until that call's deadline (30 seconds from the call, 60 for
+`location.current`). A phone that stops answering still loses the channel then. When an agent calls an `iphone_*`
+tool, Hermes' public tool execution middleware hands the call to the phone that holds a channel for that exact
+agent and session, using Hermes' own session, turn and tool-call IDs. Nothing is taken from the model's arguments
+to decide which phone to use. With no open channel and no recent one (see Waiting), the tool fails with
+`phone_unavailable`. A call the phone doesn't answer in time fails rather than being retried.
+
+A call that fails at once with `phone_unavailable` leaves one line in the host log, in fixed words that never name
+the agent, chat or call: `bighelp phone tool call failed: phone_unavailable (<stage>)`. The stage is `no_channel`
+when the chat has no channel and no recent one, `session_unknown` when Hermes doesn't know the chat for that
+agent, and `session_check_failed` when the check itself failed.
 
 One chat has one phone. A `connect` for a chat that another phone holds fails with `channel_ambiguous`: the plugin
 never picks a phone by which one came last. The same phone opening the chat again (the same signed-in person,

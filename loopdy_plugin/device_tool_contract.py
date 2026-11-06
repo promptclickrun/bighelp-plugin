@@ -64,6 +64,8 @@ DEVICE_TOOL_KINDS = (
 )
 # Wait longer than the usual 30 seconds: a shortcut can run that long, and a file is fetched from the host.
 DEVICE_TOOL_LONG_OPERATIONS = frozenset({"shortcuts.run", "photos.save"})
+# Reads with the same longer window, because iOS may ask about precise location first; a lost answer changed nothing.
+DEVICE_TOOL_SLOW_READ_OPERATIONS = frozenset({"location.current"})
 # A request may wait this long for the phone. One for a tool that is off, which the phone asks the person to
 # turn on with a card, may wait up to the second bound (native-device-permission-request-v1).
 MAX_DEVICE_TOOL_REQUEST_SECONDS = 60
