@@ -8,8 +8,9 @@ import re
 SECRET_PATH_SOURCE = (
     r"(^|/)(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)|.*\.(?:pem|p12|pfx|key|keystore))$"
 )
-SENSITIVE_CREDENTIAL_SOURCE = (
-    r"(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|"
+# Credentials by their own shape: key headers, named secrets, links with a password, and known key formats.
+_CREDENTIAL_SHAPES = (
+    r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|"
     r"(?:api[_-]?key|secret|token|password|credential)\s*[:=]\s*[^\s]{8,}|"
     r"https?://[^\s:@]+:[^\s@]+@|"
     r"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|"
@@ -17,11 +18,16 @@ SENSITIVE_CREDENTIAL_SOURCE = (
     r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|"
     r"xox[baprs]-[A-Za-z0-9-]{20,}|"
     r"sk-(?:proj-)?[A-Za-z0-9_-]{16,}|"
-    r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|"
+    r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"
+)
+# Any `name: <long mix of letters and digits>`: what a pasted secret looks like in free text. It also matches
+# links and IDs, so data that is made of them (the app's own state) checks only the shapes above.
+_LABELLED_TOKEN = (
     r"[A-Za-z][A-Za-z0-9_-]{1,40}\s*[:=]\s*"
     r"(?=[^\s]{24,}(?:\s|$))(?=[^\s]*[A-Za-z])(?=[^\s]*[0-9])"
-    r"[A-Za-z0-9_./+=-]{24,})"
+    r"[A-Za-z0-9_./+=-]{24,}"
 )
+SENSITIVE_CREDENTIAL_SOURCE = "(?:" + _CREDENTIAL_SHAPES + "|" + _LABELLED_TOKEN + ")"
 
 SECRET_PATH_RE = re.compile(SECRET_PATH_SOURCE, re.IGNORECASE)
 SENSITIVE_CREDENTIAL_RE = re.compile(SENSITIVE_CREDENTIAL_SOURCE, re.IGNORECASE)
@@ -35,8 +41,17 @@ def contains_sensitive_credential(value: str) -> bool:
     return bool(SENSITIVE_CREDENTIAL_RE.search(value))
 
 
+_CREDENTIAL_SHAPE_RE = re.compile("(?:" + _CREDENTIAL_SHAPES + ")", re.IGNORECASE)
+
+
+def contains_credential_shape(value: str) -> bool:
+    """For data made of IDs and links, not prose: only text shaped like a credential."""
+    return bool(_CREDENTIAL_SHAPE_RE.search(value))
+
+
 __all__ = [
     "SECRET_PATH_RE",
     "SENSITIVE_CREDENTIAL_BYTES_RE",
+    "contains_credential_shape",
     "contains_sensitive_credential",
 ]

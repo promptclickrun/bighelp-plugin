@@ -96,7 +96,8 @@ AGENT_COUNTS = frozenset({"1", "2-5", "6-20", "21+"})
 # against the source, so a new code can't go missing without a failing test.
 KNOWN_CODES = frozenset("""
 activity_capacity activity_not_found activity_reset_required activity_unavailable agent_not_found
-agent_talk_unavailable agents_activity_unavailable attachment_unavailable attachments_unavailable
+agent_talk_unavailable agents_activity_unavailable app_state_conflict app_state_too_large app_state_unavailable
+attachment_unavailable attachments_unavailable
 board_files_unavailable board_item_unavailable board_unavailable bot_chat_gateway_unavailable
 bot_chat_refused bot_chat_storage_unavailable bot_chat_timeout bot_chat_unavailable catalog_too_large
 chat_activity_unavailable composio_unavailable context_changed context_required core_files_unavailable device_tools_unavailable
