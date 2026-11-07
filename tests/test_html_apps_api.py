@@ -52,7 +52,7 @@ class HtmlAppRouteTests(unittest.TestCase):
         self.assertEqual(200, response.status_code, response.text)
         value = response.json()
         digest = hashlib.sha256(self.page).hexdigest()
-        self.assertEqual({"app", "html"}, set(value))
+        self.assertEqual({"app", "offset", "html", "nextOffset"}, set(value))
         self.assertEqual({"appId", "title", "description", "sendsAnswers", "live", "revision", "updatedAt",
                           "htmlSha256", "htmlBytes"}, set(value["app"]))
         app = value["app"]
@@ -61,6 +61,8 @@ class HtmlAppRouteTests(unittest.TestCase):
                           app["revision"], app["htmlSha256"], app["htmlBytes"]))
         self.assertRegex(app["updatedAt"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(self.page, base64.b64decode(value["html"], validate=True))
+        # A small page is one piece.
+        self.assertEqual((0, None), (value["offset"], value["nextOffset"]))
         self.assertEqual("no-store", response.headers["cache-control"])
 
     def test_the_page_is_left_out_when_the_phone_already_has_it(self):
@@ -77,13 +79,38 @@ class HtmlAppRouteTests(unittest.TestCase):
         newer = self.route("get", {"appId": self.app_id, "knownSha256": digest}).json()
         self.assertEqual((2, b"<p>v2</p>"), (newer["app"]["revision"], base64.b64decode(newer["html"])))
 
-    def test_a_page_of_2_mib_fits_the_answer(self):
+    def test_the_biggest_page_comes_in_pieces_that_each_fit_the_answer(self):
         big = self.new("a_" + "2" * 32)
+        page = "é".encode() * (html_apps.MAX_HTML_BYTES // 2)
         self.store.save(big, replace=True, session_id=CHAT, title="Big", description="D", sends_answers=False,
-                        html="é".encode() * 1_048_576)
-        response = self.route("get", {"appId": big})
-        self.assertEqual(200, response.status_code, response.text[:200])
-        self.assertEqual(2_097_152, response.json()["app"]["htmlBytes"])
+                        html=page)
+        received, offset, pieces, revision = b"", 0, 0, None
+        while offset is not None:
+            body = {"appId": big} if offset == 0 else {"appId": big, "offset": offset, "htmlSha256": revision}
+            response = self.route("get", body)
+            self.assertEqual(200, response.status_code, response.text[:200])
+            self.assertLessEqual(len(response.content), html_apps.MAX_GET_RESPONSE_BYTES)
+            value = response.json()
+            revision = value["app"]["htmlSha256"]
+            self.assertEqual((offset, len(page)), (value["offset"], value["app"]["htmlBytes"]))
+            received += base64.b64decode(value["html"], validate=True)
+            offset, pieces = value["nextOffset"], pieces + 1
+            self.assertTrue(offset is None or offset == len(received))
+        self.assertEqual(page, received)
+        self.assertEqual(hashlib.sha256(page).hexdigest(), revision)
+        self.assertEqual(-(-len(page) // html_apps.MAX_PIECE_BYTES), pieces)
+
+    def test_a_piece_of_a_page_that_changed_is_refused(self):
+        first = self.route("get", {"appId": self.app_id}).json()
+        self.store.save(self.app_id, replace=True, session_id=CHAT, title="Trip planner", description="D",
+                        sends_answers=False, html=b"<p>v2</p>")
+        stale = self.route("get", {"appId": self.app_id, "offset": 1, "htmlSha256": first["app"]["htmlSha256"]})
+        self.assert_error(stale, 409, "app_changed")
+
+    def test_an_offset_past_the_end_is_refused(self):
+        digest = hashlib.sha256(self.page).hexdigest()
+        self.assert_error(self.route("get", {"appId": self.app_id, "offset": len(self.page), "htmlSha256": digest}),
+                          400, "invalid_request")
 
     def test_an_unknown_app_or_another_agents_app_is_not_found(self):
         self.assert_error(self.route("get", {"appId": "a_" + "9" * 32}), 404, "app_not_found")
@@ -101,8 +128,10 @@ class HtmlAppRouteTests(unittest.TestCase):
     def test_a_bad_body_is_a_400_invalid_request(self):
         bad = {
             "get": [{}, {"appId": "a_123"}, {"appId": "A_" + "1" * 32}, {"appId": 5},
-                    {"appId": self.app_id, "extra": 1}, {"appId": self.app_id, "knownSha256": "ABC"}],
-            # Only get takes knownSha256.
+                    {"appId": self.app_id, "extra": 1}, {"appId": self.app_id, "knownSha256": "ABC"},
+                    {"appId": self.app_id, "offset": -1}, {"appId": self.app_id, "offset": "1"},
+                    {"appId": self.app_id, "htmlSha256": "ABC"}],
+            # Only get takes knownSha256, offset and htmlSha256.
             "data": [{}, {"appId": "a_123"}, {"appId": "A_" + "1" * 32}, {"appId": 5},
                      {"appId": self.app_id, "extra": 1}, {"appId": self.app_id, "knownSha256": "0" * 64}],
         }
@@ -160,7 +189,7 @@ class HtmlAppRouteTests(unittest.TestCase):
         broken = self.route("data", {"appId": app_id}).json()
         self.assertEqual((None, None, None, "invalid"), (broken["data"], broken["updatedAt"], broken["dataSha256"],
                                                           broken["problem"]))
-        path.write_text("[" + "1," * 200_000 + "1]")
+        path.write_text("[" + "1," * (html_apps.MAX_DATA_BYTES // 2) + "1]")
         self.assertEqual("too_large", self.route("data", {"appId": app_id}).json()["problem"])
 
     def test_data_up_to_the_limit_fits_the_answer(self):

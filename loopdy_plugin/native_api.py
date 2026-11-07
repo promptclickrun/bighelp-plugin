@@ -1442,6 +1442,9 @@ async def image_drafts_route(operation: str, request: Request) -> Response:
 class _HtmlAppGet(_Body):
     appId: str = Field(pattern=r"^a_[0-9a-f]{32}$")
     knownSha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # A later piece of the page: where it starts, and the revision it continues.
+    offset: int = Field(default=0, ge=0, strict=True)
+    htmlSha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class _HtmlAppData(_Body):
@@ -1457,7 +1460,8 @@ def _html_apps(operation: str, body: BaseModel) -> dict:
         store = html_apps.store_for_home(html_apps.profile_home(body.agentId))
         if operation == "get":
             app, html = store.read_html(body.appId)
-            return html_apps.get_response(app, html, body.knownSha256)
+            return html_apps.get_response(app, html, body.knownSha256, offset=body.offset,
+                                          revision=body.htmlSha256)
         app = store.get(body.appId)
         if app is None:
             raise html_apps.AppError(404, "app_not_found", "That app isn't available.")

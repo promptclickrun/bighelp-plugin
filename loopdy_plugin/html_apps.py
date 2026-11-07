@@ -41,10 +41,13 @@ CAPABILITY = "native-html-apps-v1"
 SESSION_SOURCE = "bighelp"
 MAX_APPS = 200
 MAX_TITLE = 60
-MAX_HTML_BYTES = 2_097_152
-MAX_DATA_BYTES = 262_144
+MAX_HTML_BYTES = 16 * 1024 * 1024
+MAX_DATA_BYTES = 1024 * 1024
+# A page goes to the app in pieces, so any page fits the app's 4 MiB cap on one answer: 2 MiB is
+# about 2.7 MiB as base64.
+MAX_PIECE_BYTES = 2 * 1024 * 1024
 MAX_GET_RESPONSE_BYTES = 4 * 1024 * 1024
-MAX_DATA_RESPONSE_BYTES = 512 * 1024
+MAX_DATA_RESPONSE_BYTES = 2 * 1024 * 1024 + 65_536
 HTML_SUFFIXES = (".html", ".htm")
 
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
@@ -358,13 +361,26 @@ def data_response(app: HtmlApp, profile: str) -> dict[str, Any]:
     return answer
 
 
-def get_response(app: HtmlApp, html: bytes, known_sha256: str | None) -> dict[str, Any]:
+def get_response(app: HtmlApp, html: bytes, known_sha256: str | None, *, offset: int = 0,
+                 revision: str | None = None) -> dict[str, Any]:
+    """The app and one piece of its page, from ``offset``; ``nextOffset`` is where the next piece starts, or None.
+
+    The page is left out when the phone already has this revision (``known_sha256``). A later piece names the
+    revision it continues (``revision``): when the page changed meanwhile, the phone starts again."""
+    if revision is not None and revision != app.html_sha256:
+        raise AppError(409, "app_changed", "The app changed while it was loading. Load it again.")
     answer: dict[str, Any] = {"app": {
         "appId": app.app_id, "title": app.title, "description": app.description,
         "sendsAnswers": app.sends_answers, "live": app.live, "revision": app.revision,
         "updatedAt": _timestamp(app.updated), "htmlSha256": app.html_sha256, "htmlBytes": app.html_bytes}}
-    if known_sha256 != app.html_sha256:
-        answer["html"] = base64.b64encode(html).decode("ascii")
+    if offset == 0 and known_sha256 == app.html_sha256:
+        return answer
+    if offset >= len(html):
+        raise AppError(400, "invalid_request", "offset is past the end of the page.")
+    piece = html[offset:offset + MAX_PIECE_BYTES]
+    end = offset + len(piece)
+    answer.update(offset=offset, html=base64.b64encode(piece).decode("ascii"),
+                  nextOffset=end if end < len(html) else None)
     return answer
 
 
@@ -578,7 +594,7 @@ SHOW_DESCRIPTION = (
     "object of name to text, number, boolean or list of text, shows the person the exact message and asks "
     "before sending, and resolves true when sent or false when they cancel; "
     "`window.bighelp.close()` closes the app. "
-    "data (any JSON, at most 262,144 bytes) or data_path (a JSON file in your working folder, read fresh every "
+    "data (any JSON, at most 1,048,576 bytes) or data_path (a JSON file in your working folder, read fresh every "
     "time, so a script or scheduled task can update it) gives the app live data; give at most one. Change "
     "inline data later with bighelp_update_app_data. "
     "sends_answers (default false) lets the app send the person's answer back. It arrives as their next "
@@ -587,12 +603,12 @@ SHOW_DESCRIPTION = (
     "what the person said. "
     "app_id: an app of yours to replace. Its html, title, description, sends_answers and data source are "
     "replaced (give data or data_path again to keep data) and it keeps its id. "
-    "The page is at most 2,097,152 bytes. Put the returned display_markdown in your reply once."
+    "The page is at most 16,777,216 bytes (16 MiB). Put the returned display_markdown in your reply once."
     + _BRIDGE
 )
 UPDATE_DATA_DESCRIPTION = (
     "Change the data of an app you made with bighelp_show_app. An open app gets the new data within a few "
-    "seconds, so don't post its card again. data is any JSON (at most 262,144 bytes); null clears it. An app "
+    "seconds, so don't post its card again. data is any JSON (at most 1,048,576 bytes); null clears it. An app "
     "that reads data_path takes its data from that file instead: write the file."
     + _BRIDGE
 )

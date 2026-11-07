@@ -290,7 +290,7 @@ form is better for a simple answer.
   `window.bighelp.onData(fn)` (once at start when there is data, again when it changes; returns an
   unsubscribe function), `await window.bighelp.sendAnswer(answer)` (only with `sends_answers: true`) and
   `window.bighelp.close()`.
-- `data` (any JSON, up to 262,144 bytes) or `data_path` (a JSON file in your working folder, read fresh each
+- `data` (any JSON, up to 1,048,576 bytes) or `data_path` (a JSON file in your working folder, read fresh each
   time) gives the app live data. Change inline data later with `bighelp_update_app_data`; don't post the card
   again. An app that reads `data_path` takes its data from that file: write the file.
 - `sends_answers: true` lets the app send the person's answer back. The phone shows them the exact message and
