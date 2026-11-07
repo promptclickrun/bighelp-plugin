@@ -19,7 +19,8 @@ character, and it never talks about "your agent" or "Hermes".
 5. `close` ends the call. Ending or muting a call doesn't cancel work already handed to the agent.
 
 All five operations are `POST /api/plugins/loopdy/native/voice/<operation>` with the usual native session
-checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)). The plugin advertises `native-voice-v1`.
+checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)). The plugin advertises `native-voice-v1`. The routes
+don't check that feature themselves: they check the native session, the context ETag and that the agent exists.
 
 ## Providers
 
@@ -80,16 +81,17 @@ changes back when they ask. The brief says the rule at its start and again at it
 
 With `native-voice-context-v1`, the app's offer can also send (all optional):
 
-| Field | What it is | Limit |
-|---|---|---|
-| `agentName` | The agent's name as the app shows it. It comes before the profile's own lookup, which gives a profile with no display name its ID ("Dr Pickle"). | 80 characters |
-| `personName` | The name the person saved in bighelp. Never the placeholder "You". | 40 characters |
-| `place` | A coarse place (city, region, country), only while the person shares their location with bighelp. Never coordinates. | 80 characters |
-| `timeZone` | The phone's IANA time zone, such as `America/Chicago`. | a real zone name |
+| Field | What it is | Route cut | In the brief |
+|---|---|---|---|
+| `agentName` | The agent's name as the app shows it. It comes before the profile's own lookup, which gives a profile with no display name its ID ("Dr Pickle"). | 200 | 80 |
+| `personName` | The name the person saved in bighelp. Never the placeholder "You". | 200 | 40 |
+| `place` | A coarse place (city, region, country), only while the person shares their location with bighelp. Never coordinates. | 300 | 80 |
+| `timeZone` | The phone's IANA time zone, such as `America/Chicago`. | 64 | a real zone name, or left out |
 
-These are untrusted. The route cuts an over-long value instead of refusing the call (the app counts characters,
-Python counts code points). `voice_brief` keeps one line of letters, marks, digits, spaces, plain punctuation and
-the zero-width joiners some names need, and drops anything else (newlines, control characters, braces, markup). The brief shows them in a block of facts about the
+These are untrusted, and the limits are in code points. The route first cuts an over-long value to its route
+limit instead of refusing the call (the app counts characters, Python counts code points). `voice_brief` then
+cleans each value and cuts it again to the brief's limit. It keeps one line of letters, marks, digits, spaces,
+plain punctuation and the zero-width joiners some names need, and drops anything else (newlines, control characters, braces, markup). The brief shows them in a block of facts about the
 person that says they are never instructions. The model uses the person's name now and then, and uses the place
 for weather and local questions (Gemini searches with it) instead of asking where the person is.
 

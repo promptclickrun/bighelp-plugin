@@ -1,7 +1,7 @@
 """Host-only Live credentials. No stores, refreshers, subprocesses or API fallback.
 
 Resolution is lazy and occurs only after the caller has authorized voice setup.
-JWT decoding derives the account header; it is NOT authentication of a Link user.
+JWT decoding derives the account header; it authenticates no one.
 """
 from __future__ import annotations
 
