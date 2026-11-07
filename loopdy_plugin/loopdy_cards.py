@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
@@ -58,8 +59,11 @@ OBJECT_TYPES = frozenset({"contact", "place", "music"})
 # Drafts the person reviews before anything is saved (docs/IMAGE_DRAFTS.md). Only the
 # draft tools make them, each alone in its card, and a chat's app must draw them too.
 DRAFT_TYPES = frozenset({"contact_draft", "event_draft"})
+# An HTML app the person opens from the card (docs/HTML_APPS.md). Only bighelp_show_app makes
+# one, alone in its card, and a chat's app must say it draws it.
+APP_TYPES = frozenset({"html_app"})
 _CONTAINERS = {"card", "vstack", "hstack", "grid"}
-_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES | DRAFT_TYPES) - _CONTAINERS - {"list"}
+_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES | DRAFT_TYPES | APP_TYPES) - _CONTAINERS - {"list"}
 _SEMANTICS = {
     "primary",
     "secondary",
@@ -185,6 +189,7 @@ def validate_card_input(
     warn: bool = True,
     allow_objects: bool = False,
     allow_drafts: bool = False,
+    allow_apps: bool = False,
 ) -> dict[str, object]:
     reference = _utc(now, code="invalid_clock")
     encoded = canonical_json(payload)
@@ -239,22 +244,26 @@ def validate_card_input(
     source_ids = {source["id"] for source in sources}
     for element_id, element in elements.items():
         _element(element_id, element, source_ids, warn=warn, allow_objects=allow_objects,
-                 allow_drafts=allow_drafts)
+                 allow_drafts=allow_drafts, allow_apps=allow_apps)
 
     root = _identifier(value["root"])
     _validate_tree(root, elements)
     drafts = [element_id for element_id, element in elements.items() if element["type"] in DRAFT_TYPES]
     if drafts and (len(elements) != 1 or drafts != [root]):
         _raise("invalid_children", "A draft is the only element in its card")
+    apps = [element_id for element_id, element in elements.items() if element["type"] in APP_TYPES]
+    if apps and (len(elements) != 1 or apps != [root]):
+        _raise("invalid_children", "An app is the only element in its card")
     return value
 
 
 def render_card(
-    payload: object, *, now: datetime, allow_objects: bool = False, allow_drafts: bool = False
+    payload: object, *, now: datetime, allow_objects: bool = False, allow_drafts: bool = False,
+    allow_apps: bool = False,
 ) -> dict[str, object]:
     created = _utc(now, code="invalid_clock")
     validated = validate_card_input(payload, now=created, allow_objects=allow_objects,
-                                    allow_drafts=allow_drafts)
+                                    allow_drafts=allow_drafts, allow_apps=allow_apps)
     content_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -306,9 +315,9 @@ def validate_card_result(payload: object, *, now: datetime) -> dict[str, object]
 
     card_input = {key: value[key] for key in input_keys if key in value}
     # render_card already warned about this document's unknown values.
-    # A rendered result was already allowed its objects (and drafts) when it was made.
+    # A rendered result was already allowed its objects (and drafts and apps) when it was made.
     validated = validate_card_input(card_input, now=created, warn=False, allow_objects=True,
-                                    allow_drafts=True)
+                                    allow_drafts=True, allow_apps=True)
     expected_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -387,6 +396,7 @@ def _element(
     warn: bool = True,
     allow_objects: bool = False,
     allow_drafts: bool = False,
+    allow_apps: bool = False,
 ) -> None:
     _object(
         value,
@@ -406,7 +416,12 @@ def _element(
             f"Element {element_id}: contact and event drafts come only from bighelp_draft_contact "
             "and bighelp_draft_event.",
         )
-    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES | DRAFT_TYPES:
+    if element_type in APP_TYPES and not allow_apps:
+        _raise(
+            "apps_tool_only",
+            f"Element {element_id}: apps come only from bighelp_show_app.",
+        )
+    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES | DRAFT_TYPES | APP_TYPES:
         _raise("unsupported_element", f"Element {element_id} has an unsupported type")
     props = value["props"]
     if not isinstance(props, dict):
@@ -527,6 +542,8 @@ def _element(
         _music(props)
     elif element_type in DRAFT_TYPES:
         draft_props(element_type, props)
+    elif element_type in APP_TYPES:
+        app_props(props)
 
 
 # Object component props are plain values, not bindings: they name one real
@@ -686,6 +703,33 @@ _LIST_PATH = re.compile(r"^(phones|emails)\.(0|[1-9][0-9]*)$")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIME_ZONE = re.compile(r"^[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*$")
 _MAX_REVISION = 9_007_199_254_740_991
+
+
+# An HTML app: the plugin keeps the page; the card only says which one and what it can do.
+APP_ID = re.compile(r"^a_[0-9a-f]{32}$")
+MAX_APP_DESCRIPTION = 240
+
+
+def app_description(value: object) -> str:
+    """One plain line of 1-240 characters: whitespace already collapsed, no control characters."""
+    if not isinstance(value, str) or not value or len(value) > MAX_APP_DESCRIPTION:
+        _raise("limit_exceeded", f"An app description is 1 to {MAX_APP_DESCRIPTION} characters")
+    if value != " ".join(value.split()):
+        _raise("invalid_value", "An app description has single spaces and no line breaks")
+    if any(unicodedata.category(scalar) in ("Cc", "Cs") for scalar in value):
+        _raise("invalid_value", "An app description has a forbidden control character")
+    return value
+
+
+def app_props(props: dict[str, object]) -> None:
+    keys = {"app_id", "description", "sends_answers", "live"}
+    _props(props, keys, keys)
+    if not isinstance(props["app_id"], str) or not APP_ID.fullmatch(props["app_id"]):
+        _raise("invalid_value", "app_id must be a_ and 32 lowercase hex characters")
+    app_description(props["description"])
+    for key in ("sends_answers", "live"):
+        if not isinstance(props[key], bool):
+            _raise("invalid_value", f"App {key} must be boolean")
 
 
 def draft_message(key: str, value: object) -> str:

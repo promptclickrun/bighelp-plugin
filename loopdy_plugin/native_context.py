@@ -23,7 +23,7 @@ LEGACY_FEATURE_LIMIT = 64
 # Features added after the list reached LEGACY_FEATURE_LIMIT. They go last, so they're the ones an older
 # app doesn't get, and it doesn't know them anyway. Add each new feature here.
 LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1", "native-core-files-v1",
-                 "native-core-files-chat-v1", "native-app-state-v1")
+                 "native-core-files-chat-v1", "native-app-state-v1", "native-html-apps-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -545,4 +545,10 @@ def _native_features(
         features.append(app_state_capability)
     else:
         skip(app_state_capability, "app state needs a POSIX host and Hermes' home helpers.")
+    # A chat says it draws apps in its people/speaking note too (renders: html_app).
+    from .html_apps import CAPABILITY as html_apps_capability, available as html_apps_available
+    if html_apps_available():
+        features.append(html_apps_capability)
+    else:
+        skip(html_apps_capability, "public profile helpers are unimportable.")
     return profile, tuple(features)

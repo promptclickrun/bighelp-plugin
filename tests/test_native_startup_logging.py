@@ -52,6 +52,7 @@ PROCESS_FEATURES = (
     "native-core-files-v1",
     "native-core-files-chat-v1",
     "native-app-state-v1",
+    "native-html-apps-v1",
 )
 
 

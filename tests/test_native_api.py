@@ -242,6 +242,8 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.app_state import available as app_state_available
         if app_state_available():
             expected.append("native-app-state-v1")
+        if people_available():
+            expected.append("native-html-apps-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

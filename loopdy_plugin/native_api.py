@@ -239,9 +239,9 @@ def _headers(context: NativeContext, request_id: str | None = None) -> dict[str,
 
 
 def _response(value: dict, context: NativeContext, request_id: str | None = None,
-              maximum: int | None = None) -> Response:
+              maximum: int | None = None, *, sort_keys: bool = True) -> Response:
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
-                         sort_keys=True, allow_nan=False).encode("utf-8")
+                         sort_keys=sort_keys, allow_nan=False).encode("utf-8")
     maximum = maximum or (16_384 if request_id is None else MAX_BODY_BYTES)
     if len(encoded) > maximum:
         raise NativeAPIError(413, "payload_too_large", "The response exceeds the byte limit.")
@@ -1434,3 +1434,57 @@ async def image_actions(operation: str, request: Request) -> Response:
 async def image_drafts_route(operation: str, request: Request) -> Response:
     """Contact and event drafts from the person's pictures: their states, their picture and the person's decision."""
     return await _image_drafts_request("drafts", operation, request)
+
+
+# MARK: HTML apps (docs/HTML_APPS.md)
+
+
+class _HtmlAppGet(_Body):
+    appId: str = Field(pattern=r"^a_[0-9a-f]{32}$")
+    knownSha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class _HtmlAppData(_Body):
+    appId: str = Field(pattern=r"^a_[0-9a-f]{32}$")
+
+
+_HTML_APPS = {"get": _HtmlAppGet, "data": _HtmlAppData}
+
+
+def _html_apps(operation: str, body: BaseModel) -> dict:
+    from . import html_apps
+    try:
+        store = html_apps.store_for_home(html_apps.profile_home(body.agentId))
+        if operation == "get":
+            app, html = store.read_html(body.appId)
+            return html_apps.get_response(app, html, body.knownSha256)
+        app = store.get(body.appId)
+        if app is None:
+            raise html_apps.AppError(404, "app_not_found", "That app isn't available.")
+        return html_apps.data_response(app, body.agentId)
+    except html_apps.AppError as error:
+        raise NativeAPIError(error.status, error.code, error.message) from None
+
+
+@router.post("/html-apps/{operation}")
+async def html_apps_route(operation: str, request: Request) -> Response:
+    """An agent's HTML apps: the page, and its data, for the app's full-screen web view."""
+    from .html_apps import CAPABILITY, MAX_DATA_RESPONSE_BYTES, MAX_GET_RESPONSE_BYTES
+    if operation not in _HTML_APPS:
+        raise NativeAPIError(404, "operation_not_found", "The operation is not supported.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "html_apps_unavailable", "Apps aren't available on this host.")
+    try:
+        body = await _body(request, _HTML_APPS[operation])
+    except NativeAPIError as error:
+        if error.status == 422 and error.code == "invalid_request":
+            raise NativeAPIError(400, error.code, error.message) from None
+        raise
+    value = await run_in_threadpool(_html_apps, operation, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    maximum = MAX_GET_RESPONSE_BYTES if operation == "get" else MAX_DATA_RESPONSE_BYTES
+    # The data keeps its keys in the order the agent wrote them.
+    return _response(value, owner, request_id, maximum=maximum, sort_keys=False)
