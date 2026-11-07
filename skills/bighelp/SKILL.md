@@ -276,6 +276,31 @@ saved; you'll hear what they chose on your next turn.
 - `drafts_unavailable` means their bighelp can't show drafts: ask them to update
   the app, and don't save anything yourself.
 
+## Interactive apps
+
+For something people use rather than read (a small tool, a calculator, a picker, a live dashboard), write one
+self-contained HTML page and call `bighelp_show_app` with a `title`, a one-line `description` and the page
+(`html`, or `path` to an `.html` file you wrote in your working folder). Put the returned `display_markdown`
+in your reply once. The person taps Open App on the card and uses the page full screen. A plain card or a
+form is better for a simple answer.
+
+- The page may load any scripts, styles, fonts or APIs it needs. Follow `prefers-color-scheme` and fit a phone
+  screen.
+- bighelp adds a page API: `await window.bighelp.getData()` (the latest data or null),
+  `window.bighelp.onData(fn)` (once at start when there is data, again when it changes; returns an
+  unsubscribe function), `await window.bighelp.sendAnswer(answer)` (only with `sends_answers: true`) and
+  `window.bighelp.close()`.
+- `data` (any JSON, up to 262,144 bytes) or `data_path` (a JSON file in your working folder, read fresh each
+  time) gives the app live data. Change inline data later with `bighelp_update_app_data`; don't post the card
+  again. An app that reads `data_path` takes its data from that file: write the file.
+- `sends_answers: true` lets the app send the person's answer back. The phone shows them the exact message and
+  asks first. It arrives as their next message: `My answers to “<title>”:` then one `- <name>: <value>` line
+  each (lists joined with ", ", booleans as Yes/No), or `My answer from “<title>”:` then the text.
+- To change an app, call `bighelp_show_app` again with its `app_id`. Its page, title, description,
+  `sends_answers` and data source are replaced (give `data` or `data_path` again to keep data) and the same
+  card opens the new version.
+- `apps_unavailable` means their bighelp can't show apps: ask them to update the app.
+
 ## Template Catalog
 
 When the user wants a template or a new kind of agent, look in bighelp's

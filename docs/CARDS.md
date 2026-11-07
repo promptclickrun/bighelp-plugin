@@ -189,6 +189,14 @@ draft is the root and only element of its card. A chat's app lists them in
 (`drafts_unavailable`). Props, limits and the review flow are in
 [Photo actions](IMAGE_DRAFTS.md).
 
+### Apps
+
+`html_app` (feature `native-html-apps-v1`) shows an interactive HTML app that the person opens from the card.
+Only `bighelp_show_app` makes one: `bighelp_render_card` and card templates refuse it (`apps_tool_only`), and
+the card tool's parameters don't list it. It is the root and only element of its card, and a chat's app lists
+it in `renders` like the elements above (`apps_unavailable` otherwise). Props, limits and the routes are in
+[HTML apps](HTML_APPS.md).
+
 ## Weather backgrounds
 
 A `card` element may carry an optional animated weather background. It sits
