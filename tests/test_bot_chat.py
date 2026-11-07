@@ -42,7 +42,10 @@ class Owner:
         from gateway.config import GatewayConfig
         from gateway.session import SessionStore
         from gateway.session_authority import initialize_session_authority
-        from gateway.session_contract import Principal
+        try:
+            from gateway.session_contract import SessionActor
+        except ImportError:  # its name before Hermes 0.23.0
+            from gateway.session_contract import Principal as SessionActor
         from gateway.session_controls import AuthorityConnection
         from hermes_state import SessionDB
 
@@ -62,7 +65,7 @@ class Owner:
             "provider": "local", "user_id": UID, "profile_id": profile, "instance_id": "fixture",
             "capabilities": capabilities})
         # Another agent's `message_agent` reaches this one's Bot Chat through the same kind of ticket.
-        self.delivery = Principal(UID, profile, frozenset(capabilities), "delivery")
+        self.delivery = SessionActor(UID, profile, frozenset(capabilities), "delivery")
         self.calls: list[tuple[str, dict]] = []
         return self
 
