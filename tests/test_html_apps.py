@@ -154,9 +154,9 @@ class ShowAppTests(ToolCase):
                                                                "path": "latin.html"}), "invalid_arguments")
         self.assert_refused(self.host.show(html="<p>\ud800</p>"), "invalid_arguments")
 
-    def test_a_page_over_2_mib_is_refused_and_exactly_2_mib_is_kept(self):
+    def test_a_page_over_16_mib_is_refused_and_exactly_16_mib_is_kept(self):
         limit = html_apps.MAX_HTML_BYTES
-        self.assertEqual(2_097_152, limit)
+        self.assertEqual(16_777_216, limit)
         self.assert_refused(self.host.show(html="x" * (limit + 1)), "html_too_large")
         self.assert_refused(self.host.show(html="é" * (limit // 2 + 1)), "html_too_large")
         (self.host.work / "big.html").write_text("x" * (limit + 1))
@@ -210,8 +210,8 @@ class ShowAppTests(ToolCase):
         self.assertEqual(1, len(os.listdir(self.host.store.pages)))
 
     def test_inline_data_is_limited_as_compact_json(self):
-        self.assertEqual(262_144, html_apps.MAX_DATA_BYTES)
-        # 262,144 bytes of compact JSON: ["xxx…"] is the text plus four bytes of structure.
+        self.assertEqual(1_048_576, html_apps.MAX_DATA_BYTES)
+        # 1,048,576 bytes of compact JSON: ["xxx…"] is the text plus four bytes of structure.
         fits = ["x" * (html_apps.MAX_DATA_BYTES - 4)]
         self.assertEqual(html_apps.MAX_DATA_BYTES, len(json.dumps(fits, separators=(",", ":"))))
         self.host.assert_ok(self.host.show(data=fits))
@@ -341,7 +341,7 @@ class DataFileTests(ToolCase):
         path = self.host.work / "data.json"
         cases = {
             "invalid": [b"not json", b"", b"[1, 2", b"\xff\xfe[1]", b'{"a": NaN}', b"[Infinity]", b"[1e999]"],
-            "too_large": [b"[" + b"1," * 131_072 + b"1]"],
+            "too_large": [b"[" + b"1," * (html_apps.MAX_DATA_BYTES // 2) + b"1]"],
         }
         for problem, contents in cases.items():
             for content in contents:

@@ -56,8 +56,8 @@ Both are in the `bighelp` toolset. Errors come back as `{"success": false, "erro
 - `path` and `data_path` are read the way the Files routes read a file: the agent's own working folder only
   (a relative path starts there), no links, never Hermes' own folders or credential files. A `data_path` file
   that isn't there yet is allowed (a script or scheduled task can write it later); the note says so.
-- Limits: the page is at most 2,097,152 bytes of UTF-8 text. Inline data is at most 262,144 bytes as compact
-  JSON. A `data_path` file is read up to 262,144 bytes.
+- Limits: the page is at most 16,777,216 bytes (16 MiB) of UTF-8 text. Inline data is at most 1,048,576 bytes as compact
+  JSON. A `data_path` file is read up to 1,048,576 bytes.
 - With `app_id`, the app's page, title, description, `sends_answers` and data source are replaced (without
   `data` or `data_path`, the app has no data) and its `revision` goes up by one. It keeps its id.
 - It returns the usual card delivery (`schema`, `version`, `card`, `display_markdown`, `instruction`) plus
@@ -119,19 +119,27 @@ gets `404 app_not_found`. An unknown `agentId` gets `404 profile_not_found`.
 ### `get`
 
 ```json
-{"agentId": "research", "appId": "a_…", "knownSha256": "<hex, optional>"}
+{"agentId": "research", "appId": "a_…", "knownSha256": "<hex, optional>",
+ "offset": 0, "htmlSha256": "<hex, for a later piece>"}
 ```
 
-Answers (at most 4 MiB):
+Answers (at most 4 MiB, whatever the page's size):
 
 ```json
 {"app": {"appId": "a_…", "title": "Trip planner", "description": "Plan the stops of a road trip.",
          "sendsAnswers": true, "live": false, "revision": 1, "updatedAt": "2026-11-07T12:00:00Z",
          "htmlSha256": "<64 lowercase hex>", "htmlBytes": 2048},
- "html": "<base64 of the UTF-8 page>"}
+ "offset": 0, "html": "<base64 of up to 2 MiB of the page>", "nextOffset": null}
 ```
 
-`html` is left out when `knownSha256` equals `htmlSha256`, so a phone that has the page asks cheaply.
+The page comes in pieces of up to 2 MiB, so a page of any allowed size fits the app's 4 MiB cap on one
+answer. `nextOffset` is where the next piece starts, or `null` after the last one. The phone asks for each
+later piece with its `offset` and the `htmlSha256` of the page it is putting together; when the page changed
+meanwhile, that is `409 app_changed`, and the phone starts again. An `offset` past the end is
+`400 invalid_request`.
+
+`offset`, `html` and `nextOffset` are left out when `knownSha256` equals `htmlSha256`, so a phone that has
+the page asks cheaply.
 
 ### `data`
 
@@ -139,7 +147,7 @@ Answers (at most 4 MiB):
 {"agentId": "research", "appId": "a_…"}
 ```
 
-Answers (at most 512 KiB):
+Answers (at most 2 MiB):
 
 ```json
 {"appId": "a_…", "data": {"…": "…"}, "updatedAt": "2026-11-07T12:00:00Z",
@@ -149,7 +157,7 @@ Answers (at most 512 KiB):
 - Inline data: the stored value, the time it was set, and the SHA-256 of its compact JSON.
 - `data_path`: the file is read again on every request. `updatedAt` is the file's modified time and
   `dataSha256` is the SHA-256 of its bytes. When the file is gone or outside the working folder (`missing`),
-  isn't UTF-8 JSON without NaN or Infinity (`invalid`), or is over 262,144 bytes (`too_large`), `data`,
+  isn't UTF-8 JSON without NaN or Infinity (`invalid`), or is over 1,048,576 bytes (`too_large`), `data`,
   `updatedAt` and `dataSha256` are null and `problem` says which.
 - No data: `data`, `updatedAt`, `dataSha256` and `problem` are all null.
 
