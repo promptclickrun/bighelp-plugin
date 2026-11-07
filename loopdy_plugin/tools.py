@@ -15,7 +15,7 @@ from .generative_ui import (
     rendered_card_delivery,
 )
 from .loopdy_cards import canonical_json as canonical_card_json
-from .loopdy_cards import DRAFT_TYPES, render_card
+from .loopdy_cards import APP_TYPES, DRAFT_TYPES, render_card
 from . import card_objects, tool_session
 from .store import form_action_response
 
@@ -91,11 +91,12 @@ def _card_parameters() -> dict[str, Any]:
         / "loopdy-card-v1.schema.json"
     )
     portable = json.loads(schema_path.read_text(encoding="utf-8"))
-    # Drafts come only from the draft tools (image_drafts.py), so this tool doesn't offer them.
-    definitions = {name: value for name, value in portable["$defs"].items() if name not in _DRAFT_DEFINITIONS}
+    # Drafts and apps come only from their own tools (image_drafts.py, html_apps.py), so this tool
+    # doesn't offer them.
+    definitions = {name: value for name, value in portable["$defs"].items() if name not in _TOOL_ONLY_DEFINITIONS}
     definitions["element"] = {"oneOf": [
         option for option in portable["$defs"]["element"]["oneOf"]
-        if option["properties"]["type"].get("const") not in DRAFT_TYPES
+        if option["properties"]["type"].get("const") not in DRAFT_TYPES | APP_TYPES
     ]}
     return {
         "type": portable["type"],
@@ -107,8 +108,8 @@ def _card_parameters() -> dict[str, Any]:
     }
 
 
-_DRAFT_DEFINITIONS = frozenset({"draftText", "draftMessage", "draftCommon", "draftEntries",
-                                "contactDraftProps", "eventDraftProps"})
+_TOOL_ONLY_DEFINITIONS = frozenset({"draftText", "draftMessage", "draftCommon", "draftEntries",
+                                    "contactDraftProps", "eventDraftProps", "htmlAppProps"})
 
 
 def _card_handler(now: Callable[[], datetime], renders: card_objects.Renders):

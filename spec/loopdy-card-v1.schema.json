@@ -592,6 +592,23 @@
       "required": ["kind", "title"],
       "additionalProperties": false
     },
+    "htmlAppProps": {
+      "description": "An interactive HTML app the person opens from the card. Set by the plugin's bighelp_show_app, never by an agent. An app is the only element in its card.",
+      "type": "object",
+      "properties": {
+        "app_id": { "type": "string", "pattern": "^a_[0-9a-f]{32}$" },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
+        },
+        "sends_answers": { "type": "boolean" },
+        "live": { "type": "boolean" }
+      },
+      "required": ["app_id", "description", "sends_answers", "live"],
+      "additionalProperties": false
+    },
     "draftText": {
       "type": "string",
       "minLength": 1,
@@ -926,6 +943,16 @@
           "properties": {
             "type": { "const": "event_draft" },
             "props": { "$ref": "#/$defs/eventDraftProps" },
+            "children": { "$ref": "#/$defs/leafChildren" }
+          },
+          "required": ["type", "props", "children"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "html_app" },
+            "props": { "$ref": "#/$defs/htmlAppProps" },
             "children": { "$ref": "#/$defs/leafChildren" }
           },
           "required": ["type", "props", "children"],

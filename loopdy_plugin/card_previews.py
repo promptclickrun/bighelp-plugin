@@ -222,7 +222,10 @@ def _described(card: dict[str, Any]) -> str:
     title = plain_text(card.get("title"), 120).rstrip(".:")
     try:
         if card["schema"] == "loopdy.card":
-            detail = plain_text(card.get("spoken_summary"))
+            # An app card says what the app does; its spoken summary only repeats the title.
+            app = card["elements"].get(card["root"], {})
+            detail = plain_text(app["props"]["description"] if app.get("type") == "html_app"
+                                else card.get("spoken_summary"))
         elif card.get("version") == 1:
             detail = _v1_detail(card)
         else:

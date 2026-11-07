@@ -62,13 +62,15 @@ class LoopdyCardToolTests(unittest.TestCase):
         portable = json.loads(SCHEMA.read_text(encoding="utf-8"))
         # Agents write "bighelp.card"; the portable (app-facing) contract keeps its name. The
         # optional notification preview is a tool argument only: it never enters the card. Drafts
-        # come only from the draft tools, so their branches and definitions are left out.
-        drafts = {"contact_draft", "event_draft"}
+        # come only from the draft tools, and apps only from bighelp_show_app, so their branches and
+        # definitions are left out.
+        drafts = {"contact_draft", "event_draft", "html_app"}
         definitions = {name: value for name, value in portable["$defs"].items()
-                       if not name.startswith("draft") and not name.endswith("DraftProps")}
+                       if not name.startswith("draft") and not name.endswith("DraftProps")
+                       and name != "htmlAppProps"}
         definitions["element"] = {"oneOf": [option for option in portable["$defs"]["element"]["oneOf"]
                                             if option["properties"]["type"]["const"] not in drafts]}
-        self.assertEqual(len(portable["$defs"]["element"]["oneOf"]) - 2, len(definitions["element"]["oneOf"]))
+        self.assertEqual(len(portable["$defs"]["element"]["oneOf"]) - 3, len(definitions["element"]["oneOf"]))
         expected = {
             "type": portable["type"],
             "properties": {**portable["properties"], "schema": {"const": "bighelp.card"},
