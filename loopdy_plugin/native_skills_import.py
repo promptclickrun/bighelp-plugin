@@ -265,15 +265,28 @@ def _plan_files(files: list[tuple[str, bytes]], tool: Any) -> list[tuple[str, by
 # MARK: - Checking and writing with Hermes
 
 
+def _frontmatter_problem(content: str, tool: Any) -> Any:
+    """Hermes' header rules for a new skill, description limit included.
+
+    Hermes 0.22.6 and later check the limit on every write of SKILL.md (`_description_budget_error`) and
+    took the `new_skill` flag off `_validate_frontmatter`; earlier Hermes checks it only with that flag."""
+    budget = getattr(tool, "_description_budget_error", None)
+    if callable(budget):
+        return tool._validate_frontmatter(content) or budget(content)
+    return tool._validate_frontmatter(content, new_skill=True)
+
+
 def _check_skill(content: str, category: str | None, tool: Any) -> tuple[str, str | None]:
     """The skill's name (from its frontmatter) and category, by Hermes' own rules."""
     try:
         if isinstance(category, str):
             category = category.strip() or None
-        if problem := (tool._validate_category(category) or tool._validate_frontmatter(content, new_skill=True)):
+        if problem := (tool._validate_category(category) or _frontmatter_problem(content, tool)):
             raise _refusal(problem)
         frontmatter, _ = tool._parse_frontmatter(content)
-    except SkillImportError:
+    # A Hermes whose checks changed shape is the route's own failure (logged with its type), never a bad header:
+    # turning a TypeError into "can't read this skill's header" refused every skill on Hermes 0.22.6 and later.
+    except (SkillImportError, TypeError, AttributeError):
         raise
     except Exception:
         raise _invalid("Hermes can't read this skill's header.", "invalid_skill") from None
