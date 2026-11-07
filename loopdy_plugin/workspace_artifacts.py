@@ -548,6 +548,43 @@ def _read(workspace: workspace_root.Workspace, parts: tuple[str, ...], profile_i
     }
 
 
+def read_confined(profile_id: str, raw_path: str, limit: int) -> tuple[bytes, float]:
+    """The bytes of one regular file in this agent's workspace, and when it last changed.
+
+    A relative path starts at the workspace root. Opened the way the Files routes open a file: no links,
+    never outside the workspace, never Hermes' own folders or credential files. Raises ``NativeAPIError``
+    (``file_too_large`` past ``limit`` bytes, ``file_not_found``, ``path_outside_workspace``, or the
+    workspace's own refusal).
+    """
+    workspace = workspace_root.resolve(profile_id)
+    path = Path(raw_path)
+    if not path.is_absolute() and raw_path:
+        path = workspace.root / path
+    parts = _relative(workspace.root, str(path))
+    _refuse_secret(workspace, parts)
+    hidden = workspace_root.hermes_folders(profile_id)
+    with _opened(workspace.root, parts, directory=False, hidden=hidden) as opened:
+        try:
+            info = os.fstat(opened)
+            if not stat.S_ISREG(info.st_mode):
+                raise NativeAPIError(422, "invalid_path", "A regular workspace file is required.")
+            if info.st_size > limit:
+                raise NativeAPIError(413, "file_too_large", "The workspace file is over the size limit.")
+            content = b""
+            while len(content) < info.st_size:
+                chunk = os.read(opened, min(info.st_size - len(content), 64 * 1_024))
+                if not chunk:
+                    break
+                content += chunk
+        except NativeAPIError:
+            raise
+        except OSError:
+            raise NativeAPIError(409, "workspace_unreadable", "The workspace file could not be read safely.") from None
+    if len(content) != info.st_size:
+        raise NativeAPIError(409, "file_changed", "The workspace file changed while it was being read.")
+    return content, info.st_mtime
+
+
 async def request(operation: str, request: Request) -> Response:
     context = native_context(request)
     request_id = _precondition(request, context)

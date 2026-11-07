@@ -164,6 +164,13 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema["parameters"], expected)
                 self.assertIn("tool_search", description)
                 continue
+            if tool_name in ("bighelp_show_app", "bighelp_update_app_data"):
+                from loopdy_plugin import html_apps
+                expected = {"bighelp_show_app": html_apps.show_parameters,
+                            "bighelp_update_app_data": html_apps.update_data_parameters}[tool_name]()
+                self.assertEqual(renderer_schema["parameters"], expected)
+                self.assertIn("tool_search", description)
+                continue
             if tool_name in ("bighelp_catalog_login", "bighelp_submit_catalog_template"):
                 from loopdy_plugin import catalog_submissions
                 expected = (catalog_submissions.LOGIN_PARAMETERS if tool_name.endswith("login")

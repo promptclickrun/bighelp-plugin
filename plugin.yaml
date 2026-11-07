@@ -81,6 +81,8 @@ provides_tools:
   - bighelp_draft_contact
   - bighelp_draft_event
   - bighelp_offer_photo_action
+  - bighelp_show_app
+  - bighelp_update_app_data
   - bighelp_templates_search
   - bighelp_templates_get
   - bighelp_templates_fill
