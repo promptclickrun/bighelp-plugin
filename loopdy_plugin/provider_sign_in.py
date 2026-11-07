@@ -126,15 +126,37 @@ def _cli(name: str, *arguments: str, override: tuple[str, ...] = ()) -> Callable
     return command
 
 
-def _hermes_helper(flow: str, module: str) -> Callable[[], list[str] | None]:
+def _hermes_helper(flow: str, has_login: Callable[[], bool]) -> Callable[[], list[str] | None]:
     """A Hermes login run by ``provider_sign_in_helper.py`` with this Python, when Hermes has it."""
     def command() -> list[str] | None:
-        try:
-            __import__(module)
-        except ImportError:
-            return None
-        return [sys.executable, str(_HELPER), flow]
+        return [sys.executable, str(_HELPER), flow] if has_login() else None
     return command
+
+
+def _importable(module: str) -> bool:
+    try:
+        __import__(module)
+    except ImportError:
+        return False
+    return True
+
+
+def _has_device_login(provider_id: str) -> bool:
+    """The provider profile signs in with its own device-code hooks (provider plugins, Hermes 0.22.6 and later).
+
+    Read in the current profile scope: a provider plugin is installed per profile."""
+    from .provider_sign_in_helper import _DEVICE_HOOKS
+    try:
+        from providers import get_provider_profile
+        profile = get_provider_profile(provider_id)
+    except Exception:  # noqa: BLE001 - a Hermes without provider profiles has no such sign-in
+        return False
+    return all(callable(getattr(profile, name, None)) for name in _DEVICE_HOOKS)
+
+
+def _copilot_login() -> bool:
+    """Hermes' core Copilot login (until 0.22.5), or the github-copilot provider plugin's (0.22.6 and later)."""
+    return _importable("hermes_cli.copilot_auth") or _has_device_login("copilot")
 
 
 def _profile_home(agent_id: str) -> dict[str, str]:
@@ -205,6 +227,19 @@ def _hermes_signed_in(provider_id: str, saved: Callable[[], bool] | None = None)
 _MAX_ENV_FILE = 1024 * 1024
 
 
+def _copilot_token_rules() -> tuple[tuple[str, ...], Callable[[str], tuple[bool, str]]]:
+    """The env keys a Copilot token counts from, and the check it must pass.
+
+    Hermes' own until 0.22.5. Since 0.22.6 Copilot is a provider plugin and the check isn't Hermes' to
+    give, so only ``COPILOT_GITHUB_TOKEN`` counts: its sign-in saves there, and ``GH_TOKEN`` and
+    ``GITHUB_TOKEN`` belong to other GitHub tools until someone chooses Copilot."""
+    try:
+        from hermes_cli.copilot_auth import COPILOT_ENV_VARS, validate_copilot_token
+    except ImportError:
+        return ("COPILOT_GITHUB_TOKEN",), lambda _: (True, "")
+    return COPILOT_ENV_VARS, validate_copilot_token
+
+
 def _saved_copilot_token(keys: tuple[str, ...] = ()) -> tuple[str, str] | None:
     """The first Copilot token Hermes would accept in this profile's own env file, as (name, value).
 
@@ -212,14 +247,14 @@ def _saved_copilot_token(keys: tuple[str, ...] = ()) -> tuple[str, str] | None:
     refreshed or written. None when there is none, or this Hermes can't say."""
     try:
         from hermes_cli.config import get_env_path, invalidate_env_cache, load_env
-        from hermes_cli.copilot_auth import COPILOT_ENV_VARS, validate_copilot_token
+        known, accepted = _copilot_token_rules()
         if get_env_path().stat().st_size > _MAX_ENV_FILE:
             return None
         invalidate_env_cache()  # another process wrote the file
         saved = load_env()
-        for name in keys or COPILOT_ENV_VARS:
+        for name in keys or known:
             value = saved.get(name)
-            if isinstance(value, str) and value.strip() and validate_copilot_token(value)[0]:
+            if isinstance(value, str) and value.strip() and accepted(value)[0]:
                 return name, value.strip()
     except Exception:  # noqa: BLE001 - fail closed to what Hermes says on its own
         pass
@@ -281,7 +316,7 @@ RECIPES: tuple[Recipe, ...] = (
         drop_env=("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")),
     Recipe(
         provider_id="copilot", name="GitHub Copilot", client="Hermes", flow=DEVICE, link_hosts=("github.com",),
-        command=_hermes_helper("copilot", "hermes_cli.copilot_auth"),
+        command=_hermes_helper("copilot", _copilot_login),
         docs="https://docs.github.com/en/copilot", code=_GITHUB_CODE, env=_profile_home,
         signed_in=_hermes_signed_in("copilot", lambda: _saved_copilot_token() is not None),
         after_sign_in=_publish_copilot_token),
@@ -661,7 +696,10 @@ def start(agent_id: str, provider_id: str, *, wait: float = START_WAIT_SECONDS) 
         raise SignInError("sign_in_unavailable", "This provider can't sign in from the app.")
     if item.retired:
         raise SignInError("sign_in_retired", item.retired)
-    argv = item.command()
+    from .workspace_capabilities import profile_scope
+    # In the agent's profile, as the list reads it: a provider plugin is installed per profile.
+    with profile_scope(agent_id):
+        argv = item.command()
     if argv is None:
         raise SignInError("sign_in_tool_missing", f"{item.client} isn't installed on this computer.")
     with _sessions_lock:

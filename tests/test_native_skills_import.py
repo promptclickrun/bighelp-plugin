@@ -129,6 +129,8 @@ class SkillImportTests(unittest.TestCase):
                            ("---\nname: Bad Name\ndescription: x\n---\nbody\n", "invalid_skill"),
                            ("---\nname: 7\ndescription: x\n---\nbody\n", "invalid_skill"),
                            ("---\nname: ok\ndescription: x\n---\n", "invalid_skill"),
+                           # Over Hermes' 60-character index line: 0.22.6 and later check it on every write.
+                           ("---\nname: ok\ndescription: " + "word " * 20 + "\n---\nbody\n", "invalid_skill"),
                            (SKILL_MD + "x" * 100_001, "too_large"), (b"\xff\xfe\x00", "invalid_skill")):
             with self.subTest(text=text[:30]):
                 self.refused("skillMd", text, code)
@@ -137,6 +139,19 @@ class SkillImportTests(unittest.TestCase):
         with self.assertRaises(SkillImportError) as caught:
             import_skill("nova", "skillMd", "not base64!", None)
         self.assertEqual(caught.exception.code, "invalid_request")
+
+    def test_a_hermes_whose_checks_changed_shape_is_not_called_a_bad_skill(self):
+        """Hermes 0.22.6 took `new_skill` off `_validate_frontmatter`, and the TypeError came back as "invalid_skill"
+        for every skill. A change like that is the route's own failure (logged with its type), never the skill's."""
+        from tools import skill_manager_tool as tool
+
+        def other_shape(content, *, required_flag):
+            return None
+
+        with patch.object(tool, "_validate_frontmatter", other_shape), \
+                patch.object(tool, "_description_budget_error", None, create=True), self.assertRaises(TypeError):
+            self.upload("skillMd", SKILL_MD)
+        self.assertEqual(self.on_disk(), [])
 
     def test_an_archive_that_is_not_safe(self):
         good = {"SKILL.md": SKILL_MD}

@@ -21,6 +21,9 @@ from loopdy_plugin import provider_sign_in as si
 
 
 FAKE_TOKEN = "sk-ant-oat01-" + "Fake0Token_" * 6
+# Hermes until 0.22.5 signs in to Copilot itself; 0.22.6 moved it to the github-copilot provider plugin.
+CORE_COPILOT = si._importable("hermes_cli.copilot_auth")
+NO_CORE_COPILOT = "this Hermes keeps Copilot in the github-copilot provider plugin"
 
 
 def executable(directory: Path, name: str, body: str) -> str:
@@ -242,6 +245,10 @@ class PasteSignInTests(Base):
 
 class CatalogTests(Base):
     def test_lists_ready_missing_and_retired_sign_ins(self):
+        # Every sign-in, whichever providers this Hermes has: since 0.22.6 both Copilots are a provider plugin.
+        hermes_has_all = patch.object(si, "_hermes_providers", return_value=None)
+        hermes_has_all.start()
+        self.addCleanup(hermes_has_all.stop)
         rows = {row["providerId"]: row for row in si.providers("default")}
         self.assertEqual(rows["copilot-acp"]["state"], "ready")
         self.assertEqual(rows["claude-code"], {
@@ -255,6 +262,7 @@ class CatalogTests(Base):
                          ("notInstalled", "npm install -g @anthropic-ai/claude-code"))
         self.assertEqual(missing["claude-code"]["message"], "Claude Code isn't installed on this computer.")
 
+    @unittest.skipUnless(CORE_COPILOT, NO_CORE_COPILOT)
     def test_github_copilot_is_listed_though_hermes_files_it_under_keys(self):
         from hermes_cli.provider_catalog import provider_catalog
         tabs = {descriptor.slug: descriptor.tab for descriptor in provider_catalog()}
@@ -269,6 +277,7 @@ class CatalogTests(Base):
             self.assertIn("claude-subscription-directsdk-experimental",
                           [row["providerId"] for row in si.providers("default")])
 
+    @unittest.skipUnless(CORE_COPILOT, NO_CORE_COPILOT)
     def test_github_copilot_is_signed_in_once_hermes_has_its_token(self):
         from hermes_cli import copilot_auth
         from hermes_cli.config import save_env_value
@@ -301,8 +310,17 @@ class CatalogTests(Base):
             self.assertEqual(si.recipe("copilot-acp").command(), [self.copilot, "login", "--device-code"])
 
     def test_hermes_copilot_login_runs_the_helper_with_this_python(self):
-        self.assertEqual(si.recipe("copilot").command(), [sys.executable, str(si._HELPER), "copilot"])
+        with patch.object(si, "_importable", return_value=True):
+            self.assertEqual(si.recipe("copilot").command(), [sys.executable, str(si._HELPER), "copilot"])
         self.assertEqual(si._profile_home("default")["HERMES_HOME"], str(self.home))
+
+    def test_copilot_is_offered_while_hermes_or_its_provider_plugin_can_sign_in(self):
+        command = si.recipe("copilot").command
+        with patch.object(si, "_importable", return_value=False):
+            with patch("providers.get_provider_profile", return_value=PluginProfile(), create=True):
+                self.assertEqual(command(), [sys.executable, str(si._HELPER), "copilot"])
+            with patch("providers.get_provider_profile", return_value=None, create=True):
+                self.assertIsNone(command(), "a Hermes without core Copilot or the plugin has nothing to run")
 
     def test_too_many_sign_ins_at_once(self):
         with patch.dict(os.environ, {"FAKE_APPROVE_AFTER": "30"}), patch.object(si, "_MAX_SESSIONS", 1):
@@ -330,6 +348,7 @@ FAKE_HELPER = """
 COPILOT_TOKEN = "gho_" + "f" * 36
 
 
+@unittest.skipUnless(CORE_COPILOT, NO_CORE_COPILOT)
 class CopilotTokenTests(Base):
     """Hermes reads Copilot's token only from the process environment, which the sign-in's child never sets."""
 
@@ -435,7 +454,114 @@ class CopilotTokenTests(Base):
             self.assertIs(self.signed_in(), True)
 
 
+class PluginProfile:
+    """The github-copilot provider plugin's device-login hooks, as Hermes Desktop drives them, with GitHub faked.
+
+    ``save_device_login`` saves where the plugin's does: ``COPILOT_GITHUB_TOKEN`` in the profile's env."""
+
+    def __init__(self, answer: str = "approved"):
+        self.answer = answer
+        self.saved: list = []
+
+    def start_device_login(self):
+        return {"user_code": "WDJB-MJHT", "verification_url": "https://github.com/login/device",
+                "expires_in": 60, "interval": 1, "state": "fixture-state"}
+
+    def poll_device_login(self, state):
+        assert state == "fixture-state"
+        if self.answer == "approved":
+            return {"status": "approved", "credential": COPILOT_TOKEN}
+        return {"status": self.answer, "message": "Authorization was denied."}
+
+    def save_device_login(self, credential):
+        from hermes_cli.config import save_env_value
+        self.saved.append(credential)
+        save_env_value("COPILOT_GITHUB_TOKEN", credential)
+
+
+# The real helper in a child process on a Hermes without core Copilot, signing in with the plugin's hooks.
+FAKE_PLUGIN_HELPER = f"""
+    import sys
+    sys.modules["hermes_cli.copilot_auth"] = None  # moved out of core in Hermes 0.22.6
+    sys.path.insert(0, {str(Path(__file__).parent)!r})
+    import providers
+    from test_provider_sign_in import PluginProfile
+    from loopdy_plugin import provider_sign_in_helper as helper
+
+    providers.get_provider_profile = lambda name: PluginProfile() if name == "copilot" else None
+    sys.exit(helper.main(sys.argv[1:]))
+"""
+
+
+class ProviderPluginCopilotTests(Base):
+    """Hermes 0.22.6 and later: Copilot's sign-in is the github-copilot provider plugin's own device login."""
+
+    def setUp(self):
+        super().setUp()
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN")}
+        new_rules = (("COPILOT_GITHUB_TOKEN",), lambda _: (True, ""))
+        # Hermes' own status knows no Copilot without the plugin (and must not read this machine's `gh` sign-in).
+        for patcher in (patch.dict(os.environ, environment, clear=True),
+                        patch.object(si, "_importable", return_value=False),
+                        patch.object(si, "_copilot_token_rules", return_value=new_rules),
+                        patch("hermes_cli.auth.get_auth_status", return_value={"logged_in": False}),
+                        patch.object(si, "_hermes_providers", return_value={"copilot"}),
+                        patch("providers.get_provider_profile",
+                              side_effect=lambda name: PluginProfile() if name == "copilot" else None, create=True),
+                        patch.object(si, "_HELPER", Path(executable(self.root / "bin", "helper.py",
+                                                                    FAKE_PLUGIN_HELPER)))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def signed_in(self):
+        return next(row for row in si.providers("default") if row["providerId"] == "copilot").get("signedIn")
+
+    def test_signs_in_with_the_plugins_device_login_and_never_returns_the_token(self):
+        self.assertIsNot(self.signed_in(), True)
+        started = si.start("default", "copilot")
+        self.assertEqual((started["status"], started["code"]), (si.WAITING, "WDJB-MJHT"), started)
+        done = self.wait_for(started["sessionId"], (si.SIGNED_IN, si.FAILED), seconds=15)
+        self.assertEqual(done["status"], si.SIGNED_IN, done)
+        self.assertIn(f"COPILOT_GITHUB_TOKEN={COPILOT_TOKEN}", (self.home / ".env").read_text())
+        self.assertNotIn(COPILOT_TOKEN, repr(done))
+        self.assertIs(self.signed_in(), True)
+        # The dashboard reads the token from its own environment, as before Copilot left core.
+        self.assertEqual(os.environ.get("COPILOT_GITHUB_TOKEN"), COPILOT_TOKEN)
+
+    def test_a_github_token_for_other_tools_is_not_a_copilot_sign_in(self):
+        (self.home / ".env").write_text(f"GH_TOKEN={COPILOT_TOKEN}\nGITHUB_TOKEN={COPILOT_TOKEN}\n")
+        self.assertIsNot(self.signed_in(), True)
+
+
 class HelperTests(unittest.TestCase):
+    def test_a_provider_plugins_device_login_saves_only_when_approved_and_never_prints_the_token(self):
+        from loopdy_plugin import provider_sign_in_helper as helper
+        approved, denied = PluginProfile(), PluginProfile("denied")
+        with patch("hermes_cli.config.save_env_value"), patch.object(helper.time, "sleep"), \
+                patch("builtins.print") as printed:
+            with patch("providers.get_provider_profile", return_value=approved, create=True):
+                self.assertEqual(helper.profile_device_login("copilot"), 0)
+            with patch("providers.get_provider_profile", return_value=denied, create=True):
+                self.assertEqual(helper.profile_device_login("copilot"), 1)
+            with patch("providers.get_provider_profile", return_value=None, create=True):
+                self.assertEqual(helper.profile_device_login("copilot"), 1)
+        self.assertEqual((approved.saved, denied.saved), ([COPILOT_TOKEN], []))
+        shown = " ".join(str(argument) for call in printed.call_args_list for argument in call.args)
+        self.assertIn("https://github.com/login/device", shown)
+        self.assertIn("WDJB-MJHT", shown)
+        self.assertNotIn(COPILOT_TOKEN, shown)
+
+    def test_run_by_its_path_it_imports_hermes_providers_not_the_plugins_own(self):
+        """The sign-in runs this file by its path, which put `loopdy_plugin/` first on sys.path, and then
+        `import providers` found the plugin's push providers instead of Hermes' provider profiles."""
+        from loopdy_plugin import provider_sign_in_helper as helper
+        folder = str(Path(helper.__file__).resolve().parent)
+        with patch.object(sys, "path", [folder, *sys.path]):
+            self.assertEqual(helper.main(["other"]), 2)
+            self.assertNotIn(folder, sys.path)
+
+    @unittest.skipUnless(CORE_COPILOT, NO_CORE_COPILOT)
     def test_saves_the_token_where_hermes_model_does_and_never_prints_it(self):
         from loopdy_plugin import provider_sign_in_helper as helper
         saved = {}
