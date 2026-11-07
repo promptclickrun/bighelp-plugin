@@ -552,6 +552,15 @@ class HelperTests(unittest.TestCase):
         self.assertIn("WDJB-MJHT", shown)
         self.assertNotIn(COPILOT_TOKEN, shown)
 
+    def test_run_by_its_path_it_imports_hermes_providers_not_the_plugins_own(self):
+        """The sign-in runs this file by its path, which put `loopdy_plugin/` first on sys.path, and then
+        `import providers` found the plugin's push providers instead of Hermes' provider profiles."""
+        from loopdy_plugin import provider_sign_in_helper as helper
+        folder = str(Path(helper.__file__).resolve().parent)
+        with patch.object(sys, "path", [folder, *sys.path]):
+            self.assertEqual(helper.main(["other"]), 2)
+            self.assertNotIn(folder, sys.path)
+
     @unittest.skipUnless(CORE_COPILOT, NO_CORE_COPILOT)
     def test_saves_the_token_where_hermes_model_does_and_never_prints_it(self):
         from loopdy_plugin import provider_sign_in_helper as helper

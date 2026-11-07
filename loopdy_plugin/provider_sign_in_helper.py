@@ -10,6 +10,7 @@ writes the same ``COPILOT_GITHUB_TOKEN``.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
@@ -73,7 +74,15 @@ def profile_device_login(provider_id: str) -> int:
 FLOWS = {"copilot": copilot}
 
 
+def _hermes_first() -> None:
+    """Run by its path, Python puts this file's folder first on ``sys.path``, and there the plugin's own
+    ``providers`` (its push services) stood in for Hermes' ``providers`` package."""
+    folder = os.path.dirname(os.path.abspath(__file__))
+    sys.path[:] = [entry for entry in sys.path if os.path.abspath(entry or os.curdir) != folder]
+
+
 def main(arguments: list[str]) -> int:
+    _hermes_first()
     if len(arguments) != 1 or arguments[0] not in FLOWS:
         return 2
     return FLOWS[arguments[0]]()
