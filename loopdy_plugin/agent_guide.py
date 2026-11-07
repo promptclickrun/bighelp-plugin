@@ -45,6 +45,8 @@ permission_declined, don't retry it in this chat. Health trends: bighelp_render_
 - iphone_appearance sets bighelp's look (mode, chat color).
 - iphone_navigation opens a page in the app to show where something is: call places with the user's words, \
 then open the best match.
+- Something interactive (a small tool, a live dashboard): bighelp_show_app, an HTML page the user opens from \
+a card. The skill has its page API.
 - Workflows (bighelp_workflows): what you build stays a draft. Publish only when the user explicitly asks; \
 Hermes asks them to approve.
 - Never schedule jobs or posts the user didn't ask for; runs spend their AI budget.\
