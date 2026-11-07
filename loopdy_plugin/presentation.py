@@ -74,6 +74,7 @@ def shape_notification(
     preferences: Mapping[str, Any] | None = None,
 ) -> PushMessage:
     values = dict(preferences or {})
+    # Only "minimal" changes the text; "automatic" and "detailed" show the same alert.
     requested_mode = str(values.get("detail_mode") or "automatic").strip().lower()
     mode = (
         requested_mode
@@ -182,7 +183,7 @@ def _text(value: Any, maximum: int) -> str:
     if len(encoded) <= budget:
         return normalized
     # Slice bytes only at a valid UTF-8 boundary. This keeps emoji and
-    # combining sequences deterministic across APNs and relay providers.
+    # combining sequences deterministic across push providers.
     return encoded[:budget].decode("utf-8", errors="ignore")
 
 

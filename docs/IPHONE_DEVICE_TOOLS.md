@@ -27,6 +27,9 @@ overwrite a newer change.
 
 ## Your control
 
+These switches and cards are in the app. The plugin only sees their result: the `enabled` and `askable` lists a
+phone sends with `connect`.
+
 - Each data tool is off until you turn it on for a host in bighelp. Turning one on asks for the iOS permission at
   that moment; the iOS permission alone never gives an agent access.
 - When an agent calls a data tool that is off, a bighelp build that can ask shows a card in the chat with
@@ -347,15 +350,17 @@ with `phone_unavailable`, as it does when that channel closes, and the old chann
 `phone_unavailable` too.
 
 The plugin advertises `native-device-tools-v1` only when the Hermes host supports tool execution middleware.
+Without it, the plugin doesn't register the `iphone_*` tools at all, and the device-tools routes answer
+`503 device_tools_unavailable`.
 `native-device-location-v1` comes with it and tells the app that `location` may be in the channel's `enabled`
 list; older plugins reject it, so the app leaves Location out for them and asks you to update the plugin.
 `native-device-appearance-v1` does the same for `appearance`, and so do `native-device-contacts-v1`,
 `native-device-photos-v1`, `native-device-geofences-v1`, `native-device-alarms-v1`, `native-device-music-v1`,
 `native-device-focus-v1`, `native-device-shortcuts-v1` and `native-device-navigation-v1` for `contacts`, `photos`,
 `geofences`, `alarms`, `music`, `focus`, `shortcuts` and `navigation`. A call whose kind isn't in the channel's `enabled` list fails with `authorization_required`.
-Because Appearance is on by default, the phone opens a
-channel for every chat on a host that lists it, and polls more slowly (every 8 seconds instead
-of 0.75) while Appearance is the only tool on that channel.
+The app decides when to open a channel and how often to poll; the plugin only enforces the 30-second lease. Today
+the app opens a channel for every chat on a host that lists Appearance, because Appearance is on by default, and
+polls more slowly (every 8 seconds instead of 0.75) while Appearance is the only tool on that channel.
 
 ### Every agent
 

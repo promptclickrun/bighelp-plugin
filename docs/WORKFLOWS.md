@@ -85,6 +85,18 @@ stages read-only copies.
 Version 3 is Dev Factory: coding recipes that run once per git project, with command and pull request stages. See
 [Dev Factory](DEV_FACTORY.md).
 
+### Built-in templates
+
+`templates/list` always shows two built-in templates:
+
+| id | Name | Version | Steps |
+| --- | --- | --- | --- |
+| `research-draft-review` | Research, draft, review | 1 | a researcher, a writer, a length check and a reviewer who can send the draft back, then your sign-off |
+| `three-takes` | Three takes, one answer | 2 | three agents answer at once until all three pass, a writer combines them, then your sign-off |
+
+Three more built-ins are Dev Factory templates. `templates/list` shows them only with `includeCode: true`, and the
+agent tool's `templates` always shows them ([Dev Factory](DEV_FACTORY.md#templates)).
+
 ```json
 {
   "schemaVersion": 1,

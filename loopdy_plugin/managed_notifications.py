@@ -2,7 +2,7 @@
 
 This module owns no Hermes runtime internals. Stock registered observers provide
 lifecycle facts; a plugin-owned worker drains frozen requests over HTTPS. Chat,
-Link pairing, the legacy provider and LOOPDY_HOME_TARGET are not prerequisites.
+the legacy provider and LOOPDY_HOME_TARGET are not prerequisites.
 """
 from __future__ import annotations
 
@@ -1475,7 +1475,7 @@ class ManagedNotifications:
                 # A real hook re-sends an unchanged state once a minute, inside the
                 # 120-second stale window, so a long run of tool calls stays current.
                 if row["last_signature"] == signature and row["last_queued_at"] > now - _ACTIVITY_REFRESH_SECONDS: continue
-                # Queue latest significant state, with relay's existing 30s budget.
+                # Queue the latest significant state.
                 pending = db.execute("SELECT raw,next_attempt FROM pending WHERE activity_id=? AND state='pending' ORDER BY next_attempt LIMIT 1", (row["activity_id"],)).fetchone()
                 timestamp = max(now, json.loads(bytes(pending["raw"]))["timestamp"]) if pending else max(now, row["last_timestamp"] + 1)
                 expires = min(timestamp + 120, row["grant_expires"], row["lease_expires"])

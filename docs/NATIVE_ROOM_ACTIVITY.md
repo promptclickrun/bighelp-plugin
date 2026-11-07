@@ -27,6 +27,9 @@ rules in [Native workspace API](NATIVE_WORKSPACE_API.md).
 | `poll` | `{roomId,streamId,after,limit}` | `FeedPage` |
 | `close` | `{roomId,streamId}` | `{schemaVersion:1,roomId,streamId,closed:true}` |
 
+Only `open` checks the features in `/native/context`. `poll` and `close` don't; they work only with a `streamId`
+that `open` gave out to the same native owner and room.
+
 ```text
 FeedPage = {
   schemaVersion:1, runtimeId, roomId, streamId,

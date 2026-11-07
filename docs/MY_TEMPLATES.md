@@ -77,3 +77,21 @@ Errors carry a fixed code:
 
 Older apps never call these routes; the app checks `/native/context` for the
 feature and asks people to update the plugin when it's missing.
+
+## Older agent templates (`native-agent-templates-v1`)
+
+Older app builds use a different set of routes, kept so they keep working. The current app uses My Templates.
+`POST /api/plugins/loopdy/native/agent-templates/<operation>`, each with `agentId`:
+
+| Operation | Body | What it does |
+| --- | --- | --- |
+| `list` | `{agentId}` | Lists the agent's saved templates |
+| `derive` | `{agentId, templateId}` | Builds a new template from the agent's profile (its skills, MCP servers, toolsets and `SOUL.md`). It writes nothing |
+| `read` | `{agentId, templateId}` | Returns one saved template and its `revision` |
+| `save` | `{agentId, template, expectedRevision?}` | Saves a template |
+
+Saved templates are JSON files in `.loopdy/agent-templates/<agentId>/` inside the agent's working folder. The
+routes never change the agent's profile. `/native/context` lists the feature when the host has secure file
+access (`O_NOFOLLOW`, `O_DIRECTORY` and `fcntl`, so not on Windows) and Hermes' profile helpers. The routes check
+the same thing and answer `501 templates_unavailable` without it. Bodies and responses are capped at 1 MiB, and an
+agent holds at most 256 templates.

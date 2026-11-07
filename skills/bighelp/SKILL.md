@@ -10,7 +10,8 @@ talks straight to Hermes, so chats, tools, approvals and scheduled jobs are
 Hermes' own. Chats started in the app have session source `bighelp`. It's a
 chat app, not a terminal and not Hermes Desktop.
 
-All the bighelp tools below are in the `bighelp` toolset. If a tool isn't in
+Most bighelp tools below are in the `bighelp` toolset. The Template Catalog
+tools and `bighelp_workflows` are in toolsets of their own. If a tool isn't in
 your current tool list, Hermes has hidden it behind progressive disclosure:
 find and run that exact tool with `tool_search`, `tool_describe` and
 `tool_call`. Never swap in a different tool.

@@ -269,8 +269,13 @@ Some code stays for older setups and app builds. Do not configure it on new host
   that has this push setup turns on the `loopdy` gateway platform. Scheduled tasks and approvals can then send
   alerts to phones that use it. For the notifications that you turn on in the app, `status` shows only how many
   grants are active (`notifications`).
+- `GET /api/plugins/loopdy/capabilities` describes that legacy push setup. Its `channel: loopdy`,
+  `default_provider: managed`, `providers`, `approval_transport`, `detail_modes` and `direct_setup` (with
+  `hermes loopdy configure-apns`, the old name for `hermes bighelp configure-apns`) are about the `loopdy` gateway platform, not the notifications that you turn on in
+  the app ([Notifications](docs/NOTIFICATIONS.md)). Of the `detail_modes`, only `minimal` changes an alert;
+  `automatic` and `detailed` show the same text.
 - The agent template routes (`native-agent-templates-v1`) stay for older app builds. The current app uses My
-  Templates.
+  Templates ([My Templates](docs/MY_TEMPLATES.md#older-agent-templates-native-agent-templates-v1)).
 
 ## Development
 

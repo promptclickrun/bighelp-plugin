@@ -17,9 +17,9 @@ def normalize_hook(hook: str, *, profile: str, **payload: Any) -> BighelpEvent |
     profile = _text(payload.get("profile_name"), 80) or profile
 
     if hook == "pre_tool_call":
-        # Hermes creates the actionable clarify_id later, inside the gateway
-        # callback. BighelpAdapter.send_clarify owns the durable attention event
-        # so Home never receives a duplicate card bound to the tool_call_id.
+        # The question alert comes from ManagedNotifications._observe_question,
+        # which sees the clarify call itself. No event here, so the phone never
+        # gets a second one bound to the tool_call_id.
         return None
 
     if hook == "on_session_end":

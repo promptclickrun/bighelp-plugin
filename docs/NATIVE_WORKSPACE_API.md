@@ -171,6 +171,19 @@ revisions are file hashes or directory snapshots, not client-visible grant
 epochs. Retain the native owner and proven process profile over each await and
 re-probe roots after reconnect.
 
+## Routes that don't check their feature
+
+Most native routes refuse a request when `/native/context` doesn't list their feature. These don't look at the
+feature list. The app should still check `/native/context` first, but the route itself is gated only by what the
+table says:
+
+| Routes | Feature the app checks | What the route checks |
+| --- | --- | --- |
+| `/native/voice/*` | `native-voice-v1` | The native session, the context ETag and that the agent exists. `status` reports whether the provider is set up. |
+| `/native/workspace-files/*` | `native-workspace-files-v1` and the other `native-workspace-*` features | The native session and context ETag, a known serving profile (`501 workspace_identity_unavailable`) and the agent in `profile` (`404 agent_not_found`). |
+| `/native/groups/activity/poll` and `/close` | `native-room-activity-v1` | Only `open` checks the feature. `poll` and `close` need a `streamId` that `open` gave out (`410 activity_reset_required` or `404 activity_not_found` otherwise). |
+| `/native/agent-templates/*` | `native-agent-templates-v1` | The same check that lists the feature (`agent_templates.available()`), as `501 templates_unavailable`. |
+
 ## Capability boundaries
 
 | Capability | Current native boundary |

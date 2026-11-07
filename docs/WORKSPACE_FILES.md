@@ -47,7 +47,7 @@ Secure descriptor-relative traversal is required. The first implementation suppo
 
 ## Supported extension surface
 
-The existing `dashboard/manifest.json` names the plugin's `plugin_api.py`, which exports an `APIRouter`; stock Hermes mounts it beneath `/api/plugins/loopdy` with the host's authentication. Files routes are a focused child router. The host CLI is registered through `ctx.register_cli_command` and the existing `loopdy` command. No additional listening service, private runtime API, core patch, or new dependency is required.
+The existing `dashboard/manifest.json` names the plugin's `plugin_api.py`, which exports an `APIRouter`; stock Hermes mounts it beneath `/api/plugins/loopdy` with the host's authentication. Files routes are a focused child router. The host CLI is the `hermes bighelp` command, registered through `ctx.register_cli_command`. `hermes loopdy` is a hidden old name for it. No additional listening service, private runtime API, core patch, or new dependency is required.
 
 Official references:
 
@@ -56,7 +56,7 @@ https://hermes-agent.nousresearch.com/docs/developer-guide/plugins
 
 ## Host commands
 
-After this candidate is reviewed, merged and installed, the registered commands are:
+The registered commands are:
 
 ```sh
 hermes bighelp files grant demo --root /absolute/path/to/project --label 'Demo project'

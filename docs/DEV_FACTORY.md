@@ -123,8 +123,11 @@ project), `command_missing` (a project has no command and there is no `*`), `pul
 
 ### Templates
 
-Three built-in templates, all `"schemaVersion": 3` with `"projects": []`, so a new draft from them has the issue
-`no_projects` until the app fills in projects (and each project's command; the templates say `make test`):
+The plugin has five built-in templates. Two are not about code and every app sees them: `research-draft-review`
+and `three-takes` (see [Workflows](WORKFLOWS.md#built-in-templates)). The other three are Dev Factory templates.
+They are listed only with `includeCode: true`. All three are `"schemaVersion": 3` with `"projects": []`, so a new
+draft from them has the issue `no_projects` until the app fills in projects (and each project's command; the
+templates say `make test`):
 
 | id | Name | Steps |
 | --- | --- | --- |
@@ -216,7 +219,7 @@ Test vectors: `fixtures/contracts/workflows-v1/templates-list-code.json`, `draft
 
 ## For agents
 
-`bighelp_workflows` builds and runs recipes like any workflow: `templates` lists the Dev Factory templates, `create`
+`bighelp_workflows` builds and runs recipes like any workflow: `templates` lists every template, the Dev Factory ones too, `create`
 and `save_draft` take version 3 definitions, and `start` takes `projects`. Publishing still asks the person.
 
 ## Safety and privacy

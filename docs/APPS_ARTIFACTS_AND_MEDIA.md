@@ -2,7 +2,8 @@
 
 The bighelp app's Files tab (it was called Apps) shows what an agent made. Both routes follow the
 native context/ETag/request-ID contract and never return host paths the phone
-could not already see.
+could not already see. The `workspace-files` routes don't check the `native-workspace-*` features themselves; see
+[Native workspace API](NATIVE_WORKSPACE_API.md#routes-that-dont-check-their-feature).
 
 ## Artifacts (`native-workspace-recent-v1`)
 

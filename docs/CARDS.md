@@ -310,6 +310,12 @@ A template bundle is declarative data with `id`, `version`, `name`, `summary`,
 `author`, `license`, `minimum_card_version`, `parameters_schema`, `document`, and
 `sha256`.
 
+[`loopdy-card-template-v1.schema.json`](../spec/loopdy-card-template-v1.schema.json)
+describes a bundle for the app, which verifies installed bundles. No plugin
+module loads it. On install the plugin checks a bundle with its own code
+(`_card_template` in `store.py`): the fields, the parameter schema, the embedded
+card and the `sha256`.
+
 1. A catalog detail view shows the author, license, version, and requested
    component types before installation.
 2. The app verifies catalog and bundle integrity, card-version support, the
