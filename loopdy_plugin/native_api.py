@@ -9,7 +9,7 @@ import sys
 import time
 from typing import Annotated, Any, Literal, TypeVar
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
@@ -767,7 +767,54 @@ async def agents_today(request: Request) -> Response:
         raise NativeAPIError(404, "agent_not_found", "That agent isn't on this computer.")
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
-    return _response(value, owner, request_id, maximum=262_144)
+    return _response(value, owner, request_id, maximum=524_288)
+
+
+class _Empty(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+async def _computer_screen_route(request: Request, read) -> Response:
+    from .computer_screen import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "computer_screen_unavailable", "This computer's screen isn't available here.")
+    await _body(request, _Empty)
+    value = await run_in_threadpool(read)
+    if value is None:
+        raise NativeAPIError(503, "computer_screen_unavailable", "No screen sharing server answers on this computer.")
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id)
+
+
+@router.post("/computer-screen/status")
+async def computer_screen_status(request: Request) -> Response:
+    """Whether this computer's own VNC server answers (`native-computer-screen-v1`), read-only."""
+    from . import computer_screen
+    return await _computer_screen_route(request, computer_screen.status_value)
+
+
+def _computer_screen_observe() -> dict | None:
+    from . import computer_screen
+    if not computer_screen.status_value()["available"]:
+        return None
+    return {"ticket": computer_screen.mint_ticket(), "path": computer_screen.SOCKET_PATH}
+
+
+@router.post("/computer-screen/observe")
+async def computer_screen_observe(request: Request) -> Response:
+    """A single-use ticket for the computer-screen WebSocket, only while the VNC server answers."""
+    return await _computer_screen_route(request, _computer_screen_observe)
+
+
+@router.websocket("/computer-screen/ws")
+async def computer_screen_ws(ws: WebSocket) -> None:
+    """Raw RFB bytes between the app and this computer's VNC server. The ticket in the query is the
+    credential: Hermes' plugin-socket gate checks Host, Origin and peer, and no HTTP middleware runs."""
+    from . import computer_screen
+    await computer_screen.bridge(ws)
 
 
 class _CoreFiles(BaseModel):
