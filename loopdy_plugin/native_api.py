@@ -718,21 +718,23 @@ class _AgentsActivity(BaseModel):
     agentIds: list[Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")]] = Field(min_length=1, max_length=64)
 
 
-def _agents_activity(body: _AgentsActivity) -> dict:
+def _agents_activity(body: _AgentsActivity, background: bool) -> dict:
     from .agents_activity import activity
-    return {"agents": activity(body.agentIds)}
+    return {"agents": activity(body.agentIds, background=background)}
 
 
 @router.post("/agents/activity")
 async def agents_activity(request: Request) -> Response:
-    """What each agent's Bot Chat is doing now (working, waiting on the person, idle), read-only."""
+    """What each agent's Bot Chat is doing now (working, waiting on the person, idle), read-only. With
+    `native-agents-background-v1`, each row also counts the agent's background work."""
     from .agents_activity import CAPABILITY
+    from .agents_background import CAPABILITY as BACKGROUND
     owner = native_context(request)
     request_id = _precondition(request, owner)
     if CAPABILITY not in owner.features:
         raise NativeAPIError(503, "agents_activity_unavailable", "Agent activity isn't available on this host.")
     body = await _body(request, _AgentsActivity)
-    value = await run_in_threadpool(_agents_activity, body)
+    value = await run_in_threadpool(_agents_activity, body, BACKGROUND in owner.features)
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response(value, owner, request_id, maximum=32_768)

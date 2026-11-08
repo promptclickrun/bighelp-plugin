@@ -6,6 +6,8 @@ fills them.
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -13,15 +15,59 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
-from loopdy_plugin import agents_activity
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from loopdy_plugin import agents_activity, agents_background, native_api
+from loopdy_plugin.native_context import NativeContext
 import test_native_api as native_fixtures
 from test_native_api import PREFIX
 
 BOT_CHAT = "20261021_090000_b0b0b0"
 QUERY_CHAT = "20261021_091500_c1c1c1"
 OTHER_CHAT = "20261021_092000_d2d2d2"
+
+
+def process_start(pid: int):
+    from gateway.status import get_process_start_time
+    return get_process_start_time(pid)
+
+
+def live_owner() -> dict:
+    """An owner that is alive and is who it says: this test process."""
+    return {"pid": os.getpid(), "started": process_start(os.getpid())}
+
+
+def gone_owner() -> dict:
+    """An owner whose process ended: a child that ran and was waited for."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=10)
+    return {"pid": child.pid, "started": 1}
+
+
+def recycled_owner() -> dict:
+    """A PID that is alive, but was another process's when Hermes wrote it down."""
+    return {"pid": os.getpid(), "started": process_start(os.getpid()) - 1_000_000}
+
+
+def iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def route_client(features: tuple[str, ...]) -> TestClient:
+    """The native router with a context that lists exactly these features, as a host would."""
+    context = NativeContext(None, None, None, "default", features, "runtime")
+    patcher = patch.object(native_api, "native_context", side_effect=lambda _request: context)
+    patcher.start()
+    app = FastAPI()
+    app.include_router(native_api.router, prefix="/api/plugins/loopdy")
+    client = TestClient(app)
+    client.etag = context.etag
+    client.stop = lambda: (client.close(), patcher.stop())
+    return client
 
 
 def hermes_available() -> bool:
@@ -61,6 +107,58 @@ class Agent:
 
     def end_turn(self, session_id, holder):
         self.db.release_session_turn_lease(session_id, holder)
+
+    def write(self, sql, params=()):
+        with closing(sqlite3.connect(self.home / "state.db")) as db:
+            db.execute(sql, params)
+            db.commit()
+
+    def delegation(self, delegation_id, goal, *, owner=None, state="running", dispatched=1_794_090_000.0,
+                   completed=None, parent=None, goals=None, event=None):
+        """A row as tools.async_delegation writes it: `_persist_dispatch`, then `_persist_completion`."""
+        owner = owner or live_owner()
+        task = {"goal": goal, "context": None, "toolsets": ["terminal"], "role": "leaf", "model": None,
+                "is_batch": goals is not None, "owner_cwd": "/work"}
+        if goals is not None:
+            task.update(goals=goals, task_indexes=list(range(len(goals))))
+        self.write(
+            """INSERT INTO async_delegations (delegation_id, origin_session, origin_ui_session_id, parent_session_id,
+               state, dispatched_at, completed_at, updated_at, event_json, delivery_state, owner_pid,
+               owner_started_at, task_json, origin_session_id) VALUES (?, '', '', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, '')""",
+            (delegation_id, parent, state, dispatched, completed, completed or dispatched,
+             json.dumps(event) if event else None, owner["pid"], owner["started"], json.dumps(task)))
+
+    def checkpoint(self, *entries):
+        (self.home / "processes.json").write_text(json.dumps(list(entries)))
+
+    def cron_jobs(self, **names):
+        (self.home / "cron").mkdir(exist_ok=True)
+        jobs = [{"id": job_id, "name": name, "prompt": "Check things.", "schedule": {"kind": "cron", "expr": "0 7 * * *"},
+                 "enabled": True} for job_id, name in names.items()]
+        (self.home / "cron" / "jobs.json").write_text(json.dumps({"jobs": jobs, "updated_at": iso(1_794_000_000)}))
+
+    def cron_run(self, job_id, status, claimed, *, finished=None, owner=None):
+        """A row of Hermes' cron execution ledger, in its own schema."""
+        from cron.executions import _initialize_schema
+        owner = owner or live_owner()
+        (self.home / "cron").mkdir(exist_ok=True)
+        with closing(sqlite3.connect(self.home / "cron" / "executions.db")) as db:
+            _initialize_schema(db)
+            db.execute(
+                """INSERT INTO executions (id, job_id, source, process_id, pid, process_started_at, status, claimed_at,
+                   started_at, finished_at) VALUES (?, ?, 'scheduler', 'p1', ?, ?, ?, ?, ?, ?)""",
+                (uuid.uuid4().hex, job_id, owner["pid"], owner["started"], status, iso(claimed), iso(claimed),
+                 iso(finished) if finished else None))
+            db.commit()
+
+
+def process_entry(process_id, command, owner, *, parent=None, task_id="", scope="host", started_at=1_794_090_000.0):
+    """A `processes.json` entry: `session_id` plus Hermes' `_CHECKPOINT_FIELDS`."""
+    return {"session_id": process_id, "command": command, "pid": owner["pid"], "pid_scope": scope,
+            "host_start_time": owner["started"], "systemd_unit": "", "wsl_chain": "", "cwd": "/work",
+            "started_at": started_at, "task_id": task_id, "owner_task_id": task_id, "session_key": "",
+            "parent_session_id": parent, "notify_on_complete": True, "completion_output_chars": 4000,
+            "watch_patterns": [], "heartbeat_seconds": 0, "persist_on_release": False, "output_log": ""}
 
 
 @unittest.skipUnless(hermes_available(), "this Hermes has no session store")
@@ -228,6 +326,70 @@ class AgentsActivityTests(unittest.TestCase):
         self.assertEqual(agents_activity.activity(["nova"], now=lambda: clock[0]), first, "Asked again within a second")
 
 
+    def background(self, name="nova"):
+        agents_activity.forget()
+        row = {row["agentId"]: row for row in agents_activity.activity([name], background=True)}[name]
+        return row.get("background"), row["state"]
+
+    def test_background_counts_live_work_of_every_kind_and_names_the_newest(self):
+        self.assertEqual(self.background(), (None, "idle"), "Nothing runs: no background field")
+        self.nova.delegation("deleg_a1", "Find a battery back plate", dispatched=1_794_090_000.0)
+        self.assertEqual(self.background(), ({"count": 1, "title": "Find a battery back plate"}, "idle"))
+        self.nova.checkpoint(process_entry("proc_1a2b", "npm  run\n dev", live_owner(), started_at=1_794_090_500.0))
+        self.nova.cron_jobs(job42="Morning brief")
+        self.nova.cron_run("job42", "running", 1_794_090_200.0)
+        self.assertEqual(self.background(), ({"count": 3, "title": "npm run dev"}, "idle"), "The command is newest")
+        self.nova.delegation("deleg_b2", "Look at the puck photo", dispatched=1_794_091_000.0)
+        holder = self.nova.turn(BOT_CHAT)
+        self.addCleanup(self.nova.end_turn, BOT_CHAT, holder)
+        self.assertEqual(self.background(), ({"count": 4, "title": "Look at the puck photo"}, "working"),
+                         "Independent of the turn the agent is on")
+        agents_activity.forget()
+        self.assertNotIn("background", agents_activity.activity(["nova"])[0], "Without the feature, no field")
+
+    def test_background_work_counts_only_while_its_owner_really_runs(self):
+        self.nova.delegation("deleg_dead", "Owner is gone", owner=gone_owner())
+        self.nova.delegation("deleg_reused", "PID was recycled", owner=recycled_owner())
+        self.nova.delegation("deleg_done", "Already finished", state="completed", completed=1_794_090_100.0)
+        self.nova.delegation("deleg_unknown", "Hermes marked it", state="unknown", owner=gone_owner())
+        self.nova.checkpoint(
+            process_entry("proc_gone", "sleep 600", gone_owner()),
+            process_entry("proc_reused", "sleep 601", recycled_owner()),
+            process_entry("proc_sandbox", "sleep 602", live_owner(), scope="sandbox"),
+            process_entry("proc_child", "sleep 603", live_owner(), task_id="sa-0-abc"),
+            process_entry("proc_other_agent", "sleep 604", live_owner(), parent="20261021_111111_aaaaaa"),
+            process_entry("proc_mine", "sleep 605", live_owner(), parent=BOT_CHAT))
+        self.nova.cron_run("job1", "completed", 1_794_080_000.0, finished=1_794_080_060.0)
+        self.nova.cron_run("job2", "running", 1_794_080_000.0, owner=gone_owner())
+        self.nova.cron_run("job3", "missed", 1_794_080_000.0)
+        self.assertEqual(self.background(), ({"count": 1, "title": "sleep 605"}, "idle"))
+
+    def test_background_titles_are_one_short_plain_line(self):
+        goal = "  First line of the goal   with spaces\nSecond line: more detail. " + "x" * 200
+        self.nova.delegation("deleg_t1", goal)
+        title = self.background()[0]["title"]
+        self.assertEqual(title, "First line of the goal with spaces")
+        self.nova.write("DELETE FROM async_delegations")
+        self.nova.delegation("deleg_t2", "w" * 300)
+        title = self.background()[0]["title"]
+        self.assertEqual((len(title), title[-3:]), (120, "..."))
+        self.nova.write("DELETE FROM async_delegations")
+        self.nova.delegation("deleg_t3", "Use key sk-abcdefghijklmnopqrstuvwxyz123456 to call it")
+        self.assertNotIn("abcdefghij", self.background()[0]["title"])
+        self.nova.write("DELETE FROM async_delegations")
+        self.nova.delegation("deleg_t4", "  \n ")
+        self.assertEqual(self.background()[0], {"count": 1}, "Nothing usable: no title")
+
+    def test_an_older_hermes_without_background_records_adds_nothing(self):
+        self.nova.write("DROP TABLE async_delegations")
+        self.assertEqual(self.background(), (None, "idle"), "No table, no processes.json, no cron folder")
+        self.nova.checkpoint(process_entry("proc_ok", "make", live_owner()))
+        (self.nova.home / "cron").mkdir()
+        (self.nova.home / "cron" / "executions.db").write_bytes(b"not a database")
+        self.assertEqual(self.background(), ({"count": 1, "title": "make"}, "idle"),
+                         "An unreadable ledger leaves out only itself")
+
+
 class AgentsActivityRouteTests(unittest.TestCase):
     def setUp(self):
         self.fixture = native_fixtures.NativeAPITests()
@@ -245,10 +407,24 @@ class AgentsActivityRouteTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(result.json(), {"agents": [{"agentId": "default", "state": "working", "tool": "web_search"}]})
         self.assertEqual(result.headers["cache-control"], "no-store")
-        read.assert_called_once_with(["default", "nova"])
+        read.assert_called_once_with(["default", "nova"], background=True)
         for body in ({}, {"agentIds": []}, {"agentIds": ["../etc"]}, {"agentIds": ["default"], "sessionId": "x"},
                      {"agentIds": [f"a{index}" for index in range(65)]}, {"agentIds": "default"}):
             self.assertEqual(self.call(body).status_code, 422, body)
+
+    def test_background_is_asked_for_only_when_the_host_lists_it(self):
+        client = route_client(("native-context-v1", agents_activity.CAPABILITY))
+        self.addCleanup(client.stop)
+        headers = {"If-Match": client.etag, "X-Loopdy-Request-ID": str(uuid.uuid4())}
+        with patch.object(agents_activity, "activity", return_value=[]) as read:
+            client.post(PREFIX + "/agents/activity", json={"agentIds": ["nova"]}, headers=headers)
+            read.assert_called_once_with(["nova"], background=False)
+        newer = route_client(("native-context-v1", agents_activity.CAPABILITY, agents_background.CAPABILITY))
+        self.addCleanup(newer.stop)
+        headers = {"If-Match": newer.etag, "X-Loopdy-Request-ID": str(uuid.uuid4())}
+        with patch.object(agents_activity, "activity", return_value=[]) as read:
+            newer.post(PREFIX + "/agents/activity", json={"agentIds": ["nova"]}, headers=headers)
+            read.assert_called_once_with(["nova"], background=True)
 
     def test_real_read_of_the_serving_agent(self):
         agents_activity.forget()
