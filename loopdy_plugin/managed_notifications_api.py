@@ -44,6 +44,14 @@ class WorkflowAlertsBody(BaseModel):
     cancelled: StrictBool
 
 
+class AlertKindsBody(BaseModel):
+    """Kinds of alert a phone can turn off. All three are sent together; each starts on."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    scheduledTasks: StrictBool
+    deliveries: StrictBool
+    groupChats: StrictBool
+
+
 class ChannelRulesBody(BaseModel):
     """Which channels alert this phone (notification_channels.py): a choice for each channel it has seen,
     and ``other`` for the rest. bighelp itself always alerts."""
@@ -58,6 +66,7 @@ class PreferencesBody(VersionedBody):
     # The phone opens a scheduled task's alert in the job's chat or on the job (scheduled_links.py).
     scheduledLinks: StrictBool | None = None
     channels: ChannelRulesBody | None = None
+    kinds: AlertKindsBody | None = None
 
 
 class WorkBody(VersionedBody):
@@ -134,13 +143,15 @@ def preferences(grant_id: str):
 @router.put("/enrollments/{grant_id}/preferences")
 def set_preferences(grant_id: str, body: PreferencesBody):
     """This phone's alert choices for the host: peer chats (agents talking to each other) start off,
-    workflow alerts (needs you, succeeded, failed, cancelled) start on, scheduled links start off."""
+    workflow alerts (needs you, succeeded, failed, cancelled) start on, scheduled links start off, and
+    channels and kinds (scheduled tasks, deliveries, group chats) start on. Sections left out stay as they are."""
     workflows = body.workflows.model_dump() if body.workflows is not None else None
     channels = body.channels.model_dump() if body.channels is not None else None
+    kinds = body.kinds.model_dump() if body.kinds is not None else None
     return _call(lambda: get_managed_notifications().set_preferences(grant_id, peer_chats=body.peerChats,
                                                                       workflows=workflows,
                                                                       scheduled_links=body.scheduledLinks,
-                                                                      channels=channels))
+                                                                      channels=channels, kinds=kinds))
 
 
 @router.get("/enrollments/{grant_id}/channels")

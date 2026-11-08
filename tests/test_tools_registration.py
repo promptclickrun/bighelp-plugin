@@ -141,6 +141,11 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertIn("Only publish what the user asked you to surface", description)
                 self.assertIn("Never create schedules or posts on your own initiative", description)
                 continue
+            if tool_name == "bighelp_send_notification":
+                from loopdy_plugin.notify_tool import PARAMETERS as NOTIFY_PARAMETERS
+                self.assertEqual(renderer_schema["parameters"], NOTIFY_PARAMETERS)
+                self.assertIn("already notifies them", description)
+                continue
             if tool_name == "bighelp_people":
                 from loopdy_plugin.people import TOOL_PARAMETERS as PEOPLE_PARAMETERS
                 self.assertEqual(renderer_schema["parameters"], PEOPLE_PARAMETERS)

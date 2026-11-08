@@ -163,6 +163,10 @@ _PEER_QUIET_EVENTS = frozenset({"session.completed", "session.failed", "subagent
 # Hermes' signature on a message one agent here sends another (tools/bot_mode_dm.py). The handle
 # is the sender's profile, @hermes for the default one; a relayed `@x@peer` isn't from this computer.
 _AGENT_MESSAGE = re.compile(r"^Message from [^\n()]{1,80}\(@([A-Za-z0-9][A-Za-z0-9_-]{0,63})\):")
+# What a phone can turn off, by its name in the preferences and its column in `alert_kinds`.
+_ALERT_KINDS = {"scheduledTasks": "scheduled_tasks", "deliveries": "deliveries", "groupChats": "group_chats"}
+# `bighelp_send_notification`: at most this many a profile sends in an hour.
+_DELIVERY_LIMIT, _DELIVERY_WINDOW_SECONDS = 10, 3600
 _GROUP_CHAT_PASS = re.compile(r"\(?\s*pass\s*\)?\.?", re.IGNORECASE)
 # Hermes' turn-end file-mutation verifier footer (run_agent.py): a "⚠️ File-mutation verifier:"
 # line plus indented "•" bullets, appended AFTER the model's final line. It is runtime machinery,
@@ -372,6 +376,8 @@ class ManagedNotifications:
         # Turns whose question alert already went out from the clarify tool hook, so the
         # messaging adapter's own presentation of the same question isn't a second alert.
         self._asked: OrderedDict[tuple[str, str, str], float] = state.setdefault("asked", OrderedDict())
+        # Whether each recent turn was started by another agent's signed message (see _note_turn_start).
+        self._agent_started: OrderedDict[tuple[str, str, str], bool] = state.setdefault("agent_started", OrderedDict())
         # Agents (and why) whose alerts use bighelp's picture, so the log says so once, not per alert.
         self._default_avatar_logged: set[tuple[str, str]] = state.setdefault("default_avatar_logged", set())
         self._child_owners: dict[tuple[str, str, str], str] = state["child_owners"]
@@ -398,6 +404,9 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS workflow_alerts(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, needs_you INTEGER NOT NULL, succeeded INTEGER NOT NULL, failed INTEGER NOT NULL, cancelled INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS workflow_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_seq INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS scheduled_links(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS alert_kinds(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, scheduled_tasks INTEGER NOT NULL, deliveries INTEGER NOT NULL, group_chats INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS delivery_log(profile TEXT NOT NULL, sent_at INTEGER NOT NULL);
+                CREATE INDEX IF NOT EXISTS delivery_log_profile ON delivery_log(profile,sent_at);
                 CREATE TABLE IF NOT EXISTS channel_rules(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, rules TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS quiet_hours(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, time_zone TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
@@ -452,7 +461,7 @@ class ManagedNotifications:
         return {"version": 1, "hostKeyId": self.key_id, "hostPublicKey": self.public_key,
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
                 "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True, "scheduledLinks": True,
-                                                                "channels": True},
+                                                                "channels": True, "kinds": True},
                 "richLiveActivitySupported": True, "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
@@ -613,20 +622,29 @@ class ManagedNotifications:
             db.execute("DELETE FROM quiet_hours WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM scheduled_links WHERE grant_id=?", (grant_id,))
             db.execute("DELETE FROM channel_rules WHERE grant_id=?", (grant_id,))
+            db.execute("DELETE FROM alert_kinds WHERE grant_id=?", (grant_id,))
         return {"version": 1, "state": "removed", "grantId": grant_id}
 
     def preferences(self, grant_id: str):
         """This phone's alert preferences for the host. Peer chats start off; workflow alerts start on.
         Scheduled links start off: a phone turns them on when it can open them (scheduled_links.py).
-        Every channel starts on (notification_channels.py)."""
+        Every channel starts on (notification_channels.py), and so does every alert kind."""
         self._grant(grant_id)
         with self._db() as db:
             row = db.execute("SELECT peer_chats FROM preferences WHERE grant_id=?", (grant_id,)).fetchone()
             workflows = self._workflow_alerts(db, grant_id)
+            kinds = self._alert_kinds(db, grant_id)
             links = db.execute("SELECT enabled FROM scheduled_links WHERE grant_id=?", (grant_id,)).fetchone()
             rules = self._channel_rules(db, grant_id)
         return {"version": 1, "peerChats": bool(row and row["peer_chats"]), "workflows": workflows,
-                "scheduledLinks": bool(links and links["enabled"]), "channels": rules.public()}
+                "scheduledLinks": bool(links and links["enabled"]), "channels": rules.public(), "kinds": kinds}
+
+    @staticmethod
+    def _alert_kinds(db, grant_id: str) -> dict[str, bool]:
+        """The kinds of alert this phone gets: scheduled tasks, deliveries (bighelp_send_notification)
+        and group chats. All start on."""
+        row = db.execute("SELECT * FROM alert_kinds WHERE grant_id=?", (grant_id,)).fetchone()
+        return {kind: bool(row[column]) if row else True for kind, column in _ALERT_KINDS.items()}
 
     @staticmethod
     def _channel_rules(db, grant_id: str) -> notification_channels.ChannelRules:
@@ -646,12 +664,15 @@ class ManagedNotifications:
         return {kind: bool(row[column]) if row else True for kind, column in _WORKFLOW_COLUMNS.items()}
 
     def set_preferences(self, grant_id: str, *, peer_chats: Any, workflows: Any = None, scheduled_links: Any = None,
-                        channels: Any = None):
+                        channels: Any = None, kinds: Any = None):
         self._grant(grant_id)
         if type(peer_chats) is not bool or (scheduled_links is not None and type(scheduled_links) is not bool):
             raise ManagedNotificationError("notification_preferences_invalid", 422)
         if workflows is not None and (not isinstance(workflows, dict) or set(workflows) != set(WORKFLOW_ALERT_KINDS)
                                       or any(type(value) is not bool for value in workflows.values())):
+            raise ManagedNotificationError("notification_preferences_invalid", 422)
+        if kinds is not None and (not isinstance(kinds, dict) or set(kinds) != set(_ALERT_KINDS)
+                                  or any(type(value) is not bool for value in kinds.values())):
             raise ManagedNotificationError("notification_preferences_invalid", 422)
         rules = None
         if channels is not None:
@@ -671,6 +692,9 @@ class ManagedNotifications:
             if scheduled_links is not None:
                 db.execute("INSERT INTO scheduled_links VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET enabled=excluded.enabled",
                            (grant_id, int(scheduled_links)))
+            if kinds is not None:
+                db.execute("INSERT OR REPLACE INTO alert_kinds VALUES(?,?,?,?)",
+                           (grant_id, *(int(kinds[kind]) for kind in _ALERT_KINDS)))
         return self.preferences(grant_id)
 
     def _quiet_window(self, grant_id: str, db=None) -> dict[str, Any] | None:
@@ -705,8 +729,26 @@ class ManagedNotifications:
                        (grant_id, int(value["enabled"]), value["startMinute"], value["endMinute"], value["timeZone"]))
         return self.quiet_hours(grant_id)
 
-    def _is_peer_chat(self, profile: str, session_id: str) -> bool:
-        """Agents talking to each other: Hermes' canonical Bot Chat session."""
+    def _note_turn_start(self, profile: str, session_id: str, turn_id: Any, message: Any):
+        """Remember whether another agent's signed message started this turn. Hermes hands the turn's
+        own message to pre_llm_call and post_llm_call, so no history row needs reading."""
+        if not isinstance(message, str) or not isinstance(turn_id, str) or not _ID.fullmatch(turn_id):
+            return
+        key = (profile, session_id, turn_id)
+        with self._lock:
+            self._agent_started[key] = _AGENT_MESSAGE.match(message.strip()) is not None
+            self._agent_started.move_to_end(key)
+            while len(self._agent_started) > 256:
+                self._agent_started.popitem(last=False)
+
+    def _is_peer_chat(self, profile: str, session_id: str, turn_id: str | None = None) -> bool:
+        """Agents talking to each other: a turn that another agent's message started. The Bot Chat is
+        also where a person talks to the agent, so a turn they started is an ordinary chat. When the
+        turn's message wasn't seen, Hermes' canonical Bot Chat session counts, as before."""
+        with self._lock:
+            started = self._agent_started.get((profile, session_id, turn_id))
+        if started is not None:
+            return started
         try:
             row = self._session(profile, session_id)
         except ManagedNotificationError:
@@ -1141,6 +1183,22 @@ class ManagedNotifications:
             logger.warning("Scheduled alert link unavailable; the alert names its run")
             return None
 
+    def _kind_is_off(self, profile: str, now: int, kind: str) -> bool:
+        """Whether any phone with this agent's alerts turned this kind off."""
+        with self._db() as db:
+            return db.execute(f"SELECT 1 FROM alert_kinds k JOIN grants g ON g.grant_id=k.grant_id WHERE k.{_ALERT_KINDS[kind]}=0 "
+                              "AND g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?",
+                              (now, profile)).fetchone() is not None
+
+    def _is_group_chat(self, profile: str, session_id: str) -> bool:
+        """Whether a session is a Group Chat member's turn. A session that can't be read isn't."""
+        try:
+            row = self.session_opener(profile, lambda db: db.get_session(session_id), read_only=True)
+        except Exception:
+            return False
+        source = row.get("source") if isinstance(row, dict) and row.get("id") == session_id else None
+        return isinstance(source, str) and source.strip().lower() == _GROUP_CHAT_PLATFORM
+
     def _filters_channels(self, profile: str, now: int) -> bool:
         """Whether any phone with this agent's alerts turned a channel off."""
         with self._db() as db:
@@ -1174,7 +1232,10 @@ class ManagedNotifications:
     def _queue_event(self, profile: str, session_id: str, turn_id: str, event_type: str,
                      *, tool_call_id: str | None = None, event_key: str = "",
                      content_text: str, title: str | None = None, workflow_kind: str | None = None,
-                     alerted_devices: set[str] | None = None, sender: str | None = None):
+                     alerted_devices: set[str] | None = None, sender: str | None = None,
+                     delivery: bool = False) -> int:
+        """Queues one alert for each phone that gets it and returns how many. A delivery is
+        bighelp_send_notification's alert: it files under scheduled.completed, and its link opens the chat."""
         approval = event_type == _APPROVAL_EVENT
         tool_call_id = _identifier(tool_call_id) if approval else ""
         content_text = self._rich_text(content_text)
@@ -1190,10 +1251,18 @@ class ManagedNotifications:
                 agent_name = profile_display_name(sender)
         now = int(self.clock())
         queued: list[str] = []
-        link = self._scheduled_link(profile, session_id) if event_type.startswith("scheduled.") else None
+        if delivery:
+            link = scheduled_links.CHAT_PREFIX + session_id if self._openable_chat(profile, session_id) is True else None
+        else:
+            link = self._scheduled_link(profile, session_id) if event_type.startswith("scheduled.") else None
+        # Kinds a phone can turn off. Questions and approvals always alert, even from a group chat.
+        scheduled_run = event_type.startswith("scheduled.") and not delivery
+        group_chat = (workflow_kind is None and sender is None and not delivery
+                      and event_type not in (_APPROVAL_EVENT, _CLARIFICATION_EVENT)
+                      and self._kind_is_off(profile, now, "groupChats") and self._is_group_chat(profile, session_id))
         # Agents talking to each other alert only phones that asked for it (Peer chats).
         peer_chat = sender is not None or (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
-                                           and self._is_peer_chat(profile, session_id))
+                                           and self._is_peer_chat(profile, session_id, turn_id))
         # Where the alert comes from, worked out only when a phone here picks its channels. Workflows are
         # bighelp's own and have their own switches.
         filtering = workflow_kind is None and sender is None and self._filters_channels(profile, now)
@@ -1205,6 +1274,11 @@ class ManagedNotifications:
                 grant = json.loads(row["public_json"])
                 if event_type not in grant["eventTypes"]: continue
                 if filtering and not self._channel_rules(db, grant["grantId"]).allows(channels): continue
+                if scheduled_run or delivery or group_chat:
+                    kinds = self._alert_kinds(db, grant["grantId"])
+                    if (scheduled_run and not kinds["scheduledTasks"] or delivery and not kinds["deliveries"]
+                            or group_chat and not kinds["groupChats"]):
+                        continue
                 if peer_chat and not db.execute("SELECT 1 FROM preferences WHERE grant_id=? AND peer_chats=1", (grant["grantId"],)).fetchone():
                     continue
                 if workflow_kind is not None:
@@ -1272,6 +1346,40 @@ class ManagedNotifications:
         # Approvals wait their grace period and stay with the sender that owns them.
         if queued and self._send_on_queue is not None:
             self._send_on_queue(lambda: self._send_now(queued))
+        return len(queued)
+
+    def notify(self, profile: str, session_id: str, title: str, message: str) -> dict[str, Any]:
+        """An agent's own alert (bighelp_send_notification): the phones enrolled for this agent get it now,
+        without a scheduled task. Returns {"sent": devices} or {"sent": 0, "reason": plain words}. A phone
+        that turned Deliveries off, or is in its Quiet Hours, follows its own choice like any alert."""
+        profile = _identifier(profile, _PROFILE)
+        session_id = session_id if _ID.fullmatch(session_id or "") else f"delivery.{uuid.uuid4().hex}"
+        now = int(self.clock())
+        with self._db() as db:
+            devices = [row for row in db.execute(
+                "SELECT g.grant_id,g.public_json FROM grants g WHERE g.state='active' AND g.expires>? "
+                "AND json_extract(g.public_json,'$.profile')=?", (now, profile)).fetchall()
+                if "scheduled.completed" in json.loads(row["public_json"])["eventTypes"]]
+            if not devices:
+                return {"sent": 0, "reason": "No phone has notifications on for this agent."}
+            if not any(self._alert_kinds(db, row["grant_id"])["deliveries"] for row in devices):
+                return {"sent": 0, "reason": "Every phone turned off Deliveries for this agent."}
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM delivery_log WHERE sent_at<=?", (now - _DELIVERY_WINDOW_SECONDS,))
+            if db.execute("SELECT COUNT(*) FROM delivery_log WHERE profile=?", (profile,)).fetchone()[0] >= _DELIVERY_LIMIT:
+                return {"sent": 0, "reason": f"This agent already sent {_DELIVERY_LIMIT} notifications in the last hour. "
+                                             "Try again later."}
+            reservation = db.execute("INSERT INTO delivery_log VALUES(?,?)", (profile, now)).lastrowid
+        unique = uuid.uuid4().hex
+        sent = 0
+        try:
+            sent = self._queue_event(profile, session_id, f"delivery.{unique}", "scheduled.completed",
+                                     event_key=unique, content_text=f"{title} — {message}", delivery=True)
+        finally:
+            if not sent:  # A notification nobody got doesn't count toward the hour's limit.
+                with self._db() as db:
+                    db.execute("DELETE FROM delivery_log WHERE rowid=?", (reservation,))
+        return {"sent": sent} if sent else {"sent": 0, "reason": "No phone could be alerted right now."}
 
     def observe(self, hook: str, *, profile: str, **payload: Any):
         """Synchronous stock hook: persist only; never perform network I/O here."""
@@ -1304,6 +1412,8 @@ class ManagedNotifications:
             if not db.execute("SELECT 1 FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (int(self.clock()), profile)).fetchone(): return
         if hook == "pre_tool_call" and payload.get("tool_name") == "clarify" and not child_hook:
             self._observe_question(profile, session_id, payload)
+        if hook in ("pre_llm_call", "post_llm_call") and not child_hook:
+            self._note_turn_start(profile, session_id, payload.get("turn_id"), payload.get("user_message"))
         if hook == "pre_llm_call" and not child_hook:
             try:
                 self._observe_agent_messages(profile, session_id, payload)
