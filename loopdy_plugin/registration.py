@@ -96,6 +96,9 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     # HTML apps: interactive pages the person opens from a card in the chat.
     from .html_apps import register as register_html_apps
     register_html_apps(ctx)
+    # An agent tells the person something now, when they aren't in the chat.
+    from .notify_tool import register as register_notify_tool
+    register_notify_tool(ctx)
     # Teamwork (opt-in from the app): keeps every agent's team brief current as agents come and go.
     from .team import register as register_team
     register_team(ctx)

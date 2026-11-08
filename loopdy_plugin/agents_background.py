@@ -304,9 +304,11 @@ def _read_json_file(path: Path) -> Any:
         return None
 
 
-def running_commands(home: Path, db: sqlite3.Connection | None, *, with_session: bool = False) -> list[Work]:
-    """Background commands running now: `processes.json` entries whose process is alive with the recorded
-    start time. Commands a subagent started (`sa-` task IDs) are the subagent's work, as Hermes treats them."""
+def running_command_entries(home: Path, db: sqlite3.Connection | None, *,
+                            with_session: bool = False) -> list[tuple[Work, dict]]:
+    """Background commands running now, each with its `processes.json` entry: entries whose process is alive
+    with the recorded start time. Commands a subagent started (`sa-` task IDs) are the subagent's work, as
+    Hermes treats them."""
     entries = _read_json_file(home / "processes.json")
     work = []
     for entry in (entries if isinstance(entries, list) else [])[:MAX_LIVE]:
@@ -327,9 +329,14 @@ def running_commands(home: Path, db: sqlite3.Connection | None, *, with_session:
         if not _alive(entry.get("pid"), entry.get("host_start_time"), unreadable_is_alive=True):
             continue
         session = _session(db, parent) if with_session else None
-        work.append(Work(f"process:{process_id}", "command", "running", _command(entry.get("command")),
-                         _epoch(entry.get("started_at")), None, None, session))
+        work.append((Work(f"process:{process_id}", "command", "running", _command(entry.get("command")),
+                          _epoch(entry.get("started_at")), None, None, session), entry))
     return work
+
+
+def running_commands(home: Path, db: sqlite3.Connection | None, *, with_session: bool = False) -> list[Work]:
+    """Background commands running now."""
+    return [item for item, _entry in running_command_entries(home, db, with_session=with_session)]
 
 
 def finished_commands(db: sqlite3.Connection, since: float) -> list[Work]:
@@ -452,6 +459,23 @@ def cron_runs(home: Path, db: sqlite3.Connection | None, since: float | None, *,
         work.append(Work(f"cron:{job_id}:{int(started)}", "scheduled", final, names.get(job_id, ""), started,
                          ended if final != "running" else None, None, session))
     return work
+
+
+def cron_job_runs(home: Path, job_id: str) -> list[dict[str, Any]]:
+    """One job's newest ledger rows as `{start, end, error}`: `start` (whole epoch seconds) is the one in the
+    run's item ID, `end` is when it finished and `error` is the ledger's own word, as written."""
+    path = home / "cron" / "executions.db"
+    if path.is_symlink() or not path.is_file() or not JOB_ID.fullmatch(job_id):
+        return []
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)) as ledger:
+        rows = _rows(ledger, """SELECT claimed_at, started_at, finished_at, error FROM executions
+                                WHERE job_id = ? AND status != 'missed' ORDER BY claimed_at DESC LIMIT ?""",
+                     (job_id, MAX_ROWS))
+    runs = []
+    for claimed, begun, finished, error in rows:
+        if (started := _stamp(begun) or _stamp(claimed)) is not None:
+            runs.append({"start": int(started), "end": _stamp(finished), "error": error})
+    return runs
 
 
 # --- Together --------------------------------------------------------------------------------------------

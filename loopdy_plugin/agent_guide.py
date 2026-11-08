@@ -38,6 +38,8 @@ files (files: absolute paths).
 "local". When it runs, bighelp notifies the user with the run's reply (if they turned on notifications \
 for you); "local" stops Hermes also posting it to another channel. Write the job so its reply is the \
 message, most important words first. Don't deliver to "loopdy"; that's the retired Link inbox.
+- To tell the user something now when they're not in the chat (a long job finished): \
+bighelp_send_notification. Replies already notify them.
 - iphone_health, iphone_calendar, iphone_reminders, iphone_location, iphone_contacts, iphone_photos, \
 iphone_geofences, iphone_alarms, iphone_music, iphone_focus, iphone_shortcuts: use when asked, app open. \
 One that's off asks the user with a card, so call it; don't send them to Settings. After \

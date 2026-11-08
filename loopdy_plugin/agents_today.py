@@ -15,6 +15,8 @@ from .agents_background import Work
 
 
 CAPABILITY = "native-agents-today-v1"
+# One item opened for its steps or output (`agents_today_detail`).
+DETAIL_CAPABILITY = "native-agents-today-detail-v1"
 MAX_ITEMS = 200
 # The app lists a week, grouped by day: `since` may be up to 31 days back. In the future it may be up to
 # 48 hours ahead (around midnight a fast phone clock is a day ahead) and is read as now.
