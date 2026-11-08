@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sys
+import time
 from typing import Annotated, Any, Literal, TypeVar
 
 from fastapi import APIRouter, Request
@@ -738,6 +739,33 @@ async def agents_activity(request: Request) -> Response:
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     return _response(value, owner, request_id, maximum=32_768)
+
+
+class _AgentsToday(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    # Epoch seconds: the start of the phone's day, in its time zone.
+    since: float = Field(allow_inf_nan=False)
+
+
+@router.post("/agents/today")
+async def agents_today(request: Request) -> Response:
+    """What an agent's background work did since the phone's start of day (subagents, commands, scheduled
+    tasks), read-only."""
+    from . import agents_today as today
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if today.CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "agents_today_unavailable", "Today's work isn't available on this host.")
+    body = await _body(request, _AgentsToday)
+    if not today.valid_since(body.since, time.time()):
+        raise NativeAPIError(422, "invalid_request", "The native request is invalid.")
+    value = await run_in_threadpool(today.today, body.agentId, body.since)
+    if value is None:
+        raise NativeAPIError(404, "agent_not_found", "That agent isn't on this computer.")
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=262_144)
 
 
 class _CoreFiles(BaseModel):
