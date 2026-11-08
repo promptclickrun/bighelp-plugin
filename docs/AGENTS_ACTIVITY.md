@@ -91,8 +91,8 @@ The row has `background` only when the count is more than zero:
   (or the start of its prompt, when it has no name).
   Titles are one line, and pass through the redaction of Hermes (with URL
   credentials too, when this Hermes can), and show file names only: a path
-  such as `/home/sam/build.py` is `build.py`. The row has no `title` when no usable
-  title exists, and also when the text cannot be redacted: the plugin never
+  such as `/home/sam/build.py` is `build.py`. The row has no `title` when no
+  usable title exists, and also when the text cannot be redacted: the plugin never
   sends text that it could not redact. On this row a title has at most 60
   characters, so that 64 agents fit in one answer. The Today route keeps 120.
 - Only the feature in the context list turns this on. A request to a plugin
