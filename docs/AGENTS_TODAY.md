@@ -148,3 +148,139 @@ other records still give theirs.
   the item.
 - A command that ended is only in the list when its notice is in a chat that
   was active in the window. A chat that was quiet all day is not read.
+
+## Open one item
+
+`POST /api/plugins/loopdy/native/agents/today/detail`, feature
+`native-agents-today-detail-v1`, with the usual native headers. The app calls
+it when a person opens an item of the list. The route has the same rules as
+the list: it only reads, it has no side effects, and Hermes never changes.
+
+Request:
+
+```json
+{"agentId": "nova", "id": "delegation:abc123"}
+```
+
+- `agentId`: one profile ID.
+- `id`: an item ID that the list returned. The body has no other fields.
+  An ID that is not of the four kinds above is `422 invalid_request`.
+
+Response: the same `item` as the list gives for that ID, and one more object.
+The object is `subagent`, `command` or `scheduled`, as the kind of the item
+says. Each field in it can be absent.
+
+```json
+{"item": {"id": "delegation:abc123", "kind": "subagent", "title": "Find a ryokan",
+          "state": "running", "startedAt": 1794091440.2},
+ "subagent": {
+   "goal": "Find a ryokan near Kyoto station",
+   "model": "gpt-6-luna",
+   "summary": "The answer of the subagent, as Markdown",
+   "error": "One line",
+   "steps": [
+     {"at": 1794091442.0, "kind": "tool", "tool": "web_search",
+      "preview": "kyoto station ryokan", "state": "done"},
+     {"at": 1794091450.0, "kind": "message", "preview": "I found two places."},
+     {"at": 1794091460.0, "kind": "tool", "tool": "read_file",
+      "preview": "notes.md", "state": "failed"}],
+   "stepsTruncated": false},
+ "command": {"command": "npm run dev", "exitCode": 0,
+             "output": "The newest output", "outputTruncated": true},
+ "scheduled": {"job": "Morning brief", "status": "done",
+               "output": "The output of the run, as Markdown", "error": "One line"}}
+```
+
+The answer has `item` and exactly one of `subagent`, `command` and `scheduled`.
+
+### Subagent
+
+- `goal`: the goal text (at most 4,000 characters). For a batch, the goals of
+  the batch, one after the other.
+- `model`: the model that the subagent ran on.
+- `summary`: the answer of the subagent as Markdown (at most 16,000
+  characters), when it has finished. For a batch, the answers of its subagents
+  in order, each under its goal.
+- `error`: one line (at most 300 characters). It is there when a subagent
+  failed.
+- `steps`: what the subagent did, oldest first. At most 300. When there were
+  more, the newest 300 stay and `stepsTruncated` is `true`.
+  - `kind` is `tool`, `message` or `thinking`. A `message` is text that the
+    subagent wrote between tools (the first 300 characters). `thinking` is only
+    there when Hermes saved the reasoning. The final answer is the `summary`,
+    never a step.
+  - For a tool: `tool` is the name of the Hermes tool. `preview` is the one
+    argument that tells most: a query, a web address as host and path (no
+    scheme, no credentials, no query), a file name, or the first 80 characters
+    of a command.
+  - `state` is `done` or `failed`, from the result that Hermes saved (a failed
+    terminal exit code, an `error`, `success: false`, a failed status, or a
+    result that starts with "Error:"). It is `running` when no result has come
+    yet and the subagent is still running. For a subagent that has ended, a
+    call with no result has no `state`.
+
+The plugin reads what Hermes saved for the subagent while it works, so a
+running subagent shows its steps so far.
+
+Hermes does not write which chats belong to a delegation. The plugin finds the
+chats of the subagents (`source` `subagent`) like this: they are under the chat
+that started the work, they began at the time of the work, and their first
+message is one of the goals of the delegation. A subagent chat that Hermes
+compressed goes on in a new chat with the same `_subagent_id`, and the plugin
+follows it. The steps of all the subagents of a batch are in one list, in time
+order. Two delegations that began together with the same goal in the same chat
+cannot be told apart: each shows the steps of both.
+
+### Command
+
+- A command that runs now: `command` is the command line. `output` is the end
+  of its output file (`logs/process-output/<id>.log` in the home of the agent).
+  The plugin reads at most the last 64 KiB, and `outputTruncated` says that
+  more came before. Hermes only keeps an output file for a command that a
+  worker started. For any other command, there is no `output`. A command that
+  runs has no `exitCode`.
+- A command that ended: the plugin reads the notice that Hermes saved in the
+  chat. It has `command`, `exitCode` (only when the notice has one) and
+  `output`. When Hermes cut the output of the notice, or the plugin cut it to
+  16,000 characters, `outputTruncated` is `true`. A notice for several commands
+  at once has only `output`.
+- `output` is the newest text, at most 16,000 characters. It has no ANSI
+  codes. A line that a program wrote again (a progress bar) shows its last
+  state.
+
+### Scheduled task
+
+- `job`: the name of the job, when it has one.
+- `status`: the state of the item, as the ledger of Hermes says it. It is
+  never a guess.
+- `output`: the output of the run as Markdown (at most 16,000 characters).
+  It is the final answer of the chat of the run. When the run has no chat,
+  it is the response in the output file that Hermes saved. A file does not
+  say which run it belongs to, so the plugin takes it only when the run is
+  the one that finished nearest to the file, within 60 seconds. It never
+  shows a neighbour's file. A run that is going has no `output`.
+- `error`: the error that the ledger has for the run, on one line.
+
+### Privacy
+
+All text goes through the same redaction as the list, with the same
+file-name rule: no folder of the computer shows (`python /home/sam/build.py`
+is `python build.py`). This holds for the goal, the summary, every preview,
+and all output. When text cannot be redacted, the plugin leaves that field
+out. It never sends the raw text. Hermes writes the files that the plugin
+reads. The plugin reads an output file only when it is a `.log` file, not a
+link, in the `logs/process-output` folder of the agent.
+
+### Limits and errors
+
+- The answer is kept for 2 seconds for each agent and item.
+- The response fits in 512 KiB. When a long text makes it larger, the oldest
+  steps go first and `stepsTruncated` is `true`.
+- `404 agent_not_found`: the agent is not a profile on this host.
+- `404 activity_not_found`: the agent has no such item. The item can be gone
+  (a command that stopped, a record that Hermes removed), or the plugin cannot
+  read it now. The answer does not say which.
+- `422 invalid_request`: a bad body.
+- `412 context_changed`: the context changed while the route read.
+- `503 agents_today_detail_unavailable`: the feature is not in the context
+  list.

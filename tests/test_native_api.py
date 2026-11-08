@@ -246,7 +246,7 @@ class NativeAPITests(unittest.TestCase):
             expected.append("native-html-apps-v1")
         from loopdy_plugin.agents_background import available as background_available
         if background_available():
-            expected.extend(("native-agents-background-v1", "native-agents-today-v1"))
+            expected.extend(("native-agents-background-v1", "native-agents-today-v1", "native-agents-today-detail-v1"))
         expected.append("native-computer-screen-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")

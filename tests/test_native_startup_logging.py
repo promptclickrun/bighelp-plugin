@@ -55,6 +55,7 @@ PROCESS_FEATURES = (
     "native-html-apps-v1",
     "native-agents-background-v1",
     "native-agents-today-v1",
+    "native-agents-today-detail-v1",
     "native-computer-screen-v1",
 )
 
@@ -153,6 +154,7 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.agents_background = module("loopdy_plugin.agents_background", CAPABILITY=PROCESS_FEATURES[60],
                                         available=Mock(return_value=True))
         self.agents_today = module("loopdy_plugin.agents_today", CAPABILITY=PROCESS_FEATURES[61],
+                                   DETAIL_CAPABILITY=PROCESS_FEATURES[62],
                                    available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,

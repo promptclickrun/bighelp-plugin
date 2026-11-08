@@ -770,6 +770,35 @@ async def agents_today(request: Request) -> Response:
     return _response(value, owner, request_id, maximum=524_288)
 
 
+class _AgentsTodayDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    # An item ID that `agents/today` returned.
+    id: str = Field(pattern=r"^(?:delegation|process|message|cron):[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
+
+
+@router.post("/agents/today/detail")
+async def agents_today_detail(request: Request) -> Response:
+    """One item of an agent's Today list opened: a subagent's steps, a command's output or a scheduled run's
+    output, read-only."""
+    from . import agents_today_detail as opened
+    from .agents_today import DETAIL_CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if DETAIL_CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "agents_today_detail_unavailable", "This work can't be opened on this host.")
+    body = await _body(request, _AgentsTodayDetail)
+    try:
+        value = await run_in_threadpool(opened.detail, body.agentId, body.id)
+    except opened.AgentNotFound:
+        raise NativeAPIError(404, "agent_not_found", "That agent isn't on this computer.") from None
+    except opened.ActivityNotFound:
+        raise NativeAPIError(404, "activity_not_found", "That work isn't there any more.") from None
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=524_288)
+
+
 class _Empty(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
