@@ -801,6 +801,28 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.drain_pending()
         self.assertEqual(self.events_sent(), [])
 
+    def test_workflow_stage_turns_in_the_gateway_never_alert(self):
+        # Newer Hermes runs the stage in the profile's gateway, without the worker's env. The turn's first
+        # message is the brief of a live attempt, and that marks the session.
+        sys.modules.pop("_bighelp_workflow_stage_sessions", None)
+        self.addCleanup(sys.modules.pop, "_bighelp_workflow_stage_sessions", None)
+        brief = "# Workflow stage: Draft\n\nWrite it.\n"
+        with patch("loopdy_plugin.workflow_runner._is_live_brief", side_effect=lambda message: message == brief):
+            self.service.observe("pre_llm_call",profile="default",session_id="native-session",turn_id="turn-a",
+                                 user_message=brief,platform="cli")
+            self.service.observe("post_llm_call",profile="default",session_id="native-session",turn_id="turn-a",
+                                 assistant_response="Draft written.",platform="cli")
+            self.service.observe("on_session_end",profile="default",session_id="native-session",turn_id="turn-a",
+                                 completed=True,platform="cli")
+            # A chat whose message only looks like a brief still alerts.
+            self.service.observe("pre_llm_call",profile="default",session_id="peer-session",turn_id="turn-b",
+                                 user_message="# Workflow stage: Draft\n\nNot running.",platform="cli")
+            self.service.observe("post_llm_call",profile="default",session_id="peer-session",turn_id="turn-b",
+                                 assistant_response="Done.",platform="cli")
+        self.service.drain_pending()
+        self.assertEqual([e["sessionReference"] for e in self.events_sent()],
+                         [session_reference("default", "peer-session")])
+
     def workflow_journal(self):
         """A workflow store's run journal, as the plugin's workflow code writes it."""
         root = Path(self.temp.name) / "workflows"

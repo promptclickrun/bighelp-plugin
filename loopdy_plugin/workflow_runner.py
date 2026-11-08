@@ -16,19 +16,97 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from .workflow_store import clean_text, open_private, secure_dir
+from .workflow_store import LIVE_ATTEMPT_STATES, clean_text, open_private, secure_dir
 
 
 REPORT_ENV = "HERMES_QUIET_TURN_REPORT_FILE"
 SESSION_SOURCE = "workflow"
+# Hermes that runs chat turns in its gateway takes only the gateway's own sources. `tool` is an unattended run
+# that Hermes and bighelp keep out of session lists.
+GATEWAY_SOURCE = "tool"
+BRIEF_HEADING = "# Workflow stage: "
+MAX_BRIEF_BYTES = 1024 * 1024
+_STAGE_SESSIONS = "_bighelp_workflow_stage_sessions"
+_MAX_STAGE_SESSIONS = 256
 
 
-def in_workflow_stage(environ: Mapping[str, str] = os.environ) -> bool:
-    """This Hermes process runs one stage of a workflow (`worker_env` sets the session source).
+def in_workflow_stage(session_id: str = "", user_message: Any = None, *,
+                      environ: Mapping[str, str] = os.environ) -> bool:
+    """This turn is one stage of a workflow. Its turns are machinery: the run itself alerts when it needs the
+    person or ends.
 
-    Its turns are machinery: the run itself alerts when it needs the person or ends.
+    Older Hermes runs the stage's turn in the `hermes chat` process, which `worker_env` marks. Newer Hermes runs
+    it in the profile's gateway, where that env never arrives: there the stage's session is known by its first
+    message, the brief of an attempt that is running now (`note_stage_session`).
     """
-    return environ.get("HERMES_SESSION_SOURCE", "").strip() == SESSION_SOURCE
+    if environ.get("HERMES_SESSION_SOURCE", "").strip() == SESSION_SOURCE:
+        return True
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    if user_message is not None:
+        note_stage_session(session_id, user_message)
+    registry = _stage_registry()
+    with registry.lock:
+        return session_id in registry.sessions
+
+
+def _stage_registry() -> Any:
+    """One set of stage sessions for every copy of the plugin in this process (see AGENTS.md)."""
+    registry = sys.modules.get(_STAGE_SESSIONS)
+    if registry is None:
+        import threading
+        import types
+        candidate = types.ModuleType(_STAGE_SESSIONS)
+        candidate.lock, candidate.sessions = threading.Lock(), {}
+        registry = sys.modules.setdefault(_STAGE_SESSIONS, candidate)
+    return registry
+
+
+def note_stage_session(session_id: str, user_message: Any) -> bool:
+    """Remembers `session_id` as a stage when `user_message` is the brief of a live attempt."""
+    if not isinstance(user_message, str) or not user_message.startswith(BRIEF_HEADING):
+        return False
+    registry = _stage_registry()
+    with registry.lock:
+        if session_id in registry.sessions:
+            return True
+    if not _is_live_brief(user_message):
+        return False
+    with registry.lock:
+        registry.sessions[session_id] = True
+        while len(registry.sessions) > _MAX_STAGE_SESSIONS:
+            registry.sessions.pop(next(iter(registry.sessions)))
+    return True
+
+
+def _is_live_brief(message: str) -> bool:
+    try:
+        from .workflow_api import workflows_root
+        database = workflows_root() / "workflows.sqlite3"
+        if not database.is_file():
+            return False
+        import sqlite3
+        connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            marks = ",".join("?" * len(LIVE_ATTEMPT_STATES))
+            folders = [row[0] for row in connection.execute(
+                f"SELECT dir FROM attempts WHERE state IN ({marks}) LIMIT 64", LIVE_ATTEMPT_STATES)]
+        finally:
+            connection.close()
+    except Exception:
+        return False
+    wanted = message.strip()
+    for folder in folders:
+        try:
+            with open(Path(folder) / "brief.md", "rb") as handle:
+                brief = handle.read(MAX_BRIEF_BYTES + 1)
+        except (OSError, TypeError):
+            continue
+        if len(brief) <= MAX_BRIEF_BYTES and brief.decode("utf-8", "replace").strip() == wanted:
+            return True
+    return False
+
+
 # Hermes' own default toolset list is the whole platform. A stage with no tools gets only the to-do tool.
 EMPTY_TOOLSET = "todo"
 MAX_REPORT_BYTES = 4 * 1024 * 1024
@@ -58,6 +136,8 @@ def profile_home(hermes_root: Path, profile: str) -> Path | None:
 
 
 FULL_FEATURES = frozenset({"cli", "source", "toolsets", "query", "query_file", "format", "quiet", "report"})
+# Hermes runs chat turns in its gateway, and which of bighelp's sources that gateway takes.
+GATEWAY_FEATURES = frozenset({"gateway", "gateway_tool", "gateway_workflow"})
 # The stream runner needs all three; without them a stage runs as a plain `chat -q` turn (the text runner).
 STREAM_FEATURES = frozenset({"query_file", "format", "report"})
 MAX_INLINE_QUERY_BYTES = 96 * 1024
@@ -128,8 +208,9 @@ def worker_argv(base: list[str], profile: str, tools: list[str], features: froze
     if "cli" in features:
         argv.append("--cli")
     argv.append("chat")
-    if "source" in features:
-        argv += ["--source", SESSION_SOURCE]
+    source = stage_source(features)
+    if "source" in features and source:
+        argv += ["--source", source]
     if "toolsets" in features:
         argv += ["--toolsets", ",".join(tools) if tools else EMPTY_TOOLSET]
     if runner_mode(features) == "stream":
@@ -141,6 +222,14 @@ def worker_argv(base: list[str], profile: str, tools: list[str], features: froze
     if "quiet" in features:
         argv.append("-Q")
     return argv
+
+
+def stage_source(features: frozenset[str]) -> str | None:
+    """The source a stage's session is made with: `workflow`, or `tool` where Hermes' gateway refuses it (None
+    when it takes neither: Hermes then picks one)."""
+    if "gateway" not in features or "gateway_workflow" in features:
+        return SESSION_SOURCE
+    return GATEWAY_SOURCE if "gateway_tool" in features else None
 
 
 def send_argv(base: list[str], target: str, message_file: Path) -> list[str]:
@@ -293,15 +382,32 @@ def _detect(argv: list[str] | None, import_path: list[str] | None) -> frozenset[
             found = found | {"report"}
     except Exception:
         pass
-    return found
+    return found | _gateway_features()
+
+
+def _gateway_features() -> frozenset[str]:
+    """Whether `hermes chat` hands its turns to the profile's gateway, and the sources that gateway takes."""
+    try:
+        import importlib.util
+        if importlib.util.find_spec("hermes_cli.gateway_agent") is None:
+            return frozenset()
+    except (ImportError, ValueError):
+        return frozenset()
+    try:
+        from gateway.session_policy import SURFACES
+        sources = set(SURFACES)
+    except Exception:
+        sources = set()
+    return frozenset({"gateway"} | {f"gateway_{source}" for source in (GATEWAY_SOURCE, SESSION_SOURCE)
+                                    if source in sources})
 
 
 def encode_features(features: frozenset[str]) -> str:
-    return ",".join(sorted(features & FULL_FEATURES)) or "none"
+    return ",".join(sorted(features & (FULL_FEATURES | GATEWAY_FEATURES))) or "none"
 
 
 def decode_features(value: str) -> frozenset[str]:
-    return frozenset(item for item in value.split(",") if item in FULL_FEATURES)
+    return frozenset(item for item in value.split(",") if item in FULL_FEATURES | GATEWAY_FEATURES)
 
 
 # MARK: Processes
@@ -532,7 +638,7 @@ def render_brief(*, workflow_name: str, run_number: int, stage: dict, iteration:
                  "or open pull requests yourself.",
                  f"Your hand-off folder is {folder}: read-only copies of earlier work are in {folder}/inputs/, and a "
                  f"file you hand off goes in {folder}/out/ (hand it off as out/<name>)."]
-    lines = [f"# Workflow stage: {stage['title']}", "", *intro, "", "## Your task", "",
+    lines = [f"{BRIEF_HEADING}{stage['title']}", "", *intro, "", "## Your task", "",
              stage["instructions"].strip() or "Do the stage's task.", ""]
     if failure is not None:
         what = (f"ran out of time after {failure['minutes']} min" if failure.get("timed_out")

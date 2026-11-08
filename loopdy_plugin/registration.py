@@ -274,6 +274,8 @@ def _register_notification_observer(ctx: Any, hook: str, callback: Any) -> None:
 
 
 def _pre_llm_call(*, service: Any, profile: str, **payload: Any) -> None:
+    if in_workflow_stage(str(payload.get("session_id") or ""), payload.get("user_message")):
+        return
     _queue_live_activity_update(
         service,
         session_id=str(payload.get("session_id") or ""),
@@ -283,7 +285,7 @@ def _pre_llm_call(*, service: Any, profile: str, **payload: Any) -> None:
 
 
 def _post_llm_call(*, service: Any, profile: str, **payload: Any) -> None:
-    if in_workflow_stage():
+    if in_workflow_stage(str(payload.get("session_id") or "")):
         return
     # A finished turn cannot clear session-wide attention: a newer turn may
     # already be waiting. Explicit clarify/approval resolution owns cleanup.
@@ -313,7 +315,7 @@ def _deliver_hook(
     **payload: Any,
 ) -> None:
     # A workflow stage's turns are machinery: the run alerts when it needs the person or ends.
-    if in_workflow_stage():
+    if in_workflow_stage(str(payload.get("session_id") or payload.get("parent_session_id") or "")):
         return
     if hook_name in {"subagent_start", "subagent_stop"} and callable(profile_getter):
         # PluginContext resolves the current profile scope, not load-time defaults.

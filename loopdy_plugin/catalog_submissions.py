@@ -53,6 +53,7 @@ from .template_catalog import (
     TYPES as VARIABLE_TYPES,
 )
 from .template_tools import APPROVAL_PREVIEW, TOOLSET, request_approval, unattended_reason
+from . import tool_session
 from .workflow_runner import in_workflow_stage
 
 logger = logging.getLogger(__name__)
@@ -746,7 +747,7 @@ def _title(template: dict) -> str:
 
 def _unattended() -> str | None:
     """Why no person can say yes now, or None. Same checks as the template tools, plus workflow stages."""
-    if in_workflow_stage():
+    if in_workflow_stage(tool_session.session_id(None, "HERMES_SESSION_ID")):
         return "workflow_stage"
     return unattended_reason()
 

@@ -283,6 +283,33 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(runner.decode_features("none"), frozenset())
         self.assertEqual(runner.decode_features("toolsets,unknown"), frozenset({"toolsets"}))
 
+    def test_a_gateway_hermes_gets_a_source_it_takes(self):
+        # Newer Hermes hands `hermes chat` turns to the profile's gateway, which refuses any other source:
+        # "Gateway does not support source 'workflow'", and the stage stopped within a second.
+        gateway = runner.FULL_FEATURES | {"gateway", "gateway_tool"}
+        self.assertEqual(runner.worker_argv(["hermes"], "w", ["file"], gateway),
+                         ["hermes", "-p", "w", "--cli", "chat", "--source", "tool", "--toolsets", "file",
+                          "--query-file", "brief.md", "--format", "stream-json"])
+        text = frozenset({"cli", "source", "toolsets", "query", "query_file", "quiet", "gateway", "gateway_tool"})
+        self.assertEqual(runner.worker_argv(["hermes"], "w", ["web"], text),
+                         ["hermes", "-p", "w", "--cli", "chat", "--source", "tool", "--toolsets", "web",
+                          "--query-file", "brief.md", "-Q"])
+        self.assertIn("workflow", runner.worker_argv(["hermes"], "w", [], gateway | {"gateway_workflow"}))
+        self.assertNotIn("--source", runner.worker_argv(["hermes"], "w", [], runner.FULL_FEATURES | {"gateway"}))
+        self.assertEqual(runner.decode_features(runner.encode_features(gateway)), gateway)
+
+    def test_this_hermes_says_whether_its_gateway_runs_the_turn(self):
+        features = runner.detect_hermes_features()
+        try:
+            from gateway.session_policy import SURFACES
+            import hermes_cli.gateway_agent  # noqa: F401
+        except ImportError:
+            self.assertNotIn("gateway", features)
+            return
+        self.assertIn("gateway", features)
+        self.assertEqual("gateway_tool" in features, "tool" in SURFACES)
+        self.assertEqual("gateway_workflow" in features, "workflow" in SURFACES)
+
     def test_flags_are_read_from_help_when_the_parser_cant_be(self):
         with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as folder:
             script = Path(folder) / "old-hermes.py"
@@ -366,6 +393,64 @@ class HelperTests(unittest.TestCase):
                             + "/notes\n"})
         self.assertEqual(lines, [("text", "[hidden] in ~/notes")])
         self.assertEqual(runner.tokens({"type": "result", "tokens": {"input": 5, "output": -1}}), (5, 0))
+
+
+class StageSessionTests(unittest.TestCase):
+    """Newer Hermes runs a stage's turn in the profile's gateway, so the worker's env never reaches the hooks."""
+
+    def setUp(self):
+        sys.modules.pop("_bighelp_workflow_stage_sessions", None)
+        self.addCleanup(sys.modules.pop, "_bighelp_workflow_stage_sessions", None)
+        self.temp = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "workflows"
+        from loopdy_plugin.workflow_store import WorkflowStore
+        with WorkflowStore(self.root).read():
+            pass
+        patcher = patch("loopdy_plugin.workflow_api.workflows_root", return_value=self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def attempt(self, brief: str, state: str = "running") -> Path:
+        import sqlite3
+        folder = self.root / "runs" / "run_1" / "draft" / f"1-{state}"
+        folder.mkdir(parents=True)
+        (folder / "brief.md").write_text(brief, encoding="utf-8")
+        with sqlite3.connect(self.root / "workflows.sqlite3") as db:
+            db.execute("INSERT INTO attempts (id, run_id, stage_key, iteration, number, state, agent_id, "
+                       "coordinator_epoch, launched_at, deadline_at, dir) VALUES (?, 'run_1', 'draft', 1, 1, ?, "
+                       "'w', 1, 0, 0, ?)", (f"att_{state}", state, str(folder)))
+        return folder
+
+    def test_a_stage_session_is_known_by_the_brief_of_a_live_attempt(self):
+        brief = "# Workflow stage: Draft\n\nYou are one stage of the bighelp workflow \"Notes\" (run 1).\n"
+        self.attempt(brief)
+        self.assertFalse(runner.in_workflow_stage("s-1", environ={}))
+        self.assertTrue(runner.in_workflow_stage("s-1", brief, environ={}))
+        # Later hooks of the turn carry only the session.
+        self.assertTrue(runner.in_workflow_stage("s-1", environ={}))
+        self.assertFalse(runner.in_workflow_stage("s-2", "Hi there", environ={}))
+        self.assertFalse(runner.in_workflow_stage("s-3", "# Workflow stage: Draft\n\nSomething else", environ={}))
+        self.assertFalse(runner.in_workflow_stage("", brief, environ={}))
+        # The worker's own process, on older Hermes.
+        self.assertTrue(runner.in_workflow_stage(environ={"HERMES_SESSION_SOURCE": "workflow"}))
+
+    def test_a_brief_whose_attempt_ended_is_only_a_message(self):
+        brief = "# Workflow stage: Draft\n\nWrite it.\n"
+        self.attempt(brief, state="accepted")
+        self.assertFalse(runner.in_workflow_stage("s-1", brief, environ={}))
+
+    def test_without_a_workflow_store_nothing_is_a_stage(self):
+        with patch("loopdy_plugin.workflow_api.workflows_root", return_value=Path(self.temp.name) / "missing"):
+            self.assertFalse(runner.in_workflow_stage("s-1", "# Workflow stage: Draft\n", environ={}))
+
+    def test_the_rendered_brief_is_what_marks_the_session(self):
+        brief = runner.render_brief(workflow_name="Notes", run_number=1, iteration=1, uses=[], change_notes=None,
+                                    stage={"key": "draft", "title": "Draft", "instructions": "Write it.",
+                                           "outputs": []})
+        self.attempt(brief)
+        self.assertTrue(brief.startswith(runner.BRIEF_HEADING))
+        self.assertTrue(runner.in_workflow_stage("s-1", brief, environ={}))
 
 
 if __name__ == "__main__":
