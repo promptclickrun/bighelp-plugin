@@ -767,7 +767,7 @@ async def agents_today(request: Request) -> Response:
         raise NativeAPIError(404, "agent_not_found", "That agent isn't on this computer.")
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
-    return _response(value, owner, request_id, maximum=262_144)
+    return _response(value, owner, request_id, maximum=524_288)
 
 
 class _CoreFiles(BaseModel):
