@@ -399,6 +399,13 @@ class AgentsActivityTests(unittest.TestCase):
         self.nova.cron_run("job1", "running", 1_794_090_100.0, owner={"pid": os.getpid(), "started": None})
         self.assertEqual(self.background(), ({"count": 1, "title": "Digest"}, "idle"))
 
+    def test_the_title_on_the_home_has_no_folders(self):
+        self.nova.delegation("deleg_p1", "Run /home/sam/projects/kyoto/build.py on ~/data/photos")
+        self.assertEqual(self.background()[0]["title"], "Run build.py on photos")
+        self.nova.checkpoint(process_entry("proc_p2", "cd /srv/app && npm run dev", live_owner(),
+                                           started_at=1_794_099_000.0))
+        self.assertEqual(self.background()[0]["title"], "cd app && npm run dev")
+
     def test_an_older_hermes_without_background_records_adds_nothing(self):
         self.nova.write("DROP TABLE async_delegations")
         self.assertEqual(self.background(), (None, "idle"), "No table, no processes.json, no cron folder")
@@ -407,6 +414,25 @@ class AgentsActivityTests(unittest.TestCase):
         (self.nova.home / "cron" / "executions.db").write_bytes(b"not a database")
         self.assertEqual(self.background(), ({"count": 1, "title": "make"}, "idle"),
                          "An unreadable ledger leaves out only itself")
+
+
+class HidePathsTests(unittest.TestCase):
+    def test_a_host_path_shows_only_its_file_name_and_everything_else_stays(self):
+        for text, shown in (
+            ("python /home/sam/build.py", "python build.py"),
+            ("~/projects/kyoto/run.sh --x", "run.sh --x"),
+            ("cd /srv/app && npm run dev", "cd app && npm run dev"),
+            ("cp '/var/log/app.log' /tmp/out/", "cp 'app.log' out"),
+            ("tool --out=/tmp/build/result.json", "tool --out=result.json"),
+            ("Edited /Users/sam/code/case.tsx.", "Edited case.tsx."),
+            ("cat ~sam/notes.md", "cat notes.md"),
+            ("./sync.sh src/case.tsx ../shared/x.py", "./sync.sh src/case.tsx ../shared/x.py"),
+            ("curl https://example.com/a/b?x=/c#d", "curl https://example.com/a/b?x=/c#d"),
+            ("open file:///home/sam/a.html and http://host:8080/x", "open file:///home/sam/a.html and http://host:8080/x"),
+            ("and/or 10 / 2 and ~ here, a / b", "and/or 10 / 2 and ~ here, a / b"),
+            ("ls ~/ /", "ls ~/ /"),
+        ):
+            self.assertEqual(agents_background._hide_paths(text), shown, text)
 
 
 class AgentsActivityRouteTests(unittest.TestCase):

@@ -171,6 +171,18 @@ class AgentsTodayTests(unittest.TestCase):
             "id": f"message:{failed}", "kind": "command", "title": "./test-hotspot.sh", "state": "failed",
             "endedAt": SINCE + 200, "detail": "Exit 1", "sessionId": BOT_CHAT})
 
+    def test_no_title_or_detail_names_a_folder_of_the_computer(self):
+        self.nova.delegation("p", "Edit /home/sam/code/case.tsx", state="failed", dispatched=SINCE + 1,
+                             completed=SINCE + 9, event=completed_event(
+                                 "p", "failed", error="Could not write /srv/app/out/case.tsx; see https://example.com/a/b"))
+        self.nova.checkpoint(process_entry("proc_p", "~/projects/kyoto/run.sh --x ./sync.sh", live_owner()))
+        message = self.notice(display_text(exited("cd /srv/app && npm run dev", 1)), SINCE + 50)
+        items = self.by_id(self.today())
+        self.assertEqual((items["delegation:p"]["title"], items["delegation:p"]["detail"]),
+                         ("Edit case.tsx", "Could not write case.tsx; see https://example.com/a/b"))
+        self.assertEqual(items["process:proc_p"]["title"], "run.sh --x ./sync.sh")
+        self.assertEqual(items[f"message:{message}"]["title"], "cd app && npm run dev")
+
     def test_only_chats_active_today_are_read(self):
         self.nova.chat(OTHER_CHAT, source="bighelp")
         self.active(OTHER_CHAT, started=SINCE - 90_000, last=SINCE - 80_000)

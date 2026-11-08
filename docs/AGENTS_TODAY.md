@@ -135,10 +135,14 @@ other records still give theirs.
   the item has the fallback title and no detail. It never sends the raw text.
   It cannot know what such text means, so it is for people to read. The app
   must not treat it as a path or a command.
-- The title of a command is the command line as Hermes saved it (redacted,
-  cut to 80 characters). It can name files and folders on the computer, for
-  example `python /home/sam/build.py`. A subagent's goal, summary and error can
-  do the same. The plugin does not remove paths from this text.
+- Titles and details show file names only. After redaction, the plugin
+  replaces each absolute or home-relative path with its last component:
+  `python /home/sam/build.py` is `python build.py`, and
+  `cd /srv/app && npm run dev` is `cd app && npm run dev`. This holds for
+  commands and for the goal, summary and error of a subagent. Relative paths
+  (`./sync.sh`, `src/case.tsx`) and URLs stay as they are. A token that is
+  only `/` or `~` stays as it is. The title of a command is the command line
+  as Hermes saved it (redacted, cut to 80 characters).
 - A command that a subagent started is not a separate item. The subagent is
   the item.
 - A command that ended is only in the list when its notice is in a chat that

@@ -90,7 +90,8 @@ The row has `background` only when the count is more than zero:
   characters (the same as Hermes). For a scheduled task it is the job name
   (or the start of its prompt, when it has no name).
   Titles are one line, and pass through the redaction of Hermes (with URL
-  credentials too, when this Hermes can). The row has no `title` when no usable
+  credentials too, when this Hermes can), and show file names only: a path
+  such as `/home/sam/build.py` is `build.py`. The row has no `title` when no usable
   title exists, and also when the text cannot be redacted: the plugin never
   sends text that it could not redact. On this row a title has at most 60
   characters, so that 64 agents fit in one answer. The Today route keeps 120.

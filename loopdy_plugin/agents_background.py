@@ -113,19 +113,39 @@ def _redact(text: str) -> str | None:
         return None
 
 
+# A URL is left whole. A host path starts with `/` or `~` (not after `.`, a word or `/`, which make it
+# relative) and ends at a space, a quote or shell punctuation.
+URL_OR_HOST_PATH = re.compile(
+    r"""(?P<url>[A-Za-z][A-Za-z0-9+.-]*://[^\s'"`<>]*)|(?<![\w.:/~])(?P<path>(?:~[\w.-]*)?/[^\s'"`;|&<>()\[\]{},]*)""")
+
+
+def _hide_paths(text: str) -> str:
+    """Each absolute or home-relative path becomes its last component, so no folder of the computer
+    reaches a phone: `python /home/sam/build.py` is `python build.py`. Relative paths and URLs stay. A
+    token with nothing after its slashes (`/`, `~/`) stays as it is."""
+    def last(match: re.Match) -> str:
+        path = match.group("path")
+        if path is None:
+            return match.group()
+        parts = [part for part in path.split("/") if part]
+        return path if not parts or (path.startswith("~") and len(parts) == 1) else parts[-1]
+    return URL_OR_HOST_PATH.sub(last, text)
+
+
 def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
 
 
 def _line(value: Any, limit: int) -> str:
-    """The first line with words in it, whitespace collapsed, redacted and cut to `limit` characters."""
+    """The first line with words in it, whitespace collapsed, redacted, shown with file names only (no
+    folders of the computer) and cut to `limit` characters."""
     if not isinstance(value, str):
         return ""
     for raw in value[:4_000].splitlines():
         text = " ".join(raw.split())
         if text:
             redacted = _redact(text)
-            return _cut(redacted, limit) if isinstance(redacted, str) else ""
+            return _cut(_hide_paths(redacted), limit) if isinstance(redacted, str) else ""
     return ""
 
 
