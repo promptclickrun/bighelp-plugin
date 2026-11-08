@@ -413,6 +413,11 @@ class WorkflowRouteTests(unittest.TestCase):
             self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS})["error"],
                              "not_in_a_stage")
             self.assertIn("workflows", tools.call({"action": "list"}))
+        # Newer Hermes runs the stage in its gateway: the stage's session, not the env, tells.
+        with patch("loopdy_plugin.workflow_runner._stage_registry") as registry:
+            registry.return_value.sessions = {"stage-session": True}
+            self.assertEqual(tools.call({"action": "start", "workflowId": workflow_id, "inputs": INPUTS},
+                                        {"session_id": "stage-session"})["error"], "not_in_a_stage")
         # A schedule asks too.
         answer[0] = False
         self.assertEqual(tools.call({"action": "set_trigger", "workflowId": workflow_id, "trigger": "schedule",

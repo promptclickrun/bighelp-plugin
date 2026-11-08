@@ -1393,7 +1393,11 @@ class ManagedNotifications:
         payload = _short_turn_ids(payload)
         # A workflow stage's turns never alert or drive a Live Activity; a command
         # it asks to run still needs the person's approval.
-        if in_workflow_stage() and hook not in _APPROVAL_HOOKS: return
+        stage_session = payload.get("parent_session_id") if hook in ("subagent_start", "subagent_stop") \
+            else payload.get("session_id")
+        if hook not in _APPROVAL_HOOKS and in_workflow_stage(
+                stage_session if isinstance(stage_session, str) else "",
+                payload.get("user_message") if hook == "pre_llm_call" else None): return
         if hook in _APPROVAL_HOOKS:
             self._observe_approval(hook, profile=profile, **payload)
             return

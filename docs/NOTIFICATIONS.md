@@ -140,7 +140,8 @@ or the agent's own handle never alerts.
 
 ### Workflows
 
-A workflow stage is a `hermes chat --source workflow` turn. Its replies, failures and Live Activity updates
+A workflow stage is a `hermes chat --source workflow` turn (`--source tool` where Hermes runs turns in its
+gateway; the plugin then knows the stage's session by its brief). Its replies, failures and Live Activity updates
 never alert; a command it asks to run still asks for approval. The run alerts instead, read from the
 workflow store's run journal by the notification worker:
 

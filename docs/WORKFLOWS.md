@@ -27,6 +27,13 @@ A failed or interrupted stage never retries by itself: the app shows what happen
   `hermes -p <agent> --cli chat --source workflow --toolsets <tools> --query-file brief.md --format stream-json`,
   with `HERMES_QUIET_TURN_REPORT_FILE` set so Hermes writes how the turn ended. The chat's session source is
   `workflow`, so the app can keep these sessions out of its chat lists. Older Hermes uses the text runner (below).
+- Newer Hermes hands every `hermes chat` turn to the profile's gateway, which takes only its own session sources
+  (`gateway.session_policy.SURFACES`) and refused `workflow`: every stage stopped within a second with "Gateway
+  does not support source 'workflow'". There a stage uses `--source tool`, an unattended run that Hermes and the
+  app keep out of chat lists. The turn runs in the gateway, so the stage's environment never reaches the
+  plugin's hooks. The plugin knows the stage's session by its first message instead: the brief of an attempt
+  that is running now. Its replies then don't alert and its tools can't change workflows, as before. That
+  Hermes writes no turn report for a gateway turn, so the result comes from the stream and the exit code.
 - What a stage's Hermes writes to stderr goes to `stderr.log` in the stage's folder, cut to its last 4 KB. It is
   never sent to the app. When a stage stops before its turn began (non-zero exit and no output), the run gets one
   fixed sentence about why, for example "Hermes couldn't load the Python module hermes_cli. (exit code 1)": only a

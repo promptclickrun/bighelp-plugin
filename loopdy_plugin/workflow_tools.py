@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 
+from . import tool_session
 from . import workflow_api as api
 from .workflow_runner import in_workflow_stage
 from .workflow_store import Mutation, WorkflowError, WorkflowStore
@@ -112,12 +113,12 @@ class WorkflowTools:
         self._approve = approve
         self._facts = facts or (lambda: api._host_facts())
 
-    def call(self, payload: Any) -> dict[str, Any]:
+    def call(self, payload: Any, context: dict[str, Any] | None = None) -> dict[str, Any]:
         args = payload if isinstance(payload, dict) else {}
         action = args.get("action")
         if action not in READ_ACTIONS + WRITE_ACTIONS:
             return _error("action_invalid", "Choose one of the listed actions.")
-        if action in WRITE_ACTIONS and in_workflow_stage():
+        if action in WRITE_ACTIONS and in_workflow_stage(tool_session.session_id(context, "HERMES_SESSION_ID")):
             return _error("not_in_a_stage", "A workflow stage can read workflows but not change or start them.")
         reason = api.probe()
         if reason is not None:
@@ -287,9 +288,9 @@ class WorkflowTools:
 def register(ctx: Any, *, tools: WorkflowTools | None = None) -> None:
     selected = tools or WorkflowTools()
 
-    def handle(payload: Any = None, **_kwargs: Any) -> str:
+    def handle(payload: Any = None, **context: Any) -> str:
         try:
-            result = selected.call(payload)
+            result = selected.call(payload, context)
         except Exception as error:
             logger.warning("bighelp workflow tool failed (%s)", type(error).__name__)
             result = _error("workflow_tool_failed", "The workflow tool failed. Try again later.")
