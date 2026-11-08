@@ -78,6 +78,7 @@ provides_tools:
   - bighelp_request_secure_input
   - bighelp_board
   - bighelp_people
+  - bighelp_send_notification
   - bighelp_draft_contact
   - bighelp_draft_event
   - bighelp_offer_photo_action

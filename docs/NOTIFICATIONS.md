@@ -209,6 +209,52 @@ phone picks the channels it gets alerts from, so it can get only bighelp's chats
 
 Capabilities list `preferences.channels`. Workflow alerts don't follow channels; they're bighelp's.
 
+### Kinds of alert a phone can turn off
+
+Each phone can turn off three kinds of alert. All start on. A phone sends them in
+`PUT /enrollments/<grantId>/preferences` (the rest of that body is unchanged):
+
+```json
+{"version": 1, "peerChats": false,
+ "kinds": {"scheduledTasks": true, "deliveries": true, "groupChats": true}}
+```
+
+`kinds` is optional. Left out, the phone's choices stay as they are. When it is there it holds all three keys,
+each a real boolean, and no other key; anything else is refused with 422 (`notification_preferences_invalid`)
+and changes nothing. The answer of that route, and `GET /enrollments/<grantId>/preferences`, hold
+`"kinds": {...}` with the stored values. `GET /capabilities` lists `preferences.kinds: true`.
+
+- **`scheduledTasks`** off: no `scheduled.completed` or `scheduled.failed` alert from a scheduled task's run.
+- **`deliveries`** off: no alert from `bighelp_send_notification` (see Notify now).
+- **`groupChats`** off: no alert from a Group Chat (a session of the `bot_room` source): no reply, failure or
+  helper result. Questions and approvals (`clarification.required`, `approval.required`) always alert, because
+  they need the person. A session that can't be read counts as an ordinary chat, so it alerts.
+
+The switches work for each phone on its own, so one phone can turn a kind off while another keeps it. Quiet
+Hours and Channels still apply to what is left.
+
+### Notify now
+
+An agent can notify the person without a scheduled task with the `bighelp_send_notification` tool: a long job
+that finished while they were away, or a reminder they asked for. A normal reply already notifies them, so the
+agent's brief says to use it only when they aren't in the chat.
+
+- **Arguments:** `title` (1 to 80 characters after trimming) and `message` (1 to 1,000 characters after
+  trimming), and nothing else.
+- **The alert:** sealed and sent like every other alert, to the phones enrolled for the calling agent. It is a
+  `scheduled.completed` event (every grant has it, and the notification service files it under "Scheduled tasks
+  and deliveries"), marked as a delivery on the host: the Deliveries switch filters it, and Scheduled tasks does
+  not. The alert's title is the agent's name. Its text is `<title> — <message>`, with the usual text rules (one
+  line, at most 1,600 characters).
+- **Where a tap goes:** the chat that the tool ran in. A phone that asked for scheduled links
+  (`scheduledLinks`) gets the name `scheduled.chat.<session>`, as for a scheduled task made in a chat. Other
+  phones get the chat's own name, so a phone that shows that chat stays quiet.
+- **Limit:** 10 an hour for each agent. A notification that no phone got doesn't count. Quiet Hours apply as for
+  any alert.
+- **Result:** `{"sent": <phones alerted>}`, or `{"sent": 0, "reason": "<plain words>"}` when no phone has
+  notifications on for this agent, every phone turned off Deliveries, the hourly limit is reached, or the
+  arguments were not valid.
+
 ## Instant alerts while bighelp is open
 
 A push can take 10 seconds or more to arrive. While bighelp is open on a device, the device gets its alerts
