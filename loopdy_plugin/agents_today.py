@@ -2,7 +2,7 @@
 scheduled tasks that run now or started or ended since the phone's start of the day.
 
 The records and their rules are in `agents_background`. This module picks the day's items, orders them
-(running first, newest start first; then the rest, newest end first), and keeps the list to 100.
+(running first, newest start first; then the rest, newest end first), and keeps the list to 200.
 """
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ from .agents_background import Work
 
 
 CAPABILITY = "native-agents-today-v1"
-MAX_ITEMS = 100
-# The phone's "today" starts at most this far from the host's clock either way: around midnight a fast
-# phone clock is a day ahead. A start in the future is read as now.
-MAX_SKEW_SECONDS = 48 * 60 * 60
+MAX_ITEMS = 200
+# The app lists a week, grouped by day: `since` may be up to 31 days back. In the future it may be up to
+# 48 hours ahead (around midnight a fast phone clock is a day ahead) and is read as now.
+MAX_PAST_SECONDS = 31 * 24 * 60 * 60
+MAX_FUTURE_SECONDS = 48 * 60 * 60
 # The page asks every few seconds while it is open: one read per agent and day every two seconds.
 CACHE_SECONDS = 2.0
 
@@ -32,7 +33,7 @@ def available() -> bool:
 
 def valid_since(since: float, now: float) -> bool:
     """Whether `since` is a start of day the route accepts."""
-    return abs(since - now) <= MAX_SKEW_SECONDS
+    return -MAX_PAST_SECONDS <= since - now <= MAX_FUTURE_SECONDS
 
 
 def _order(item: Work) -> tuple:

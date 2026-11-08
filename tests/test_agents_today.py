@@ -207,14 +207,14 @@ class AgentsTodayTests(unittest.TestCase):
                           "delegation:fin1"])
         self.assertFalse(result["truncated"])
 
-    def test_at_most_100_items_and_running_work_is_never_the_part_left_out(self):
+    def test_at_most_200_items_and_running_work_is_never_the_part_left_out(self):
         self.nova.delegation("live", "Still going", dispatched=SINCE - 100)
-        for index in range(105):
+        for index in range(205):
             self.notice(display_text(exited(f"job {index}")), SINCE + 100 + index)
         result = self.today()
-        self.assertEqual((len(result["items"]), result["truncated"]), (100, True))
+        self.assertEqual((len(result["items"]), result["truncated"]), (200, True))
         self.assertEqual(result["items"][0]["id"], "delegation:live")
-        self.assertEqual(result["items"][1]["endedAt"], SINCE + 204, "Newest first; the oldest were left out")
+        self.assertEqual(result["items"][1]["endedAt"], SINCE + 304, "Newest first; the oldest were left out")
 
     def test_scheduled_runs_and_their_chat(self):
         self.nova.cron_jobs(job42="Morning brief", job7="Weekly digest")
@@ -327,14 +327,14 @@ class AgentsTodayRouteTests(unittest.TestCase):
             self.assertEqual(self.call({"agentId": "nova", "since": self.now + 47 * 3_600}).status_code, 200)
         read.assert_called_once_with("nova", self.now)
 
-    def test_refuses_bad_requests_and_a_since_outside_two_days(self):
+    def test_refuses_bad_requests_and_a_since_outside_the_window(self):
         good = {"agentId": "nova", "since": self.now - 3_600}
         with patch.object(agents_today, "today", return_value={"items": [], "truncated": False}):
             self.assertEqual(self.call({**good, "since": self.now + 48 * 3600}).status_code, 200)
-            self.assertEqual(self.call({**good, "since": self.now - 48 * 3600}).status_code, 200)
+            self.assertEqual(self.call({**good, "since": self.now - 31 * 86400}).status_code, 200)
             for body in ({}, {"agentId": "nova"}, {"since": self.now}, {**good, "extra": 1}, {**good, "agentId": "../x"},
                          {**good, "agentId": "Nova"}, {**good, "since": "1794000000"}, {**good, "since": True},
-                         {**good, "since": self.now + 48 * 3600 + 1}, {**good, "since": self.now - 48 * 3600 - 1},
+                         {**good, "since": self.now + 48 * 3600 + 1}, {**good, "since": self.now - 31 * 86400 - 1},
                          {**good, "since": -5}):
                 self.assertEqual(self.call(body).status_code, 422, body)
         wrong = self.client.post(PREFIX + "/agents/today?x=1", json=good, headers={

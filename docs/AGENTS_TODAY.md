@@ -26,10 +26,11 @@ Request:
 - `agentId`: one profile ID.
 - `since`: epoch seconds. It is the start of "today" in the time zone of the
   phone. The phone decides the day. The plugin does not know the time zone.
-- The body has no other fields. A `since` that is more than 48 hours away from
-  the clock of the host, in the past or in the future, is `422 invalid_request`.
+- The body has no other fields. A `since` that is more than 31 days before the
+  clock of the host, or more than 48 hours after it, is `422 invalid_request`.
   A `since` in the future (for example, a phone clock that runs fast around
   midnight) is read as now.
+- The app can ask for a week or more: it groups the list by day.
 
 Response:
 
@@ -72,7 +73,7 @@ runs now is always in the list, also when it started before `since`.
 
 The list is in this order: the work that runs now first, newest start first.
 Then all other items, newest end first (or newest start, when there is no end).
-The list has at most 100 items. When there are more, the oldest are left out
+The list has at most 200 items. When there are more, the oldest are left out
 and `truncated` is `true`.
 
 ## States
@@ -124,7 +125,7 @@ other records still give theirs.
 ## Limits and errors
 
 - The answer is kept for 2 seconds for each agent and `since`.
-- The response has at most 100 items and fits in 256 KiB.
+- The response has at most 200 items and fits in 512 KiB.
 - `404 agent_not_found`: the agent is not a profile on this host.
 - `422 invalid_request`: a bad body, or a `since` that is out of range.
 - `412 context_changed`: the context changed while the route read.

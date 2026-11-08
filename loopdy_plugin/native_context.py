@@ -24,7 +24,8 @@ LEGACY_FEATURE_LIMIT = 64
 # app doesn't get, and it doesn't know them anyway. Add each new feature here.
 LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1", "native-core-files-v1",
                  "native-core-files-chat-v1", "native-app-state-v1", "native-html-apps-v1",
-                 "native-agents-background-v1", "native-agents-today-v1")
+                 "native-agents-background-v1", "native-agents-today-v1",
+                 "native-computer-screen-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -563,4 +564,7 @@ def _native_features(
         features.append(today_capability)
     else:
         skip(today_capability, "public profile helpers are unimportable.")
+    # A relay to the computer's own VNC server: always possible, the status route says if a server answers.
+    from .computer_screen import CAPABILITY as computer_screen_capability
+    features.append(computer_screen_capability)
     return profile, tuple(features)
