@@ -55,6 +55,7 @@ PROCESS_FEATURES = (
     "native-html-apps-v1",
     "native-agents-background-v1",
     "native-agents-today-v1",
+    "native-computer-screen-v1",
 )
 
 
@@ -227,10 +228,11 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.agents_today.available.return_value = False
         with self.assertLogs(LOG, level="INFO") as logs:
             native_context.log_native_feature_startup("research")
-        expected = PROCESS_FEATURES[:2]
+        # The computer screen relay needs nothing of the host but a socket, so it is never skipped.
+        expected = PROCESS_FEATURES[:2] + PROCESS_FEATURES[-1:]
         self.assertEqual(self.logged_features(logs.records), expected)
         self.assertEqual(native_context.native_context(self.request()).features, expected)
-        for feature in PROCESS_FEATURES[2:]:
+        for feature in PROCESS_FEATURES[2:-1]:
             self.assert_warning(logs.records, feature)
 
     def test_optional_import_failures_match_context_and_warn(self):
