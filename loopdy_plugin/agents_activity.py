@@ -17,6 +17,9 @@ history only for an agent that's working (to name the tool it runs).
   the person in the Bot Chat. A `-q` run never waits: Hermes answers its approvals itself.
 - Idle otherwise. An agent that isn't a profile here, or whose history can't be read, is left out:
   the app shows nothing for it rather than a guess.
+- Background: with `background=True` (the app's host lists `native-agents-background-v1`), a row also says
+  how much work the agent runs in the background in any of its chats (`agents_background`: subagents,
+  commands, scheduled tasks), whatever its state.
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ import threading
 import time
 from typing import Any, Callable, Iterable
 
+from . import agents_background
 from .agent_talk import PROFILE_ID, SESSION_ID, _tool_names
 
 
@@ -48,7 +52,7 @@ CACHE_SECONDS = 1.0
 PLATFORM = re.compile(r"(?:^|:)platform=([^:]{1,64})$")
 logger = logging.getLogger("hermes.plugins.bighelp")
 
-_cache: dict[str, tuple[float, dict | None]] = {}
+_cache: dict[tuple[str, bool], tuple[float, dict | None]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -170,7 +174,7 @@ def _home(profile: str) -> Path | None:
     return Path(get_profile_dir(profile)) if profile_exists(profile) else None
 
 
-def _agent(profile: str, home: Path, dashboard: dict[str, dict[str, bool]], now: float) -> dict | None:
+def _state(profile: str, home: Path, dashboard: dict[str, dict[str, bool]], now: float) -> dict | None:
     path = home / "state.db"
     if not path.is_file():
         # No history yet: nothing has ever run.
@@ -220,9 +224,18 @@ def _agent(profile: str, home: Path, dashboard: dict[str, dict[str, bool]], now:
     return value
 
 
-def activity(profiles: Iterable[str], *, now: Callable[[], float] | None = None) -> list[dict]:
-    """Each agent's Bot Chat state, in the order asked. An agent that isn't a profile here, or whose
-    history can't be read now, is left out."""
+def _agent(profile: str, home: Path, dashboard: dict[str, dict[str, bool]], now: float,
+           background: bool) -> dict | None:
+    value = _state(profile, home, dashboard, now)
+    if value is not None and background and (work := agents_background.summary(home)):
+        value["background"] = work
+    return value
+
+
+def activity(profiles: Iterable[str], *, background: bool = False,
+             now: Callable[[], float] | None = None) -> list[dict]:
+    """Each agent's Bot Chat state, in the order asked, with its background work when asked for. An agent
+    that isn't a profile here, or whose history can't be read now, is left out."""
     clock = now or time.time
     wanted = [profile for profile in dict.fromkeys(profiles) if isinstance(profile, str)
               and PROFILE_ID.fullmatch(profile)][:MAX_AGENTS]
@@ -231,7 +244,7 @@ def activity(profiles: Iterable[str], *, now: Callable[[], float] | None = None)
     for profile in wanted:
         moment = clock()
         with _cache_lock:
-            cached = _cache.get(profile)
+            cached = _cache.get((profile, background))
         if cached and 0 <= moment - cached[0] < CACHE_SECONDS:
             value = cached[1]
         else:
@@ -241,14 +254,14 @@ def activity(profiles: Iterable[str], *, now: Callable[[], float] | None = None)
             if dashboard is None:
                 dashboard = _dashboard_chats()
             try:
-                value = _agent(profile, home, dashboard, moment)
+                value = _agent(profile, home, dashboard, moment, background)
             except (OSError, sqlite3.Error):
                 logger.warning("bighelp agents activity read failed: storage")
                 value = None
             with _cache_lock:
                 if len(_cache) >= 4 * MAX_AGENTS:
                     _cache.clear()
-                _cache[profile] = (moment, value)
+                _cache[(profile, background)] = (moment, value)
         if value is not None:
             result.append(value)
     return result
@@ -258,3 +271,4 @@ def forget() -> None:
     """Drops the short cache (tests)."""
     with _cache_lock:
         _cache.clear()
+    agents_background.forget()
