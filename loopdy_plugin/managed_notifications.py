@@ -372,6 +372,8 @@ class ManagedNotifications:
         # Turns whose question alert already went out from the clarify tool hook, so the
         # messaging adapter's own presentation of the same question isn't a second alert.
         self._asked: OrderedDict[tuple[str, str, str], float] = state.setdefault("asked", OrderedDict())
+        # Whether each recent turn was started by another agent's signed message (see _note_turn_start).
+        self._agent_started: OrderedDict[tuple[str, str, str], bool] = state.setdefault("agent_started", OrderedDict())
         # Agents (and why) whose alerts use bighelp's picture, so the log says so once, not per alert.
         self._default_avatar_logged: set[tuple[str, str]] = state.setdefault("default_avatar_logged", set())
         self._child_owners: dict[tuple[str, str, str], str] = state["child_owners"]
@@ -705,8 +707,26 @@ class ManagedNotifications:
                        (grant_id, int(value["enabled"]), value["startMinute"], value["endMinute"], value["timeZone"]))
         return self.quiet_hours(grant_id)
 
-    def _is_peer_chat(self, profile: str, session_id: str) -> bool:
-        """Agents talking to each other: Hermes' canonical Bot Chat session."""
+    def _note_turn_start(self, profile: str, session_id: str, turn_id: Any, message: Any):
+        """Remember whether another agent's signed message started this turn. Hermes hands the turn's
+        own message to pre_llm_call and post_llm_call, so no history row needs reading."""
+        if not isinstance(message, str) or not isinstance(turn_id, str) or not _ID.fullmatch(turn_id):
+            return
+        key = (profile, session_id, turn_id)
+        with self._lock:
+            self._agent_started[key] = _AGENT_MESSAGE.match(message.strip()) is not None
+            self._agent_started.move_to_end(key)
+            while len(self._agent_started) > 256:
+                self._agent_started.popitem(last=False)
+
+    def _is_peer_chat(self, profile: str, session_id: str, turn_id: str | None = None) -> bool:
+        """Agents talking to each other: a turn that another agent's message started. The Bot Chat is
+        also where a person talks to the agent, so a turn they started is an ordinary chat. When the
+        turn's message wasn't seen, Hermes' canonical Bot Chat session counts, as before."""
+        with self._lock:
+            started = self._agent_started.get((profile, session_id, turn_id))
+        if started is not None:
+            return started
         try:
             row = self._session(profile, session_id)
         except ManagedNotificationError:
@@ -1193,7 +1213,7 @@ class ManagedNotifications:
         link = self._scheduled_link(profile, session_id) if event_type.startswith("scheduled.") else None
         # Agents talking to each other alert only phones that asked for it (Peer chats).
         peer_chat = sender is not None or (workflow_kind is None and event_type in _PEER_QUIET_EVENTS
-                                           and self._is_peer_chat(profile, session_id))
+                                           and self._is_peer_chat(profile, session_id, turn_id))
         # Where the alert comes from, worked out only when a phone here picks its channels. Workflows are
         # bighelp's own and have their own switches.
         filtering = workflow_kind is None and sender is None and self._filters_channels(profile, now)
@@ -1304,6 +1324,8 @@ class ManagedNotifications:
             if not db.execute("SELECT 1 FROM grants g WHERE g.state='active' AND g.expires>? AND json_extract(g.public_json,'$.profile')=?", (int(self.clock()), profile)).fetchone(): return
         if hook == "pre_tool_call" and payload.get("tool_name") == "clarify" and not child_hook:
             self._observe_question(profile, session_id, payload)
+        if hook in ("pre_llm_call", "post_llm_call") and not child_hook:
+            self._note_turn_start(profile, session_id, payload.get("turn_id"), payload.get("user_message"))
         if hook == "pre_llm_call" and not child_hook:
             try:
                 self._observe_agent_messages(profile, session_id, payload)

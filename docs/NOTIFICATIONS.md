@@ -117,9 +117,17 @@ service answers 404) waits for the next interval and never removes the phone's e
 ### Peer chats
 
 When agents message each other (`hermes peer dm`, or one agent DMing another), the turns land in Hermes'
-canonical "Bot Chat" session. Replies, failures and helper results there alert only phones that turned on
-Peer chats in bighelp (`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`);
-it starts off. A question or approval in a peer chat still alerts, since it needs the person.
+canonical "Bot Chat" session. A turn that another agent started is a peer chat turn: its reply, failure and
+helper results alert only phones that turned on Peer chats in bighelp
+(`PUT /enrollments/<grantId>/preferences` with `{"version": 1, "peerChats": true}`); it starts off. A question
+or approval in a peer chat still alerts, since it needs the person.
+
+The Bot Chat is also where a person talks to the agent directly (Bots mode opens it). So the host looks at
+the message that started the turn: when it carries Hermes' agent signature (`Message from <name> (@<agent>):`)
+the turn is a peer chat turn, and when it doesn't, the turn is an ordinary chat and alerts as one, in the Bot
+Chat as in any chat. Hermes gives each turn's message to the plugin's hooks, so no history is read. If the
+host did not see the turn's message (for example the host restarted during the turn), the Bot Chat counts as
+a peer chat, as it did before, and no other chat does.
 
 The same switch covers an agent's message to another agent in any chat, for example the answer to work
 one agent handed to another with `message_agent`. Hermes saves it in the receiving agent's chat, signed

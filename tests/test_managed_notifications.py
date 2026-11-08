@@ -740,6 +740,57 @@ class ManagedNotificationTests(unittest.TestCase):
         self.service.drain_pending()
         self.assertEqual([e["eventType"] for e in self.events_sent()], ["session.completed"])
 
+    def peer_turn(self, turn, message, *, reply="On it.", failed=False, **extra):
+        """One turn in the agents' Bot Chat: the message that starts it, then Hermes' end-of-turn hooks."""
+        self.service.observe("pre_llm_call",profile="default",session_id="peer-session",turn_id=turn,
+                             user_message=message,platform="api_server")
+        if failed:
+            self.service.observe("on_session_end",profile="default",session_id="peer-session",turn_id=turn,
+                                 failed=True,error="provider failed",platform="api_server")
+        else:
+            self.service.observe("post_llm_call",profile="default",session_id="peer-session",turn_id=turn,
+                                 assistant_response=reply,user_message=message,platform="api_server",**extra)
+        self.service.drain_pending()
+
+    def test_the_persons_own_message_in_the_bot_chat_alerts_with_peer_chats_off(self):
+        # The Bot Chat is also where the person talks to the agent directly (Bots mode opens it).
+        self.peer_turn("turn-a", "Can you check on the build?", reply="The build is green.")
+        self.peer_turn("turn-b", "And the deploy?", failed=True)
+        self.assertEqual([(e["eventType"], e["content"]["text"]) for e in self.events_sent()],
+                         [("session.completed", "The build is green."), ("session.failed", "provider failed")])
+
+    def test_another_agents_message_in_the_bot_chat_stays_quiet_with_peer_chats_off(self):
+        # Hermes signs it "Message from <name> (@<profile>):". The reply and a failure of that turn are peer chat.
+        with patch.object(ManagedNotifications, "_local_agent", side_effect={"hermes": "default", "nova": "nova"}.get):
+            self.peer_turn("turn-a", "Message from 🤖 Nova (@nova): Can you send the numbers?")
+            self.peer_turn("turn-b", "Message from 🤖 Nova (@nova): Still there?", failed=True)
+        self.assertEqual(self.events_sent(), [])
+        self.service.set_preferences(self.grant_id, peer_chats=True)
+        self.peer_turn("turn-c", "Message from 🤖 Nova (@nova): Please confirm.", reply="Confirmed.")
+        self.assertEqual([e["content"]["text"] for e in self.events_sent()], ["Confirmed."])
+
+    def test_a_turn_whose_start_cannot_be_read_follows_the_old_rule(self):
+        # No message recorded for the turn: the Bot Chat stays quiet, any other chat still alerts.
+        for session in ("peer-session", "native-session"):
+            self.service.observe("post_llm_call",profile="default",session_id=session,turn_id="turn-a",
+                                 assistant_response="Done.",platform="api_server")
+        self.service.drain_pending()
+        self.assertEqual([e["sessionReference"] for e in self.events_sent()],
+                         [session_reference("default", "native-session")])
+
+    def test_questions_in_the_bot_chat_alert_whoever_started_the_turn(self):
+        grant = dict(self.grant, eventTypes=["clarification.required", "session.completed", "session.failed"])
+        with sqlite3.connect(self.service.db_path) as db:
+            db.execute("UPDATE grants SET public_json=? WHERE grant_id=?",
+                       (json.dumps(grant, separators=(",", ":"), sort_keys=True), self.grant_id))
+        self.service.producer_loaded("default", start_worker=False, clarification_producer_loaded=True)
+        self.service.observe("pre_llm_call",profile="default",session_id="peer-session",turn_id="turn-a",
+                             user_message="Message from 🤖 Nova (@nova): Which city?",platform="api_server")
+        self.service.observe("pre_tool_call",profile="default",session_id="peer-session",turn_id="turn-a",
+                             tool_call_id="toolu_01q",tool_name="clarify",args={"question":"Which city?"})
+        self.service.drain_pending()
+        self.assertEqual([e["eventType"] for e in self.events_sent()], ["clarification.required"])
+
     def test_workflow_stage_turns_never_alert(self):
         # Each workflow stage is a `hermes chat --source workflow` turn: machinery, not a chat.
         with patch.dict(os.environ, {"HERMES_SESSION_SOURCE": "workflow"}):
