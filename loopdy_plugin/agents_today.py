@@ -16,9 +16,9 @@ from .agents_background import Work
 
 CAPABILITY = "native-agents-today-v1"
 MAX_ITEMS = 100
-# The phone's "today" starts at most this long ago, and not in the future (a clock that is a little fast).
-MAX_AGE_SECONDS = 48 * 60 * 60
-FUTURE_SLACK_SECONDS = 60
+# The phone's "today" starts at most this far from the host's clock either way: around midnight a fast
+# phone clock is a day ahead. A start in the future is read as now.
+MAX_SKEW_SECONDS = 48 * 60 * 60
 # The page asks every few seconds while it is open: one read per agent and day every two seconds.
 CACHE_SECONDS = 2.0
 
@@ -32,7 +32,7 @@ def available() -> bool:
 
 def valid_since(since: float, now: float) -> bool:
     """Whether `since` is a start of day the route accepts."""
-    return now - MAX_AGE_SECONDS <= since <= now + FUTURE_SLACK_SECONDS
+    return abs(since - now) <= MAX_SKEW_SECONDS
 
 
 def _order(item: Work) -> tuple:

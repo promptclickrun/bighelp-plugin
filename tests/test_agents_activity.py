@@ -372,13 +372,32 @@ class AgentsActivityTests(unittest.TestCase):
         self.nova.write("DELETE FROM async_delegations")
         self.nova.delegation("deleg_t2", "w" * 300)
         title = self.background()[0]["title"]
-        self.assertEqual((len(title), title[-3:]), (120, "..."))
+        self.assertEqual((len(title), title[-3:]), (60, "..."), "Short on the home: 64 rows must fit one answer")
+        # The worst row: 64-character IDs and tool, a 60-letter title in a script of 3-byte letters.
+        worst = {"agentId": "a" * 64, "state": "working", "tool": "t" * 64,
+                 "background": {"count": 64, "title": "\u6f22" * 60}}
+        self.assertLess(64 * len(json.dumps(worst, ensure_ascii=False, separators=(",", ":")).encode()), 32_768)
         self.nova.write("DELETE FROM async_delegations")
         self.nova.delegation("deleg_t3", "Use key sk-abcdefghijklmnopqrstuvwxyz123456 to call it")
         self.assertNotIn("abcdefghij", self.background()[0]["title"])
         self.nova.write("DELETE FROM async_delegations")
         self.nova.delegation("deleg_t4", "  \n ")
         self.assertEqual(self.background()[0], {"count": 1}, "Nothing usable: no title")
+
+    def test_a_title_Hermes_cannot_redact_is_never_sent(self):
+        self.nova.delegation("deleg_r1", "Clone https://sam:pw1234secret@example.com/repo.git")
+        self.assertNotIn("pw1234secret", self.background()[0]["title"], "URL credentials go too")
+        for broken in (None, type("Broken", (), {"redact_sensitive_text": staticmethod(lambda *a, **k: 1 / 0)})):
+            with patch.dict(sys.modules, {"agent.redact": broken}):
+                self.assertEqual(self.background()[0], {"count": 1}, "No redaction: no title, never the raw text")
+
+    def test_a_scheduled_run_with_no_recorded_start_counts_only_for_the_hermes_that_runs_here(self):
+        self.nova.cron_jobs(job1="Digest")
+        process, _ = self.child()
+        self.nova.cron_run("job1", "running", 1_794_090_000.0, owner={"pid": process.pid, "started": None})
+        self.assertEqual(self.background(), (None, "idle"), "Another live process isn't proof, as in Hermes")
+        self.nova.cron_run("job1", "running", 1_794_090_100.0, owner={"pid": os.getpid(), "started": None})
+        self.assertEqual(self.background(), ({"count": 1, "title": "Digest"}, "idle"))
 
     def test_an_older_hermes_without_background_records_adds_nothing(self):
         self.nova.write("DROP TABLE async_delegations")

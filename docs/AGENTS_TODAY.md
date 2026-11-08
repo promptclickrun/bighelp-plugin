@@ -26,8 +26,10 @@ Request:
 - `agentId`: one profile ID.
 - `since`: epoch seconds. It is the start of "today" in the time zone of the
   phone. The phone decides the day. The plugin does not know the time zone.
-- The body has no other fields. A `since` that is more than 60 seconds in the
-  future, or more than 48 hours in the past, is `422 invalid_request`.
+- The body has no other fields. A `since` that is more than 48 hours away from
+  the clock of the host, in the past or in the future, is `422 invalid_request`.
+  A `since` in the future (for example, a phone clock that runs fast around
+  midnight) is read as now.
 
 Response:
 
@@ -101,7 +103,10 @@ A scheduled run that Hermes `missed` never started, so it is not in the list.
 - **Commands that run now:** `processes.json` in the home of the agent.
 - **Commands that ended:** when a background command ends, Hermes saves a
   notice in the chat that started it (a message with `display_kind`
-  `process_complete`). The plugin reads these notices. It reads only the chats
+  `process_complete`). The plugin reads these notices. Hermes saves a notice
+  only for a command that it was told to report (`notify_on_complete`). A
+  command that started without it is in the list while it runs, and then it is
+  gone: nothing records that it ended. It reads only the chats
   that were active since `since` (at most 100, newest first), and in each chat
   only the newest 300 messages of the window. It never reads the whole
   history. The state comes from the words of the notice, for example
@@ -125,9 +130,15 @@ other records still give theirs.
 - `412 context_changed`: the context changed while the route read.
 - `503 agents_today_unavailable`: the feature is not in the context list.
 - Titles and details are text that agents and commands wrote. The plugin keeps
-  the first line, cuts it, and passes it through the redaction of Hermes. It
-  cannot know what such text means, so it is for people to read. The app must
-  not treat it as a path or a command.
+  the first line, cuts it, and passes it through the redaction of Hermes (with
+  URL credentials too, when this Hermes can). When the text cannot be redacted,
+  the item has the fallback title and no detail. It never sends the raw text.
+  It cannot know what such text means, so it is for people to read. The app
+  must not treat it as a path or a command.
+- The title of a command is the command line as Hermes saved it (redacted,
+  cut to 80 characters). It can name files and folders on the computer, for
+  example `python /home/sam/build.py`. A subagent's goal, summary and error can
+  do the same. The plugin does not remove paths from this text.
 - A command that a subagent started is not a separate item. The subagent is
   the item.
 - A command that ended is only in the list when its notice is in a chat that

@@ -70,7 +70,9 @@ each kind. It only reads. It never writes to Hermes.
   agent. Other Hermes processes write to the same file.
 - **Scheduled tasks.** The execution ledger of Hermes (`cron/executions.db`)
   records each run with the process that owns it. A run counts while the ledger
-  says `running` and its process is alive. `cron/jobs.json` gives the job name.
+  says `running` and its process is alive with the start time that Hermes
+  wrote. When Hermes wrote no start time, only the Hermes process that runs the
+  plugin counts (this is the check of Hermes). `cron/jobs.json` gives the job name.
 
 If a record is missing or is not readable, it adds nothing. The other records
 still count.
@@ -87,8 +89,11 @@ The row has `background` only when the count is more than zero:
   it is the first line of its goal. For a command it is the command, cut to 80
   characters (the same as Hermes). For a scheduled task it is the job name
   (or the start of its prompt, when it has no name).
-  Titles are one line, have at most 120 characters, and pass through the
-  redaction of Hermes. The row has no `title` when no usable title exists.
+  Titles are one line, and pass through the redaction of Hermes (with URL
+  credentials too, when this Hermes can). The row has no `title` when no usable
+  title exists, and also when the text cannot be redacted: the plugin never
+  sends text that it could not redact. On this row a title has at most 60
+  characters, so that 64 agents fit in one answer. The Today route keeps 120.
 - Only the feature in the context list turns this on. A request to a plugin
   without the feature gets rows without `background`.
 

@@ -758,9 +758,11 @@ async def agents_today(request: Request) -> Response:
     if today.CAPABILITY not in owner.features:
         raise NativeAPIError(503, "agents_today_unavailable", "Today's work isn't available on this host.")
     body = await _body(request, _AgentsToday)
-    if not today.valid_since(body.since, time.time()):
+    now = time.time()
+    if not today.valid_since(body.since, now):
         raise NativeAPIError(422, "invalid_request", "The native request is invalid.")
-    value = await run_in_threadpool(today.today, body.agentId, body.since)
+    # A phone whose clock runs ahead sends a start that hasn't come yet here: nothing started after now.
+    value = await run_in_threadpool(today.today, body.agentId, min(body.since, now))
     if value is None:
         raise NativeAPIError(404, "agent_not_found", "That agent isn't on this computer.")
     if native_context(request) != owner:

@@ -22,6 +22,7 @@ from datetime import datetime
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -34,6 +35,7 @@ from .agent_talk import SESSION_ID
 CAPABILITY = "native-agents-background-v1"
 TITLE_LIMIT = 120
 DETAIL_LIMIT = 140
+ACTIVITY_TITLE_LIMIT = 60
 MAX_ROWS = 300
 MAX_LIVE = 64
 MAX_SESSIONS = 100
@@ -94,16 +96,21 @@ class Work:
         return value
 
 
-def _redact(text: str) -> str:
-    """Hermes' own redaction, forced: this text goes to a phone."""
+def _redact(text: str) -> str | None:
+    """Hermes' own redaction, forced, with URL credentials too where this Hermes can: this text goes to a
+    phone. None when it can't be redacted (no redaction here, or it failed): the caller sends no text."""
     try:
         from agent.redact import redact_sensitive_text
     except Exception:
-        return text
+        return None
     try:
-        return redact_sensitive_text(text, force=True)
+        try:
+            return redact_sensitive_text(text, force=True, redact_url_credentials=True)
+        except TypeError:
+            # An older Hermes without those options.
+            return redact_sensitive_text(text, force=True)
     except Exception:
-        return text
+        return None
 
 
 def _cut(text: str, limit: int) -> str:
@@ -117,7 +124,8 @@ def _line(value: Any, limit: int) -> str:
     for raw in value[:4_000].splitlines():
         text = " ".join(raw.split())
         if text:
-            return _cut(_redact(text), limit)
+            redacted = _redact(text)
+            return _cut(redacted, limit) if isinstance(redacted, str) else ""
     return ""
 
 
@@ -163,10 +171,12 @@ def _rows(db: sqlite3.Connection, sql: str, params: tuple = ()) -> list:
         raise
 
 
-def _alive(pid: Any, started: Any, *, unreadable_is_alive: bool) -> bool:
+def _alive(pid: Any, started: Any, *, unreadable_is_alive: bool, unrecorded_is_own_pid: bool = False) -> bool:
     """Whether the process is alive and still the one Hermes recorded (a recycled PID has another start
-    time). `unreadable_is_alive` is each Hermes check's own answer when the start time can't be read now.
-    False when Hermes' liveness helpers can't be imported: unsure is not running."""
+    time). Two answers are each Hermes check's own: `unreadable_is_alive` when the start time can't be read
+    now, and `unrecorded_is_own_pid` (the cron ledger's) when none was recorded: then only the Hermes
+    process this code runs in counts. Unlike Hermes, which fails safe to alive, False when its liveness
+    helpers can't be imported: here, unsure is not running."""
     try:
         from gateway.status import _pid_exists, get_process_start_time, start_time_fingerprints_match
     except Exception:
@@ -175,7 +185,7 @@ def _alive(pid: Any, started: Any, *, unreadable_is_alive: bool) -> bool:
         if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not _pid_exists(pid):
             return False
         if started is None:
-            return True
+            return pid == os.getpid() if unrecorded_is_own_pid else True
         current = get_process_start_time(pid)
         if current is None:
             return unreadable_is_alive
@@ -376,7 +386,7 @@ def _cron_session(db: sqlite3.Connection | None, job_id: str, started: float) ->
     prefix = f"cron_{job_id}_"
     name = re.compile(re.escape(prefix) + r"\d{8}_\d{6}\Z")
     best = None
-    for session_id, begun in _rows(db, "SELECT id, started_at FROM sessions WHERE id >= ? AND id < ? LIMIT 200",
+    for session_id, begun in _rows(db, "SELECT id, started_at FROM sessions WHERE id >= ? AND id < ? ORDER BY id DESC LIMIT 200",
                                    (prefix, prefix[:-1] + "`")):
         gap = abs((_epoch(begun) or 0) - started)
         if isinstance(session_id, str) and name.fullmatch(session_id) and gap <= 600 and (best is None or gap < best[0]):
@@ -408,7 +418,7 @@ def cron_runs(home: Path, db: sqlite3.Connection | None, since: float | None, *,
         if started is None:
             continue
         if status == "running":
-            if _alive(pid, owner_started, unreadable_is_alive=True):
+            if _alive(pid, owner_started, unreadable_is_alive=True, unrecorded_is_own_pid=True):
                 final = "running"
             elif since is not None and started >= since:
                 final = "unknown"
@@ -468,7 +478,8 @@ def summary(home: Path) -> dict | None:
         return None
     value: dict[str, Any] = {"count": len(items)}
     if items[0].title:
-        value["title"] = items[0].title
+        # Shorter than Today's: 64 rows of it must fit the route's answer cap, also in a script of 3-byte letters.
+        value["title"] = _cut(items[0].title, ACTIVITY_TITLE_LIMIT)
     return value
 
 
