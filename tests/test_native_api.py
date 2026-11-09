@@ -248,6 +248,8 @@ class NativeAPITests(unittest.TestCase):
         if background_available():
             expected.extend(("native-agents-background-v1", "native-agents-today-v1", "native-agents-today-detail-v1"))
         expected.append("native-computer-screen-v1")
+        if uploads_available():
+            expected.append("native-uploads-small-pieces-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

@@ -44,8 +44,13 @@ All are `POST /api/plugins/loopdy/native/uploads/<operation>` with `If-Match` (t
 ```
 
 `byteCount` is 1 to 268,435,456. The name becomes one path part with no control characters and no leading dot,
-at most 180 bytes. The same person starting the same file again (agent, name, size and SHA-256) gets the
-unfinished upload back, with the pieces the host has.
+at most 180 bytes. The same person starting the same file again (agent, name, size, SHA-256 and piece size) gets
+the unfinished upload back, with the pieces the host has.
+
+`chunkBytes` is optional: 4194304 (4 MiB, the default) or 524288 (512 KiB). A proxy in front of Hermes can refuse
+a 4 MiB request; nginx and aiohttp take 1 MiB by default and answer `413` without a plugin error code. The app
+then discards that upload and starts the file again with `"chunkBytes": 524288`, on a plugin that lists
+`native-uploads-small-pieces-v1`. An upload keeps the piece size it started with.
 
 The answer, also for `status` and `chunk`:
 
@@ -89,7 +94,7 @@ agent's Files, never the path as text. The reasons:
 | 404 | `profile_not_found` | The agent no longer exists. |
 | 409 | `upload_incomplete` | `finish` before every piece arrived. |
 | 409 | `upload_finished` | A piece for an upload that is finished. |
-| 413 | `payload_too_large` | A piece bigger than `chunkBytes`. |
+| 413 | `payload_too_large` | A piece bigger than 4 MiB. A `413` without this code comes from a proxy in front of Hermes. |
 | 422 | `upload_offset_invalid`, `upload_length_invalid` | A piece that isn't one whole piece of this file. |
 | 422 | `upload_chunk_corrupt` | A piece that doesn't match its SHA-256. |
 | 422 | `upload_corrupt` | The pieces don't add up to the file's SHA-256. The host forgets the pieces; send them again. |

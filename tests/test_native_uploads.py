@@ -27,13 +27,14 @@ OWNER = "fixture\x1falice"
 GB = 1024 * 1024 * 1024
 
 
-def _start(store, data: bytes, *, name="Clip.mov", owner=OWNER, agent="default", mime="video/quicktime"):
+def _start(store, data: bytes, *, name="Clip.mov", owner=OWNER, agent="default", mime="video/quicktime",
+           chunk_bytes=None):
     return store.start(nu._Start(agentId=agent, fileName=name, mimeType=mime, byteCount=len(data),
-                                 sha256=hashlib.sha256(data).hexdigest()), owner)
+                                 sha256=hashlib.sha256(data).hexdigest(), chunkBytes=chunk_bytes), owner)
 
 
 def _send(store, upload, data: bytes, index: int, owner=OWNER):
-    size = nu.CHUNK_BYTES
+    size = upload["chunkBytes"]
     piece = data[index * size:(index + 1) * size]
     store.begin_chunk(upload["uploadId"], owner, index * size, len(piece))
     return store.write_chunk(upload["uploadId"], owner, index, piece, hashlib.sha256(piece).hexdigest())
@@ -53,9 +54,10 @@ class UploadStoreTests(unittest.TestCase):
                                     disk_usage=lambda _path: SimpleNamespace(free=self.free[0]),
                                     workspace=lambda agent: self.workspaces.get(agent))
         # Small pieces keep the tests fast; the math is the same.
-        chunk = patch.object(nu, "CHUNK_BYTES", 1024)
-        chunk.start()
-        self.addCleanup(chunk.stop)
+        for name, size in (("CHUNK_BYTES", 1024), ("SMALL_CHUNK_BYTES", 256)):
+            chunk = patch.object(nu, name, size)
+            chunk.start()
+            self.addCleanup(chunk.stop)
         self.data = os.urandom(1024 * 3 + 100)
 
     def test_piece_math_has_a_short_last_piece(self):
@@ -277,6 +279,34 @@ class UploadStoreTests(unittest.TestCase):
         second = _start(self.store, self.data, mime="video/mp4")
         self.assertNotEqual(first["uploadId"], second["uploadId"])
         self.assertEqual(second["mimeType"], "video/mp4")
+
+    def test_an_upload_in_small_pieces_keeps_them_to_the_end(self):
+        # Behind a proxy that refuses big requests, the app starts the file again in small pieces.
+        upload = _start(self.store, self.data, chunk_bytes=256)
+        self.assertEqual((upload["chunkBytes"], upload["receivedChunks"]), (256, []))
+        with self.assertRaises(NativeAPIError) as caught:
+            self.store.begin_chunk(upload["uploadId"], OWNER, 0, 1024)
+        self.assertEqual(caught.exception.code, "upload_length_invalid")
+        for index in reversed(range(nu.chunk_count(len(self.data), 256))):
+            answer = _send(self.store, upload, self.data, index)
+        self.assertEqual(answer["receivedBytes"], len(self.data))
+        self.assertEqual(Path(self.store.finish(upload["uploadId"], OWNER)["path"]).read_bytes(), self.data)
+
+    def test_only_the_offered_piece_sizes_are_taken(self):
+        with self.assertRaises(NativeAPIError) as caught:
+            _start(self.store, self.data, chunk_bytes=1000)
+        self.assertEqual((caught.exception.status, caught.exception.code), (422, "invalid_request"))
+        self.assertFalse(any(self.root.iterdir()) if self.root.exists() else False)
+
+    def test_the_same_file_in_other_pieces_is_its_own_upload(self):
+        big = _start(self.store, self.data)
+        _send(self.store, big, self.data, 0)
+        small = _start(self.store, self.data, chunk_bytes=256)
+        self.assertNotEqual(big["uploadId"], small["uploadId"])
+        self.assertEqual(small["receivedChunks"], [])
+        # Asking again in the same pieces keeps what arrived.
+        self.assertEqual(_start(self.store, self.data)["receivedChunks"], [0])
+        self.assertEqual(_start(self.store, self.data, chunk_bytes=256)["uploadId"], small["uploadId"])
 
     def test_a_piece_that_never_finishes_arriving_times_out(self):
         async def slow():

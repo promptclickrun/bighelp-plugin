@@ -25,7 +25,8 @@ LEGACY_FEATURE_LIMIT = 64
 LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1", "native-core-files-v1",
                  "native-core-files-chat-v1", "native-app-state-v1", "native-html-apps-v1",
                  "native-agents-background-v1", "native-agents-today-v1",
-                 "native-agents-today-detail-v1", "native-computer-screen-v1")
+                 "native-agents-today-detail-v1", "native-computer-screen-v1",
+                 "native-uploads-small-pieces-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -573,4 +574,10 @@ def _native_features(
     # A relay to the computer's own VNC server: always possible, the status route says if a server answers.
     from .computer_screen import CAPABILITY as computer_screen_capability
     features.append(computer_screen_capability)
+    # Uploads in 512 KiB pieces, for a proxy in front of Hermes that refuses 4 MiB requests.
+    from .native_uploads import SMALL_PIECES_CAPABILITY
+    if uploads_available():
+        features.append(SMALL_PIECES_CAPABILITY)
+    else:
+        skip(SMALL_PIECES_CAPABILITY, "the process home or POSIX file writes are unavailable.")
     return profile, tuple(features)
