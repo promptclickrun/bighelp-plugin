@@ -2,7 +2,9 @@
 scheduled tasks that run now or started or ended since the phone's start of the day.
 
 The records and their rules are in `agents_background`. This module picks the day's items, orders them
-(running first, newest start first; then the rest, newest end first), and keeps the list to 200.
+(running first, newest start first; then the rest, newest end first), and keeps the list to 200. A
+`message_agent` message also says where it is with the agent asked (`agent_deliveries`): `delivery` with
+its `state` and, while that agent works, its `tool`.
 """
 from __future__ import annotations
 
@@ -57,12 +59,32 @@ def today(profile: str, since: float, *, now: Callable[[], float] | None = None)
     if home is None:
         return None
     items = sorted(agents_background.work(home, since, with_session=True), key=_order)
-    value = {"items": [item.payload() for item in items[:MAX_ITEMS]], "truncated": len(items) > MAX_ITEMS}
+    value = {"items": _with_deliveries([item.payload() for item in items[:MAX_ITEMS]]),
+             "truncated": len(items) > MAX_ITEMS}
     with _cache_lock:
         if len(_cache) >= 256:
             _cache.clear()
         _cache[key] = (moment, value)
     return value
+
+
+def _with_deliveries(rows: list[dict]) -> list[dict]:
+    """Each message's delivery as the agent asked keeps it; the reply itself stays out of the list."""
+    from . import agent_deliveries
+    asked = [(row["agentId"], row["deliveryId"]) for row in rows if row.get("agentId") and row.get("deliveryId")]
+    if not asked or not agent_deliveries.available():
+        return rows
+    found: dict[str, dict] = {}
+    for start in range(0, len(asked), agent_deliveries.MAX_DELIVERIES):
+        try:
+            batch = agent_deliveries.deliveries(asked[start:start + agent_deliveries.MAX_DELIVERIES])
+        except Exception:
+            continue
+        found.update({item["deliveryId"]: item for item in batch})
+    for row in rows:
+        if (delivery := found.get(row.get("deliveryId") or "")) is not None:
+            row["delivery"] = {key: delivery[key] for key in ("state", "tool") if key in delivery}
+    return rows
 
 
 def forget() -> None:

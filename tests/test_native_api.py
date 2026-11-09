@@ -250,6 +250,11 @@ class NativeAPITests(unittest.TestCase):
         expected.append("native-computer-screen-v1")
         if uploads_available():
             expected.append("native-uploads-small-pieces-v1")
+        if background_available():
+            expected.append("native-agent-deliveries-v1")
+        from loopdy_plugin.chat_live import available as chat_live_available
+        if chat_live_available():
+            expected.append("native-chat-live-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
