@@ -214,6 +214,17 @@ class AgentsTodayTests(unittest.TestCase):
                          ("Message to Ralph", "done", "ralph", answered))
         self.assertNotIn("bot_mode_dm", json.dumps(items), "The waiter's command line never reaches the phone")
 
+        # Where each message is, as Ralph keeps it: answered, without its reply in the list.
+        ralph = self.agent("ralph")
+        receipts = ralph.home / "runtime" / "bot_live_delivery"
+        receipts.mkdir(parents=True)
+        (receipts / f"{answered}.json").write_text(json.dumps(
+            {"delivery_id": answered, "status": "settled", "reply": "Here's the build.", "session_id": BOT_CHAT}))
+        with patch("hermes_cli.profiles.profile_exists", lambda name: name == "ralph"), \
+                patch("hermes_cli.profiles.get_profile_dir", lambda name: str(ralph.home)):
+            done = self.by_id(self.today())[f"message:{finished}"]
+        self.assertEqual(done["delivery"], {"state": "answered"})
+
     def test_only_chats_active_today_are_read(self):
         self.nova.chat(OTHER_CHAT, source="bighelp")
         self.active(OTHER_CHAT, started=SINCE - 90_000, last=SINCE - 80_000)

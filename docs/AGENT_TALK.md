@@ -162,4 +162,6 @@ same user can dial it as Hermes' owner forward does.
 `agents/today` and the background counts show a waiter as the message it is:
 title "Message to Ralph", with `agentId`, `agentName` and, when known, `deliveryId` (Hermes
 derives it from the message file while the waiter runs, and the finished
-waiter's JSON ends with it). The command line itself never reaches the phone.
+waiter's JSON ends with it). `agents/today` adds `delivery`: the message's
+`state` as above and, while the agent works, its `tool` (never the reply). The
+command line itself never reaches the phone.
