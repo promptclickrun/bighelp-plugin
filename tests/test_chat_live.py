@@ -142,6 +142,18 @@ class ChatLiveTests(unittest.TestCase):
         # Numbering from another run of the gateway: the app starts the turn again.
         self.assertTrue(chat_live.follow(self.ralph.home, CHAT, 9, "another-epoch", 0)["reset"])
 
+    def test_from_now_says_where_the_gateway_is_without_the_turn_so_far(self):
+        """A chat that already shows what Hermes saved of the turn follows it from the gateway's newest frame,
+        of any kind, so no step shows twice."""
+        gateway = FakeGateway(replay=[frame(3, "message.start"), frame(4, "tool.start", tool_id="t1", name="terminal"),
+                                      frame(5, "sessions.changed")])
+        self.use(gateway)
+        now = chat_live.follow(self.ralph.home, CHAT, None, None, 5, latest=True)
+        self.assertEqual((now["events"], now["last"], now["running"]), ([], 5, True))
+        gateway.push(frame(6, "tool.complete", tool_id="t1", name="terminal"))
+        after = chat_live.follow(self.ralph.home, CHAT, now["last"], EPOCH, 5)
+        self.assertEqual([event["seq"] for event in after["events"]], [6])
+
     def test_a_chat_with_nothing_running_has_no_frames_and_no_wait_past_its_limit(self):
         self.use(FakeGateway(running=False, replay=[frame(1, "message.start"), frame(2, "message.complete")]))
         started = time.monotonic()

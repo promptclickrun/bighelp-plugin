@@ -152,7 +152,10 @@ same user can dial it as Hermes' owner forward does.
   `tool.complete`, `status.update`, and `session.info` reduced to `running`.
   Payloads are the gateway's, with text over 8,000 characters cut. With `after`
   null the answer is the running turn from its `message.start`; then the frames
-  after `after`, waiting up to `waitMs` for one. `reset` means start again from
+  after `after`, waiting up to `waitMs` for one. With `"latest": true` the answer
+  has no frames, only `last`: the gateway's newest frame number, for a chat that
+  already shows what Hermes saved of the turn (saved steps carry no call ID, so a
+  replay would show them twice). `reset` means start again from
   the turn's start: the gateway numbered its frames again (another `epoch`), or
   the watch let go of frames the app hadn't seen. Without a gateway,
   `attached` is false and the app reads the chat again as before.

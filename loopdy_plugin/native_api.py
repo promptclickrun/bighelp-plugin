@@ -713,6 +713,8 @@ class _ChatLive(_Body):
     after: Annotated[int, Field(ge=0)] | None = None
     epoch: str | None = Field(default=None, max_length=128)
     waitMs: Annotated[int, Field(ge=0, le=15_000)] = 0
+    # Only where the gateway is now: the app already shows what Hermes saved of the turn.
+    latest: bool = False
 
 
 def _chat_live(body: _ChatLive) -> dict:
@@ -722,7 +724,7 @@ def _chat_live(body: _ChatLive) -> dict:
     if not profile_exists(body.agentId):
         raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
     return chat_live.follow(Path(get_profile_dir(body.agentId)), body.sessionId, body.after, body.epoch,
-                            body.waitMs / 1000)
+                            body.waitMs / 1000, body.latest)
 
 
 @router.post("/chat/live")

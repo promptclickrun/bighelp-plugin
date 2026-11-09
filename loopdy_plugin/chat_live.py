@@ -153,6 +153,8 @@ class _Watch:
         self.changed = threading.Condition()
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
         self.epoch: str | None = None
+        # The gateway's newest frame number, of any kind: where "from now" starts.
+        self.newest = 0
         self.running = False
         self.attached = False
         self.ended = False
@@ -179,16 +181,20 @@ class _Watch:
         async with connect_owner(self.home, endpoint, max_size=8 * 2 ** 20) as client:
             attached = await client.rpc("session.resume", session_id=self.session_id, omit_messages=True)
             epoch = attached.get("replay_epoch")
+            last = attached.get("last_sequence")
             with self.changed:
                 self.epoch = epoch if isinstance(epoch, str) else None
                 self.running = attached.get("running") is True
-                self.attached = True
+                self.newest = last if type(last) is int else 0
                 self.changed.notify_all()
             # The frames the gateway still holds: the turn running now, from its start.
             replay = await client.rpc("session.events.since", session_id=self.session_id, last_sequence=0,
                                       replay_epoch=self.epoch)
             for frame in replay.get("events") or [] if isinstance(replay, dict) else []:
                 self._add(frame, replayed=True)
+            with self.changed:
+                self.attached = True
+                self.changed.notify_all()
             while True:
                 with self.changed:
                     if time.monotonic() - self.asked > IDLE_SECONDS:
@@ -207,9 +213,11 @@ class _Watch:
         if not isinstance(frame, dict):
             return
         kind, seq = frame.get("type"), frame.get("seq")
-        if kind not in EVENTS or type(seq) is not int:
+        if type(seq) is not int or frame.get("session_id") not in (None, self.session_id):
             return
-        if frame.get("session_id") not in (None, self.session_id):
+        with self.changed:
+            self.newest = max(self.newest, seq)
+        if kind not in EVENTS:
             return
         payload = _shape(kind, frame.get("payload"))
         if payload is None:
@@ -251,9 +259,11 @@ def _watch(home: Path, session_id: str) -> _Watch | None:
         return watch
 
 
-def follow(home: Path, session_id: str, after: int | None, epoch: str | None, wait: float) -> dict[str, Any]:
+def follow(home: Path, session_id: str, after: int | None, epoch: str | None, wait: float,
+           latest: bool = False) -> dict[str, Any]:
     """The frames after `after` (the turn running now from its start when None or when the gateway's
-    numbering started again), waiting up to `wait` seconds for new ones."""
+    numbering started again), waiting up to `wait` seconds for new ones. With `latest`, no frames: only where
+    the gateway is now (`last`), for an app that already shows what Hermes saved of the turn."""
     watch = _watch(home, session_id)
     if watch is None:
         return {"attached": False, "running": False, "events": [], "reset": False}
@@ -263,6 +273,8 @@ def follow(home: Path, session_id: str, after: int | None, epoch: str | None, wa
     with watch.changed:
         while True:
             watch.asked = time.monotonic()
+            if latest and (watch.attached or watch.ended):
+                break
             if watch.attached or watch.ended:
                 events = list(watch.events)
                 reset = epoch is not None and watch.epoch is not None and epoch != watch.epoch
@@ -281,6 +293,7 @@ def follow(home: Path, session_id: str, after: int | None, epoch: str | None, wa
                 break
             watch.changed.wait(remaining)
         running, attached, current_epoch = watch.running, watch.attached and not watch.ended, watch.epoch
+        newest = watch.newest
     answer, size = [], 0
     for event in fresh[:MAX_ANSWER_EVENTS]:
         size += len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
@@ -290,7 +303,9 @@ def follow(home: Path, session_id: str, after: int | None, epoch: str | None, wa
     value: dict[str, Any] = {"attached": attached, "running": running, "events": answer, "reset": reset}
     if current_epoch:
         value["epoch"] = current_epoch
-    if answer:
+    if latest:
+        value["last"] = newest
+    elif answer:
         value["last"] = answer[-1]["seq"]
     elif after is not None and not reset:
         value["last"] = after
