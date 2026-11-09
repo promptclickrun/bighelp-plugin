@@ -95,6 +95,7 @@ class Work:
     # A `message_agent` message: the agent it went to, and its delivery ID when known.
     agent: str | None = None
     delivery: str | None = None
+    agent_name: str | None = None
 
     def payload(self) -> dict:
         value: dict[str, Any] = {"id": self.id, "kind": self.kind, "title": self.title or FALLBACK_TITLES[self.kind],
@@ -111,6 +112,8 @@ class Work:
             value["agentId"] = self.agent
         if self.delivery:
             value["deliveryId"] = self.delivery
+        if self.agent_name:
+            value["agentName"] = self.agent_name
         return value
 
 
@@ -192,13 +195,16 @@ def _delivery(command: Any) -> tuple[str, str | None] | None:
     return agent.group(1), delivery
 
 
-def _message_title(agent: str) -> str:
+def _agent_name(agent: str) -> str:
     from .adapter import profile_display_name
     try:
-        name = profile_display_name(agent)
+        return _cut(profile_display_name(agent), 80) or agent
     except Exception:
-        name = agent
-    return _cut(f"Message to {name}", TITLE_LIMIT)
+        return agent
+
+
+def _message_title(agent: str) -> str:
+    return _cut(f"Message to {_agent_name(agent)}", TITLE_LIMIT)
 
 
 def _epoch(value: Any) -> float | None:
@@ -378,7 +384,8 @@ def running_command_entries(home: Path, db: sqlite3.Connection | None, *,
         message = _delivery(entry.get("command"))
         title = _message_title(message[0]) if message else _command(entry.get("command"))
         work.append((Work(f"process:{process_id}", "command", "running", title, _epoch(entry.get("started_at")),
-                          None, None, session, *(message or (None, None))), entry))
+                          None, None, session, *(message or (None, None)),
+                          _agent_name(message[0]) if message else None), entry))
     return work
 
 
@@ -439,7 +446,7 @@ def _finished_command(message_id: Any, session_id: str, ended: float | None, tex
     if (message := _finished_message(head, tail)) is not None:
         # The waiter's own end says nothing of the answer: the app reads the delivery for that.
         return Work(f"message:{message_id}", "command", "done", _message_title(message[0]), None, ended, None,
-                    session_id, *message)
+                    session_id, *message, _agent_name(message[0]))
     detail = f"Exit {exit_code}" if exit_code and exit_code != "?" else None
     return Work(f"message:{message_id}", "command", PROCESS_STATES[outcome], _command(command), None, ended,
                 detail, session_id)

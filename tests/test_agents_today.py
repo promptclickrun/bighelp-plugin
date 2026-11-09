@@ -207,8 +207,8 @@ class AgentsTodayTests(unittest.TestCase):
             display_kind="process_complete", display_metadata={"display_text": display_text(exited(command))})
         items = self.by_id(self.today())
         running = items["process:proc_dm"]
-        self.assertEqual((running["title"], running["agentId"], running["deliveryId"]),
-                         ("Message to Ralph", "ralph", delivery))
+        self.assertEqual((running["title"], running["agentId"], running["agentName"], running["deliveryId"]),
+                         ("Message to Ralph", "ralph", "Ralph", delivery))
         done = items[f"message:{finished}"]
         self.assertEqual((done["title"], done["state"], done["agentId"], done["deliveryId"]),
                          ("Message to Ralph", "done", "ralph", answered))
