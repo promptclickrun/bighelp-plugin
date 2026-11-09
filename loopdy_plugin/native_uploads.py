@@ -4,6 +4,9 @@ Hermes' ``file.attach`` takes a file's bytes in one WebSocket frame, so the app
 keeps it for files up to 8 MiB. A video from an iPhone is often 60 to 80 MB. The
 app sends those here instead, in fixed pieces (``chunkBytes``), in any order and
 again after a drop: the host keeps which pieces it has, and ``status`` says so.
+Pieces are 4 MiB. A proxy in front of Hermes can refuse that much in one request
+(nginx and aiohttp take 1 MiB by default), so the app can start an upload in
+512 KiB pieces instead (``native-uploads-small-pieces-v1``).
 
 ``finish`` checks the whole file against the SHA-256 the app sent at ``start``
 and answers with the staged file's path. The app hands that path to stock
@@ -53,7 +56,10 @@ logger = logging.getLogger(__name__)
 CAPABILITY = "native-uploads-v1"
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 CHUNK_BYTES = 4 * 1024 * 1024
-MAX_CHUNKS = -(-MAX_UPLOAD_BYTES // CHUNK_BYTES)
+# For a proxy that refuses 4 MiB requests: an upload started with these pieces keeps them.
+SMALL_CHUNK_BYTES = 512 * 1024
+SMALL_PIECES_CAPABILITY = "native-uploads-small-pieces-v1"
+MAX_CHUNKS = -(-MAX_UPLOAD_BYTES // SMALL_CHUNK_BYTES)
 # Uploads one host holds at once, one person's share of them, and their bytes together.
 MAX_ACTIVE_UPLOADS = 8
 MAX_UPLOADS_PER_PERSON = 3
@@ -88,6 +94,8 @@ class _Start(BaseModel):
     mimeType: str = Field(min_length=3, max_length=129)
     byteCount: StrictInt = Field(ge=1, le=MAX_UPLOAD_BYTES)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # The piece size, one of chunk_sizes(); 4 MiB when it's left out.
+    chunkBytes: StrictInt | None = None
 
 
 class _Upload(BaseModel):
@@ -124,15 +132,27 @@ def safe_file_name(value: str) -> str:
     return f"{stem}{suffix}" or "attachment"
 
 
-def chunk_count(byte_count: int) -> int:
-    return -(-byte_count // CHUNK_BYTES)
+def chunk_sizes() -> tuple[int, int]:
+    """The piece sizes an upload can use: 4 MiB, or 512 KiB behind a proxy that refuses 4 MiB."""
+    return CHUNK_BYTES, SMALL_CHUNK_BYTES
 
 
-def chunk_length(byte_count: int, index: int) -> int:
-    """How many bytes piece ``index`` holds: CHUNK_BYTES, except for the last piece."""
-    if not 0 <= index < chunk_count(byte_count):
+def chunk_count(byte_count: int, chunk_bytes: int | None = None) -> int:
+    return -(-byte_count // (chunk_bytes or CHUNK_BYTES))
+
+
+def chunk_length(byte_count: int, index: int, chunk_bytes: int | None = None) -> int:
+    """How many bytes piece ``index`` holds: the piece size, except for the last piece."""
+    size = chunk_bytes or CHUNK_BYTES
+    if not 0 <= index < chunk_count(byte_count, size):
         raise ValueError("chunk out of range")
-    return min(CHUNK_BYTES, byte_count - index * CHUNK_BYTES)
+    return min(size, byte_count - index * size)
+
+
+def piece_size(meta: dict[str, Any]) -> int:
+    """An upload's piece size. Uploads from before the choice have none recorded: 4 MiB."""
+    size = meta.get("chunkBytes")
+    return size if size in chunk_sizes() else CHUNK_BYTES
 
 
 def _owner(context: NativeContext) -> str:
@@ -299,6 +319,9 @@ class UploadStore:
         except UnicodeEncodeError:
             raise NativeAPIError(422, "invalid_request", "The file name is invalid.") from None
         file_name = safe_file_name(body.fileName)
+        size = CHUNK_BYTES if body.chunkBytes is None else body.chunkBytes
+        if size not in chunk_sizes():
+            raise NativeAPIError(422, "invalid_request", "The piece size is invalid.")
         with _lock("start"):
             self.prune()
             active = self._active()
@@ -306,8 +329,8 @@ class UploadStore:
                 # The same file again (the app lost its upload, or started over after a relaunch):
                 # keep the pieces the host already has.
                 if (meta.get("owner"), meta.get("agentId"), meta.get("sha256"), meta.get("byteCount"),
-                        meta.get("fileName"), meta.get("mimeType")) \
-                        == (owner, body.agentId, body.sha256, body.byteCount, file_name, mime) \
+                        meta.get("fileName"), meta.get("mimeType"), piece_size(meta)) \
+                        == (owner, body.agentId, body.sha256, body.byteCount, file_name, mime, size) \
                         and not meta.get("finished"):
                     return self._answer(meta)
             if len(active) >= MAX_ACTIVE_UPLOADS \
@@ -340,7 +363,7 @@ class UploadStore:
                 meta = {
                     "version": 1, "uploadId": upload_id, "owner": owner, "agentId": body.agentId,
                     "fileName": file_name, "mimeType": mime, "byteCount": body.byteCount,
-                    "sha256": body.sha256, "chunkBytes": CHUNK_BYTES, "received": [],
+                    "sha256": body.sha256, "chunkBytes": size, "received": [],
                     "finished": False, "createdAt": now, "updatedAt": now,
                 }
                 self._write_meta(folder, meta)
@@ -355,8 +378,9 @@ class UploadStore:
         byte_count = int(meta.get("byteCount", 0))
         if meta.get("finished"):
             return byte_count
-        received = sum(chunk_length(byte_count, index) for index in meta.get("received", [])
-                       if 0 <= index < chunk_count(byte_count))
+        size = piece_size(meta)
+        received = sum(chunk_length(byte_count, index, size) for index in meta.get("received", [])
+                       if 0 <= index < chunk_count(byte_count, size))
         return 2 * byte_count - received
 
     def status(self, upload_id: str, owner: str) -> dict[str, Any]:
@@ -371,11 +395,11 @@ class UploadStore:
             meta = self._owned(folder, owner)
             if meta["finished"]:
                 raise NativeAPIError(409, "upload_finished", "The upload is already complete.")
-            byte_count = int(meta["byteCount"])
-            if offset % CHUNK_BYTES or not 0 <= offset < byte_count:
+            byte_count, size = int(meta["byteCount"]), piece_size(meta)
+            if offset % size or not 0 <= offset < byte_count:
                 raise NativeAPIError(422, "upload_offset_invalid", "The piece doesn't fit this upload.")
-            index = offset // CHUNK_BYTES
-            if length != chunk_length(byte_count, index):
+            index = offset // size
+            if length != chunk_length(byte_count, index, size):
                 raise NativeAPIError(422, "upload_length_invalid", "The piece doesn't fit this upload.")
             return index
 
@@ -387,7 +411,8 @@ class UploadStore:
             meta = self._owned(folder, owner)
             if meta["finished"]:
                 raise NativeAPIError(409, "upload_finished", "The upload is already complete.")
-            if len(data) != chunk_length(int(meta["byteCount"]), index):
+            size = piece_size(meta)
+            if len(data) != chunk_length(int(meta["byteCount"]), index, size):
                 raise NativeAPIError(422, "upload_length_invalid", "The piece doesn't fit this upload.")
             descriptor = os.open(folder / _DATA, os.O_WRONLY | os.O_NOFOLLOW)
             try:
@@ -395,7 +420,7 @@ class UploadStore:
                     written = 0
                     view = memoryview(data)
                     while written < len(data):
-                        written += os.pwrite(descriptor, view[written:], index * CHUNK_BYTES + written)
+                        written += os.pwrite(descriptor, view[written:], index * size + written)
                     os.fsync(descriptor)
             finally:
                 os.close(descriptor)
@@ -411,7 +436,7 @@ class UploadStore:
             target = folder / _FINISHED / meta["fileName"]
             if not meta["finished"]:
                 byte_count = int(meta["byteCount"])
-                if len(meta["received"]) != chunk_count(byte_count):
+                if len(meta["received"]) != chunk_count(byte_count, piece_size(meta)):
                     raise NativeAPIError(409, "upload_incomplete", "Some of the file hasn't arrived yet.")
                 digest = hashlib.sha256()
                 descriptor = os.open(folder / _DATA, os.O_RDONLY | os.O_NOFOLLOW)
@@ -512,9 +537,9 @@ class UploadStore:
             "fileName": meta["fileName"],
             "mimeType": meta["mimeType"],
             "byteCount": byte_count,
-            "chunkBytes": int(meta["chunkBytes"]),
+            "chunkBytes": piece_size(meta),
             "receivedChunks": received,
-            "receivedBytes": sum(chunk_length(byte_count, index) for index in received),
+            "receivedBytes": sum(chunk_length(byte_count, index, piece_size(meta)) for index in received),
             "finished": bool(meta["finished"]),
             "expiresAt": float(meta["updatedAt"]) + EXPIRY_SECONDS,
         }
@@ -628,4 +653,5 @@ async def request(operation: str, http_request: Request, *, auth_module) -> Resp
     return auth_module._response(result, owner, request_id)
 
 
-__all__ = ["CAPABILITY", "CHUNK_BYTES", "MAX_UPLOAD_BYTES", "UploadStore", "available", "request"]
+__all__ = ["CAPABILITY", "CHUNK_BYTES", "MAX_UPLOAD_BYTES", "SMALL_CHUNK_BYTES", "SMALL_PIECES_CAPABILITY",
+           "UploadStore", "available", "request"]
