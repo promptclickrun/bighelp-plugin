@@ -99,3 +99,67 @@ its terminal would; Hermes ends the turn and the process. Only a lease with a
 recorded start time is signalled, so a reused pid never is. `canStop` says so
 up front.
 
+
+## Hermes 0.23: messages through the other agent's gateway
+
+Hermes 0.23 delivers a `message_agent` message to the other agent's gateway,
+which runs it in that agent's Bot Chat. The asking agent's tool call answers
+`{"status": "queued", "delivery_id": "<64 hex>", "process_id": "proc_…", …}` and
+a background command waits for the reply (`bot_mode_dm.py --run-delivery`). That
+waiter gives up after about 30 minutes, so a longer job's reply never reaches the
+asking chat. The message in the other agent's chat also gains Hermes' own
+"Constraints" and "Reply needed" lines, so the message hash above no longer
+finds it.
+
+### Where the message is
+
+`POST /api/plugins/loopdy/native/agents/deliveries`, feature
+`native-agent-deliveries-v1`, with
+`{"deliveries": [{"agentId": "ralph", "deliveryId": "<64 hex>"}]}` (16 at most)
+answers each delivery the agent still has a receipt for
+(`<agent home>/runtime/bot_live_delivery/<id>.json`), read-only:
+
+```json
+{"deliveries": [{"agentId": "ralph", "deliveryId": "…", "state": "working", "tool": "terminal",
+                 "sessionId": "<the agent's Bot Chat>", "updatedAt": 1794193707.4}]}
+```
+
+- `state` is `queued` (the gateway has it, behind or before a turn), `working`
+  (the gateway's turn lease on that chat is held, with the `tool` it runs),
+  `answered` (with `reply`, at most 32,000 characters, when there is one),
+  `withdrawn` or `failed`. The message itself never leaves the computer.
+
+### The turn as it runs
+
+The dashboard's socket can't stream a turn the gateway runs. The gateway's own
+socket can, to a client attached to that chat, and a process running as the
+same user can dial it as Hermes' owner forward does.
+
+- `chat/activity` (above) now also says a chat is busy while the agent's
+  gateway holds its turn lease (the lease names the gateway's pid, from its
+  `gateway.lock`), with `"live": true`. A turn this dashboard runs doesn't count:
+  it streams to the app already. `chat/stop` interrupts such a turn on the
+  gateway's socket (`session.interrupt`), as the gateway's own Stop does.
+- `POST /api/plugins/loopdy/native/chat/live`, feature `native-chat-live-v1`, with
+  `{"agentId", "sessionId", "after": <seq> | null, "epoch": <string> | null,
+  "waitMs": 0…15000}` answers
+  `{"attached": true, "running": true, "epoch": "…", "events": [{"seq": 12,
+  "type": "tool.start", "payload": {…}}], "last": 12, "reset": false}`. The plugin
+  keeps one watch per chat, attached while an app asks (45 seconds after the last
+  request it lets go), and holds the frames the app draws a turn from:
+  `message.start`, `message.delta`, `message.complete`, `reasoning.delta`,
+  `thinking.delta`, `tool.generating`, `tool.start`, `tool.progress`,
+  `tool.complete`, `status.update`, and `session.info` reduced to `running`.
+  Payloads are the gateway's, with text over 8,000 characters cut. With `after`
+  null the answer is the running turn from its `message.start`; then the frames
+  after `after`, waiting up to `waitMs` for one. `reset` means start again from
+  the turn's start: the gateway numbered its frames again (another `epoch`), or
+  the watch let go of frames the app hadn't seen. Without a gateway,
+  `attached` is false and the app reads the chat again as before.
+
+### Background work
+
+`agents/today` and the background counts show a waiter as the message it is:
+title "Message to Ralph", with `agentId` and, when known, `deliveryId` (Hermes
+derives it from the message file while the waiter runs, and the finished
+waiter's JSON ends with it). The command line itself never reaches the phone.

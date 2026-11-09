@@ -675,6 +675,72 @@ async def agents_plugins_share(request: Request) -> Response:
     return _response(value, owner, request_id)
 
 
+class _AgentDelivery(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    deliveryId: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class _AgentDeliveries(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    deliveries: list[_AgentDelivery] = Field(min_length=1, max_length=16)
+
+
+def _agent_deliveries(body: _AgentDeliveries) -> dict:
+    from .agent_deliveries import deliveries
+    return {"deliveries": deliveries((item.agentId, item.deliveryId) for item in body.deliveries)}
+
+
+@router.post("/agents/deliveries")
+async def agents_deliveries(request: Request) -> Response:
+    """`message_agent` messages as the agents asked keep them: queued, working (and on which tool), answered
+    (and what), withdrawn or failed. Read-only."""
+    from .agent_deliveries import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "agent_deliveries_unavailable", "Agent messages aren't available on this host.")
+    body = await _body(request, _AgentDeliveries)
+    value = await run_in_threadpool(_agent_deliveries, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=1_048_576)
+
+
+class _ChatLive(_Body):
+    sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    # The gateway's number of the last frame the app has; none for the turn running now from its start.
+    after: Annotated[int, Field(ge=0)] | None = None
+    epoch: str | None = Field(default=None, max_length=128)
+    waitMs: Annotated[int, Field(ge=0, le=15_000)] = 0
+
+
+def _chat_live(body: _ChatLive) -> dict:
+    from pathlib import Path
+    from hermes_cli.profiles import get_profile_dir, profile_exists
+    from . import chat_live
+    if not profile_exists(body.agentId):
+        raise NativeAPIError(404, "profile_not_found", "The selected profile no longer exists.")
+    return chat_live.follow(Path(get_profile_dir(body.agentId)), body.sessionId, body.after, body.epoch,
+                            body.waitMs / 1000)
+
+
+@router.post("/chat/live")
+async def chat_live_route(request: Request) -> Response:
+    """A chat's turn as the agent's gateway runs it: the frames after the last one the app has, waiting a
+    little for new ones. Read-only."""
+    from .chat_live import CAPABILITY
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "chat_live_unavailable", "Following a chat live isn't available on this host.")
+    body = await _body(request, _ChatLive)
+    value = await run_in_threadpool(_chat_live, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    return _response(value, owner, request_id, maximum=2_097_152)
+
+
 class _ChatActivity(_Body):
     sessionId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 

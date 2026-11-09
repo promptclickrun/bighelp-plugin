@@ -7,6 +7,11 @@ sees nothing until it's read again. Hermes keeps a lease for each chat a process
 from anything but the dashboard's own chats ("tui", "desktop") means another process has that chat.
 It's busy when that process started after the chat's last message, or the chat's latest turn is
 still going.
+
+Hermes 0.23 runs a Bot Chat's turns in the agent's gateway instead (`message_agent` deliveries among
+them), which leaves no such lease. There, the chat is busy while the gateway holds its turn lease
+(`chat_live.gateway_turn`); the app can follow that turn live (`live`), and Stop interrupts it on the
+gateway's socket.
 """
 from __future__ import annotations
 
@@ -80,9 +85,12 @@ def activity(profile: str, session_id: str, *, now: Callable[[], float] | None =
     idle = {"working": False, "tool": None, "since": None, "canStop": False}
     home = _home(profile)
     holders = _holders(home, session_id)
-    if not holders:
-        return idle
     clock = (now or time.time)()
+    if not holders:
+        turn = _gateway_turn(home, session_id, clock)
+        if turn is None:
+            return idle
+        return {"working": True, "tool": turn["tool"], "since": turn["since"], "canStop": True, "live": True}
     started = min((_number(holder.get("started_at")) or clock) for holder in holders)
     working, tool = False, None
     try:
@@ -105,10 +113,28 @@ def activity(profile: str, session_id: str, *, now: Callable[[], float] | None =
             "canStop": any(holder.get("process_start_time") is not None for holder in holders)}
 
 
+def _gateway_turn(home: Path, session_id: str, now: float) -> dict[str, Any] | None:
+    from . import chat_live
+    if not chat_live.available():
+        return None
+    try:
+        return chat_live.gateway_turn(home, session_id, now)
+    except (OSError, sqlite3.Error):
+        return None
+
+
 def stop(profile: str, session_id: str) -> bool:
-    """Interrupts the run as Ctrl-C would: Hermes stops the turn and the process ends."""
+    """Interrupts the run as Ctrl-C would: Hermes stops the turn and the process ends. A turn the agent's
+    gateway runs stops on the gateway's socket, as its own Stop does."""
+    home = _home(profile)
+    holders = _holders(home, session_id)
+    if not holders:
+        if _gateway_turn(home, session_id, time.time()) is None:
+            return False
+        from . import chat_live
+        return chat_live.interrupt(home, session_id)
     stopped = False
-    for holder in _holders(_home(profile), session_id):
+    for holder in holders:
         if holder.get("process_start_time") is None:
             continue
         try:

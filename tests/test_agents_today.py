@@ -6,6 +6,7 @@ has Hermes' own schema. Owners are real processes: this one, one that ended, one
 from __future__ import annotations
 
 from contextlib import closing
+import json
 import sqlite3
 from types import SimpleNamespace
 import unittest
@@ -182,6 +183,36 @@ class AgentsTodayTests(unittest.TestCase):
                          ("Edit case.tsx", "Could not write case.tsx; see https://example.com/a/b"))
         self.assertEqual(items["process:proc_p"]["title"], "run.sh --x ./sync.sh")
         self.assertEqual(items[f"message:{message}"]["title"], "cd app && npm run dev")
+
+    def test_a_message_to_another_agent_is_that_message_never_its_waiter_command(self):
+        """Hermes 0.23's `message_agent` waits for the other agent in a background command. Running, it's the
+        message to that agent with the delivery ID Hermes derives from its file; finished, the ID comes from
+        the end of the waiter's JSON, after a reply far longer than the notice's start that is read."""
+        import hashlib
+        from pathlib import Path
+        message_file = self.root / "dm-abc123.txt"
+        message_file.write_text("Build the Mac app.")
+        delivery = hashlib.sha256(str(Path(message_file).resolve()).encode()).hexdigest()
+        command = ("/opt/hermes/bin/python3 /opt/hermes/tools/bot_mode_dm.py --run-delivery --author "
+                   "'{\"id\":\"bot:default\",\"name\":\"hermes\",\"is_bot\":true}' query-file "
+                   f"{message_file} --profile-home /home/sam/.hermes/profiles/ralph /opt/hermes/bin/hermes -p ralph")
+        self.nova.checkpoint(process_entry("proc_dm", command, live_owner()))
+        answered = "a" * 64
+        output = json.dumps({"outcome": "@ralph answered.", "reply": "Here's the build. " * 600,
+                             "status": "settled", "delivery_id": answered})
+        finished = self.nova.db.append_message(
+            BOT_CHAT, "user", timestamp=SINCE + 300,
+            content=f"[IMPORTANT: Background process proc_old completed normally (exit code 0).\n"
+                    f"Command: {command.replace(str(message_file), '/tmp/dm-old.txt')}\nOutput:\n{output}\n]",
+            display_kind="process_complete", display_metadata={"display_text": display_text(exited(command))})
+        items = self.by_id(self.today())
+        running = items["process:proc_dm"]
+        self.assertEqual((running["title"], running["agentId"], running["deliveryId"]),
+                         ("Message to Ralph", "ralph", delivery))
+        done = items[f"message:{finished}"]
+        self.assertEqual((done["title"], done["state"], done["agentId"], done["deliveryId"]),
+                         ("Message to Ralph", "done", "ralph", answered))
+        self.assertNotIn("bot_mode_dm", json.dumps(items), "The waiter's command line never reaches the phone")
 
     def test_only_chats_active_today_are_read(self):
         self.nova.chat(OTHER_CHAT, source="bighelp")

@@ -26,7 +26,7 @@ LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1",
                  "native-core-files-chat-v1", "native-app-state-v1", "native-html-apps-v1",
                  "native-agents-background-v1", "native-agents-today-v1",
                  "native-agents-today-detail-v1", "native-computer-screen-v1",
-                 "native-uploads-small-pieces-v1")
+                 "native-uploads-small-pieces-v1", "native-agent-deliveries-v1", "native-chat-live-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -580,4 +580,15 @@ def _native_features(
         features.append(SMALL_PIECES_CAPABILITY)
     else:
         skip(SMALL_PIECES_CAPABILITY, "the process home or POSIX file writes are unavailable.")
+    # Hermes 0.23's `message_agent`: the other agent's receipt, and its gateway's turn as it runs.
+    from .agent_deliveries import CAPABILITY as deliveries_capability, available as deliveries_available
+    if deliveries_available():
+        features.append(deliveries_capability)
+    else:
+        skip(deliveries_capability, "public profile helpers are unimportable.")
+    from .chat_live import CAPABILITY as chat_live_capability, available as chat_live_available
+    if chat_live_available():
+        features.append(chat_live_capability)
+    else:
+        skip(chat_live_capability, "this Hermes has no gateway owner forward.")
     return profile, tuple(features)

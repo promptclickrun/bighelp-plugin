@@ -58,6 +58,8 @@ PROCESS_FEATURES = (
     "native-agents-today-detail-v1",
     "native-computer-screen-v1",
     "native-uploads-small-pieces-v1",
+    "native-agent-deliveries-v1",
+    "native-chat-live-v1",
 )
 
 
