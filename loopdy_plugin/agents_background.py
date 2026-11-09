@@ -8,6 +8,9 @@ Three kinds, each from the record Hermes keeps for it (all read-only, none of it
 - Commands (`terminal(background=true)`): `processes.json` in the agent's home lists the running ones.
   An entry counts only while its process is alive with the start time Hermes wrote. A command that
   finished is not in that file; Hermes saves a one-line notice of it in the chat (`process_complete`).
+  On Hermes 0.23, `message_agent` waits for the other agent in such a command (`bot_mode_dm.py
+  --run-delivery`): it is the message to that agent, with the agent and the delivery ID it can be
+  followed by (`agent_deliveries`), never a command line.
 - Scheduled tasks: the cron execution ledger (`cron/executions.db`) books each run with its owner
   process, and `cron/jobs.json` names the job.
 
@@ -19,6 +22,7 @@ from __future__ import annotations
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 import json
 import logging
 import math
@@ -49,6 +53,13 @@ JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 PROCESS_TEXT = re.compile(
     r"Background Process (Finished|Failed to Start|Failed|Terminated|Lost)(?: \(exit (-?\d{1,5}|\?)\))?(?:: (.+))?")
 PROCESS_BATCH_TEXT = re.compile(r"(\d{1,6}) Background Processes Finished")
+# Hermes 0.23's `message_agent` waiter: `python bot_mode_dm.py --run-delivery ... query-file <file>
+# --profile-home <home> <hermes> -p <agent>`.
+DELIVERY_RUNNER = re.compile(r"bot_mode_dm\.py\s+--run-delivery\b")
+DELIVERY_AGENT = re.compile(r"(?:^|\s)-p\s+([a-z0-9][a-z0-9_-]{0,63})\s*$")
+DELIVERY_FILE = re.compile(r"\squery-file\s+(?:'([^']{1,1024})'|(\S{1,1024}))")
+# The waiter's JSON ends with the delivery ID, after any reply.
+DELIVERY_ID_FIELD = re.compile(r'"delivery_id":\s*"([0-9a-f]{64})"')
 PROCESS_STATES = {"Finished": "done", "Failed": "failed", "Failed to Start": "failed", "Lost": "failed",
                   "Terminated": "stopped"}
 # The words for a delegation's final status (`status` in its completion event).
@@ -81,6 +92,10 @@ class Work:
     ended: float | None = None
     detail: str | None = None
     session: str | None = None
+    # A `message_agent` message: the agent it went to, and its delivery ID when known.
+    agent: str | None = None
+    delivery: str | None = None
+    agent_name: str | None = None
 
     def payload(self) -> dict:
         value: dict[str, Any] = {"id": self.id, "kind": self.kind, "title": self.title or FALLBACK_TITLES[self.kind],
@@ -93,6 +108,12 @@ class Work:
             value["detail"] = self.detail
         if self.session:
             value["sessionId"] = self.session
+        if self.agent:
+            value["agentId"] = self.agent
+        if self.delivery:
+            value["deliveryId"] = self.delivery
+        if self.agent_name:
+            value["agentName"] = self.agent_name
         return value
 
 
@@ -153,6 +174,37 @@ def _command(value: Any) -> str:
     """Hermes' `_short_command`: one line, 80 characters."""
     text = " ".join(str(value or "").split())
     return _line(text[:77] + "..." if len(text) > 80 else text, TITLE_LIMIT)
+
+
+def _delivery(command: Any) -> tuple[str, str | None] | None:
+    """The agent a `message_agent` waiter waits on, and the delivery ID Hermes derives from its message file
+    (`_dm_delivery_id`) while that file is still there; None for any other command."""
+    if not isinstance(command, str) or not DELIVERY_RUNNER.search(command):
+        return None
+    agent = DELIVERY_AGENT.search(command)
+    if agent is None:
+        return None
+    delivery = None
+    if (found := DELIVERY_FILE.search(command)) is not None:
+        path = Path(found.group(1) or found.group(2))
+        try:
+            if path.is_file():
+                delivery = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+        except OSError:
+            delivery = None
+    return agent.group(1), delivery
+
+
+def _agent_name(agent: str) -> str:
+    from .adapter import profile_display_name
+    try:
+        return _cut(profile_display_name(agent), 80) or agent
+    except Exception:
+        return agent
+
+
+def _message_title(agent: str) -> str:
+    return _cut(f"Message to {_agent_name(agent)}", TITLE_LIMIT)
 
 
 def _epoch(value: Any) -> float | None:
@@ -329,8 +381,11 @@ def running_command_entries(home: Path, db: sqlite3.Connection | None, *,
         if not _alive(entry.get("pid"), entry.get("host_start_time"), unreadable_is_alive=True):
             continue
         session = _session(db, parent) if with_session else None
-        work.append((Work(f"process:{process_id}", "command", "running", _command(entry.get("command")),
-                          _epoch(entry.get("started_at")), None, None, session), entry))
+        message = _delivery(entry.get("command"))
+        title = _message_title(message[0]) if message else _command(entry.get("command"))
+        work.append((Work(f"process:{process_id}", "command", "running", title, _epoch(entry.get("started_at")),
+                          None, None, session, *(message or (None, None)),
+                          _agent_name(message[0]) if message else None), entry))
     return work
 
 
@@ -349,19 +404,35 @@ def finished_commands(db: sqlite3.Connection, since: float) -> list[Work]:
     for (session_id,) in sessions:
         if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id):
             continue
-        for message_id, stamp, metadata in _rows(db, """
-                SELECT id, timestamp, display_metadata FROM messages WHERE display_kind = 'process_complete' AND id IN (
+        for message_id, stamp, metadata, head, tail in _rows(db, """
+                SELECT id, timestamp, display_metadata, substr(content, 1, 1200), substr(content, -400) FROM messages
+                WHERE display_kind = 'process_complete' AND id IN (
                     SELECT id FROM messages INDEXED BY idx_messages_session
                     WHERE session_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?)""",
                 (session_id, since, MAX_SESSION_MESSAGES)):
             ended = _epoch(stamp)
-            item = _finished_command(message_id, session_id, ended, _json(metadata).get("display_text"))
+            item = _finished_command(message_id, session_id, ended, _json(metadata).get("display_text"), head, tail)
             if item is not None and ended is not None and ended >= since:
                 work.append(item)
     return work
 
 
-def _finished_command(message_id: Any, session_id: str, ended: float | None, text: Any) -> Work | None:
+def _finished_message(head: Any, tail: Any) -> tuple[str, str | None] | None:
+    """A finished `message_agent` waiter's agent and delivery ID, from the start of Hermes' notice (its
+    `Command:` line: the short title cuts it before the script's name) and its end (the JSON the waiter
+    printed ends with the delivery ID, after a reply of any length)."""
+    if not isinstance(head, str):
+        return None
+    command = re.search(r"^Command: (.+)$", head, re.MULTILINE)
+    message = _delivery(command.group(1).strip()) if command else None
+    if message is None:
+        return None
+    found = DELIVERY_ID_FIELD.search(tail if isinstance(tail, str) else "") or DELIVERY_ID_FIELD.search(head)
+    return message[0], found.group(1) if found else None
+
+
+def _finished_command(message_id: Any, session_id: str, ended: float | None, text: Any,
+                      head: Any = None, tail: Any = None) -> Work | None:
     if not isinstance(text, str) or len(text) > 4_096 or not isinstance(message_id, int):
         return None
     text = " ".join(text.split())
@@ -372,6 +443,10 @@ def _finished_command(message_id: Any, session_id: str, ended: float | None, tex
     if match is None:
         return None
     outcome, exit_code, command = match.groups()
+    if (message := _finished_message(head, tail)) is not None:
+        # The waiter's own end says nothing of the answer: the app reads the delivery for that.
+        return Work(f"message:{message_id}", "command", "done", _message_title(message[0]), None, ended, None,
+                    session_id, *message, _agent_name(message[0]))
     detail = f"Exit {exit_code}" if exit_code and exit_code != "?" else None
     return Work(f"message:{message_id}", "command", PROCESS_STATES[outcome], _command(command), None, ended,
                 detail, session_id)
