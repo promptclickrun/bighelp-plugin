@@ -34,6 +34,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from . import card_detail
 from . import host_telemetry
 from . import live_alerts
 from . import notification_channels
@@ -88,6 +89,12 @@ _APPROVAL_TTL_SECONDS = 60
 _APPROVAL_LIMIT = 4096
 _APPROVAL_HOOKS = ("pre_approval_request", "post_approval_response")
 _ACTIVITY_REFRESH_SECONDS = 60
+# Seconds between a card's updates while it carries sealed detail, and between its high-priority ones.
+_DETAIL_SPACING = 8
+_LOUD_SPACING = 30
+# How often each process looks for running turns to send again, and how long after a turn's last hook it still does.
+_CARD_REFRESH_TICK = 15
+_REFRESH_WITHOUT_HOOKS = 1800
 # A rotating sign-in (the Nous Portal's lasts a day) runs out if bighelp stays closed.
 # Waking the phone this often gives it more than one chance to renew before then.
 _SIGN_IN_WAKE_SECONDS = 8 * 3600
@@ -362,6 +369,7 @@ class ManagedNotifications:
         self._lock = state["lock"]
         self._wake, self._stop = state["wake"], threading.Event()
         self._worker: threading.Thread | None = None
+        self._keeper: threading.Thread | None = None
         self._worker_lock = None
         self._loaded_profiles: set[str] = state["loaded_profiles"]
         self._approval_profiles: set[str] = state["approval_profiles"]
@@ -411,6 +419,12 @@ class ManagedNotifications:
                 CREATE TABLE IF NOT EXISTS quiet_hours(grant_id TEXT PRIMARY KEY REFERENCES grants(grant_id) ON DELETE CASCADE, enabled INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, time_zone TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS activities(activity_id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(grant_id) ON DELETE CASCADE, profile TEXT NOT NULL, session_id TEXT NOT NULL, session_ref TEXT NOT NULL, lease_expires INTEGER NOT NULL, work_turn TEXT, state TEXT NOT NULL, last_timestamp INTEGER NOT NULL DEFAULT 0, last_signature TEXT, last_queued_at INTEGER NOT NULL DEFAULT 0);
             """)
+            # Added for sealed card detail: the chat row's key from the phone, and when an
+            # update last went out at high priority.
+            # The dashboard and the gateway can start together: the one that comes second finds the column there.
+            for column in ("card_key BLOB", "last_loud_at INTEGER NOT NULL DEFAULT 0"):
+                try: db.execute("ALTER TABLE activities ADD COLUMN " + column)
+                except sqlite3.OperationalError: pass
             db.executescript(live_alerts.SCHEMA)
             db.executescript(scheduled_links.SCHEMA)
 
@@ -462,7 +476,8 @@ class ManagedNotifications:
                 "managedEnrollmentSupported": True, "supportedEventTypes": sorted(_EVENT_TYPES),
                 "sealedAlerts": {"version": 2}, "preferences": {"peerChats": True, "workflows": True, "scheduledLinks": True,
                                                                 "channels": True, "kinds": True},
-                "richLiveActivitySupported": True, "producerCapabilities": {
+                "richLiveActivitySupported": True, "sealedCardDetail": {"version": card_detail.VERSION},
+                "producerCapabilities": {
                     "sessionCompletion": loaded, "sessionFailure": loaded, "richLiveActivity": loaded,
                     "nativeApproval": approval_loaded, "nativeClarification": clarification_loaded}}
 
@@ -882,8 +897,32 @@ class ManagedNotifications:
             # Terminal pending/accepted retries keep their original frozen request.
             if work is not None:
                 phase, count, terminal = self._work_projection(work)
-                self._queue_activity(profile, session_id, work["turn"], phase, count, terminal, stopped=work["outcome"] == "cancelled" and terminal)
+                self._queue_activity(profile, session_id, work["turn"], phase, count, terminal, stopped=work["outcome"] == "cancelled" and terminal, detail=work.get("detail"))
         return {"version": 1, "activityId": activity_id, "grantId": grant_id, "sessionReference": reference, "state": "subscribed"}
+
+    def set_card_key(self, grant_id: str, activity_id: str, key: Any):
+        """The phone's key for this chat row's sealed detail (card_detail.py).
+
+        It comes over the phone's own connection to this host. The next update for
+        the card carries the detail, so the card fills in at once.
+        """
+        self._grant(grant_id); _identifier(activity_id)
+        secret = card_detail.key_from(key)
+        if secret is None: raise ManagedNotificationError("notification_card_key_invalid", 400)
+        with self._lock:
+            with self._db() as db:
+                row = db.execute("SELECT profile,session_id,work_turn,card_key FROM activities WHERE activity_id=? AND grant_id=?", (activity_id, grant_id)).fetchone()
+                if not row: raise ManagedNotificationError("notification_activity_unknown", 404)
+                if row["card_key"] is not None and bytes(row["card_key"]) == secret:
+                    # The app sends the key again with each registration it repeats. Nothing changed.
+                    return {"version": 1, "activityId": activity_id, "grantId": grant_id, "state": "sealed"}
+                db.execute("UPDATE activities SET card_key=?,last_signature=NULL WHERE activity_id=?", (secret, activity_id))
+            work = self._work.get((row["profile"], row["session_id"], row["work_turn"])) if row["work_turn"] else None
+            if work is not None and not work["terminal"]:
+                phase, count, terminal = self._work_projection(work)
+                self._queue_activity(row["profile"], row["session_id"], work["turn"], phase, count, terminal,
+                                     detail=work.get("detail"), at_once=True)
+        return {"version": 1, "activityId": activity_id, "grantId": grant_id, "state": "sealed"}
 
     def remove_activity(self, grant_id: str, activity_id: str):
         self._grant(grant_id); _identifier(activity_id)
@@ -1399,9 +1438,12 @@ class ManagedNotifications:
                 stage_session if isinstance(stage_session, str) else "",
                 payload.get("user_message") if hook == "pre_llm_call" else None): return
         if hook in _APPROVAL_HOOKS:
-            self._observe_approval(hook, profile=profile, **payload)
+            try:
+                self._observe_approval(hook, profile=profile, **payload)
+            finally:
+                self._observe_card_approval(hook, profile, payload)
             return
-        if hook not in ("pre_llm_call", "post_llm_call", "pre_tool_call", "post_tool_call",
+        if hook not in ("pre_llm_call", "post_llm_call", "pre_tool_call", "post_tool_call", "post_api_request",
                         "on_session_end", "subagent_start", "subagent_stop"):
             return
         profile = _identifier(payload.get("profile_name") or profile, _PROFILE)
@@ -1518,10 +1560,12 @@ class ManagedNotifications:
                                 self._child_owners.pop(child_key, None)
                                 self._child_goals.pop(child_key, None)
                     work = {"turn": turn, "phase": "thinking", "outcome": None, "children": {}, "terminal": False,
-                            "observed_at": int(self.clock())}
+                            "observed_at": int(self.clock()), "detail": card_detail.new_detail(int(self.clock()))}
                     self._work[coordinate] = work
                 elif work["terminal"]: return
             if work is None or work["terminal"]: return
+            # A turn observed before this plugin version loaded has none yet.
+            work.setdefault("detail", card_detail.new_detail(work["observed_at"]))
             if child_hook:
                 child = payload.get("child_session_id") or payload.get("child_subagent_id")
                 parent_turn = payload.get("parent_turn_id")
@@ -1539,9 +1583,12 @@ class ManagedNotifications:
                             self._child_goals.setdefault(owner_key, goal[:400])
                     # A repeated start after stop cannot resurrect this child.
                     work["children"].setdefault(child, "active")
+                    if work["children"][child] == "active" and isinstance(goal, str) and goal:
+                        work["detail"]["goals"][child] = card_detail._line(goal, 60)
                 else:
                     if self._child_owners.get(owner_key) != work["turn"] or work["children"].get(child) != "active": return
                     work["children"][child] = "ended"
+                    work["detail"]["goals"].pop(child, None)
                     status = payload.get("child_status")
                     goal = payload.get("child_goal")
                     if not isinstance(goal, str) or not " ".join(goal.split()):
@@ -1568,7 +1615,18 @@ class ManagedNotifications:
                 else: return
             elif hook == "post_llm_call":
                 work["phase"] = "responding"
-            elif hook in ("pre_tool_call", "post_tool_call"):
+                work["detail"]["preview"] = self._responses.get((profile, session_id, turn), "")
+            elif hook == "post_api_request":
+                # One model request of the turn ended. The phase is the tool hooks' to set.
+                card_detail.model_answered(work["detail"], payload)
+            elif hook == "pre_tool_call":
+                card_detail.tool_started(work["detail"], payload.get("tool_name"), payload.get("args"))
+                question = _clarify_question(payload.get("args")) if payload.get("tool_name") == "clarify" else ""
+                work["detail"]["question"] = question
+                work["phase"] = "waiting" if question else "using_tool"
+            elif hook == "post_tool_call":
+                card_detail.tool_finished(work["detail"], payload.get("tool_name"), payload.get("args"))
+                work["detail"]["question"] = ""
                 work["phase"] = "using_tool"
             work["observed_at"] = int(self.clock())
             phase, active_count, terminal = self._work_projection(work)
@@ -1576,16 +1634,38 @@ class ManagedNotifications:
             # Rich-v1 uses completed as the terminal transport state. Stopped
             # remains explicit fixed copy; cancellation never queues an alert.
             self._queue_activity(profile, session_id, work["turn"], phase, active_count, terminal,
-                                 allow_bind=hook == "pre_llm_call", stopped=work["outcome"] == "cancelled" and terminal)
+                                 allow_bind=hook == "pre_llm_call", stopped=work["outcome"] == "cancelled" and terminal,
+                                 detail=work["detail"])
 
-    def _queue_activity(self, profile: str, session_id: str, turn: str, phase: str, count: int, terminal: bool, *, allow_bind: bool = False, stopped: bool = False):
+    def _observe_card_approval(self, hook: str, profile: str, payload: dict[str, Any]):
+        """A command waits for the person's yes: the card says so until they answer."""
+        if payload.get("surface") != "gateway" or payload.get("parent_session_id"): return
+        session_id, turn = payload.get("session_id"), payload.get("turn_id")
+        if not isinstance(session_id, str) or not isinstance(turn, str): return
+        with self._lock:
+            work = self._work.get((profile, session_id, turn))
+            if work is None or work["terminal"] or work["outcome"] is not None: return
+            work.setdefault("detail", card_detail.new_detail(work["observed_at"]))
+            asking = hook == "pre_approval_request"
+            work["detail"]["question"] = self._rich_text(payload.get("description") or payload.get("command")) if asking else ""
+            work["phase"] = "waiting" if asking else "using_tool"
+            phase, active_count, terminal = self._work_projection(work)
+            self._queue_activity(profile, session_id, turn, phase, active_count, terminal, detail=work["detail"])
+
+    def _queue_activity(self, profile: str, session_id: str, turn: str, phase: str, count: int, terminal: bool, *,
+                        allow_bind: bool = False, stopped: bool = False, detail: dict[str, Any] | None = None,
+                        at_once: bool = False):
         now = int(self.clock())
         with self._db() as db:
             rows = db.execute("SELECT a.*,g.expires AS grant_expires FROM activities a JOIN grants g USING(grant_id) WHERE a.profile=? AND a.session_id=? AND a.state='active' AND a.lease_expires>? AND g.state='active' AND g.expires>?", (profile, session_id, now, now)).fetchall()
             for row in rows:
                 if row["work_turn"] not in (None, turn) or (row["work_turn"] is None and not allow_bind): continue
                 action = "Stopped" if stopped and terminal and phase == "completed" else _ACTIONS[phase]
-                signature = json.dumps([turn, phase, count, action])
+                # With the phone's key for this row, the update also carries the sealed detail.
+                key = bytes(row["card_key"]) if row["card_key"] else None
+                plain = card_detail.plaintext(detail, phase) if key and detail else None
+                status = json.dumps([turn, phase, count, action])
+                signature = status if plain is None else json.dumps([turn, phase, count, action, card_detail.digest(plain)])
                 # A real hook re-sends an unchanged state once a minute, inside the
                 # 120-second stale window, so a long run of tool calls stays current.
                 if row["last_signature"] == signature and row["last_queued_at"] > now - _ACTIVITY_REFRESH_SECONDS: continue
@@ -1598,11 +1678,23 @@ class ManagedNotifications:
                 update = {"version": 2, "updateId": update_id, "sessionReference": row["session_ref"], "phase": phase,
                           "currentAction": action, "progress": 100 if terminal else 0, "completedSteps": 0,
                           "activeSubagentCount": count, "latestTool": None, "timestamp": timestamp, "expires": expires}
-                due = now if terminal or phase == "waiting" else max(now, pending["next_attempt"] if pending else row["last_queued_at"] + 30)
+                urgent = terminal or phase == "waiting" or at_once
+                # A card with detail changes with each step, so its updates go _DETAIL_SPACING apart, not 30 s.
+                due = now if urgent else max(now, pending["next_attempt"] if pending else row["last_queued_at"] + (_DETAIL_SPACING if plain else 30))
+                loud = True
+                if plain is not None:
+                    update["sealed"] = card_detail.seal(key, timestamp, plain)
+                    # Apple limits high-priority card updates. A new step alone goes at low priority,
+                    # except that one update every _LOUD_SPACING is high, so a locked phone keeps up.
+                    # An update that takes the place of a high-priority one that never left is high too.
+                    same_status = (row["last_signature"] or "").startswith(status[:-1] + ",")
+                    waiting_loud = pending is not None and not json.loads(bytes(pending["raw"])).get("quiet")
+                    loud = urgent or waiting_loud or not same_status or due - row["last_loud_at"] >= _LOUD_SPACING
+                    if not loud: update["quiet"] = True
                 # Only nonterminal updates may be superseded; terminal is durable.
                 db.execute("DELETE FROM pending WHERE activity_id=? AND state='pending'", (row["activity_id"],))
                 db.execute("INSERT INTO pending(intent_id,grant_id,path,raw,expires,state,next_attempt,session_ref,activity_id) VALUES(?,?,?,?,?,'pending',?,?,?)", (update_id, row["grant_id"], "/live-activities/" + row["activity_id"] + "/updates", canonical_json_bytes(update), expires, due, row["session_ref"], row["activity_id"]))
-                db.execute("UPDATE activities SET work_turn=?,state=?,last_timestamp=?,last_signature=?,last_queued_at=? WHERE activity_id=?", (turn, "terminal_pending" if terminal else "active", timestamp, signature, due, row["activity_id"]))
+                db.execute("UPDATE activities SET work_turn=?,state=?,last_timestamp=?,last_signature=?,last_queued_at=?,last_loud_at=? WHERE activity_id=?", (turn, "terminal_pending" if terminal else "active", timestamp, signature, due, due if loud else row["last_loud_at"], row["activity_id"]))
                 host_telemetry.alert_queued(event_type="liveactivity", queue_ms=max(0, due - now) * 1000)
         self._wake.set()
 
@@ -1615,6 +1707,10 @@ class ManagedNotifications:
                 self._approval_profiles.add(profile)
             if clarification_producer_loaded:
                 self._clarification_profiles.add(profile)
+            if start_worker and self._keeper is None:
+                # In every Hermes process, not only the one that sends: a turn's state lives where it runs.
+                self._keeper = threading.Thread(target=self._keep_cards_current, name="loopdy-card-refresh", daemon=True)
+                self._keeper.start()
             if start_worker and self._worker is None:
                 lock_path = self.directory / "worker.lock"
                 fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -1625,6 +1721,27 @@ class ManagedNotifications:
                 self._worker_lock = lock
                 self._worker = threading.Thread(target=self._run, name="loopdy-managed-notifications", daemon=True)
                 self._worker.start()
+
+    def _keep_cards_current(self):
+        while not self._stop.wait(_CARD_REFRESH_TICK):
+            try: self.refresh_activities()
+            except (ValueError, OSError, sqlite3.Error): logger.warning("Live Activity refresh unavailable")
+
+    def refresh_activities(self):
+        """Sends a running turn's state again while no hook fires.
+
+        A card goes stale 120 seconds after its last update. A question that waits for the person,
+        or one long tool call, fires no hook in that time, and the card then said its updates paused.
+        `_queue_activity` sends an unchanged state at most once in _ACTIVITY_REFRESH_SECONDS. A turn with
+        no hook for _REFRESH_WITHOUT_HOOKS is left alone, unless it waits for the person.
+        """
+        now = int(self.clock())
+        with self._lock:
+            for (profile, session_id, turn), work in list(self._work.items()):
+                if work["terminal"] or work["outcome"] is not None: continue
+                if work["phase"] != "waiting" and now - work["observed_at"] > _REFRESH_WITHOUT_HOOKS: continue
+                phase, count, terminal = self._work_projection(work)
+                self._queue_activity(profile, session_id, turn, phase, count, terminal, detail=work.get("detail"))
 
     def close(self):
         self._stop.set(); self._wake.set()
@@ -1848,6 +1965,9 @@ class ManagedNotifications:
             else:
                 with self._db() as db:
                     state = "failed" if error.status in (400, 401, 410, 422) else "pending"
+                    if error.status == 400 and row["activity_id"] and b'"sealed"' in bytes(row["raw"]):
+                        # A notification service that does not take sealed detail: the card goes on with its status.
+                        db.execute("UPDATE activities SET card_key=NULL,last_signature=NULL WHERE activity_id=?", (row["activity_id"],))
                     # A post-hook/removal racing an in-flight failed request
                     # must not resurrect the retired intent.
                     db.execute("UPDATE pending SET state=?,attempts=attempts+1,next_attempt=? WHERE intent_id=? AND state='sending'", (state, now + min(60, 2 ** min(row["attempts"] + 1, 6)), row["intent_id"]))

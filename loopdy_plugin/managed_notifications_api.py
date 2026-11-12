@@ -82,6 +82,10 @@ class ActivityBody(VersionedBody):
     turnId: str | None = Field(default=None, pattern=_ID)
 
 
+class CardKeyBody(VersionedBody):
+    key: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+
+
 def _call(operation, *args):
     try:
         return operation(*args)
@@ -173,6 +177,11 @@ def event(grant_id: str, event_id: str):
 @router.put("/enrollments/{grant_id}/live-activities/{activity_id}")
 def activity(grant_id: str, activity_id: str, body: ActivityBody):
     return _call(lambda: get_managed_notifications().subscribe_activity(grant_id, activity_id, body.profile, body.sessionId, body.sessionReference, body.leaseExpires, body.turnId))
+
+
+@router.put("/enrollments/{grant_id}/live-activities/{activity_id}/card-key")
+def activity_card_key(grant_id: str, activity_id: str, body: CardKeyBody):
+    return _call(lambda: get_managed_notifications().set_card_key(grant_id, activity_id, body.key))
 
 
 @router.delete("/enrollments/{grant_id}/live-activities/{activity_id}")
