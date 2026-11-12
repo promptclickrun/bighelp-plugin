@@ -38,9 +38,12 @@ The host never sends an alert it can't seal: until the phone has registered its 
 builds do right after turning notifications on, no alert is queued or sent. App builds before bighelp 2.3.0 (20)
 never register a key, so they get no alerts.
 
-Live Activity updates contain only a phase, a fixed label and counts, never message text. The Lock Screen can
-still show the agent and chat name the app put on the activity; turn off Live Activities or notification
-previews in iOS settings if that matters to you.
+Live Activity updates contain a phase, a fixed label and counts that the notification service and Apple can
+read, never message text. For an app that asks for it, an update also carries detail (the step in progress, a
+question that waits, the reply's first lines) encrypted with a key that only that phone and this host hold; the
+service and Apple forward bytes they cannot read (see [Notifications](NOTIFICATIONS.md#sealed-card-detail)). The
+Lock Screen shows what the app draws from it, with the agent and chat name; choose how much in the app's
+Settings › Notifications, or turn off Live Activities in iOS settings if that matters to you.
 
 ## Cards
 
