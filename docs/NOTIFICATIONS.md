@@ -371,8 +371,31 @@ older plugin is marked failed and never sent.
 
 The app starts the Live Activity itself. The host then sends updates for the current turn through the same
 grant (`PUT/DELETE /notifications/enrollments/<grantId>/live-activities/<activityId>`). Updates carry only a
-phase, a fixed label such as "Your agent is working" or "Your agent finished", and counts. They never include
-message text.
+phase, a fixed label such as "Your agent is working" or "Your agent finished", and counts. The notification
+service and Apple can read these. They never include message text.
+
+### Sealed card detail
+
+An app that shows more on the card gives the host a key for that chat's row
+(`PUT /notifications/enrollments/<grantId>/live-activities/<activityId>/card-key`, body
+`{"version": 1, "key": "<32 bytes, base64url>"}`). The key comes over the app's own connection to this host,
+never through the notification service. `capabilities` lists `sealedCardDetail: {"version": 1}`.
+
+From then on each update for that card also carries `sealed`: the step in progress and what it works on, the
+last three steps, the model's latest words between steps, a question or command that waits for the person, the
+reply's first lines when the turn ends, helper goals, context use and the model's name. It is AES-256-GCM under
+the row key, bound to the update's timestamp, and at most 1,200 characters. The service keeps and forwards the
+bytes and cannot read them. A note that could hold a credential is left out. The format is in
+[`card_detail.py`](../loopdy_plugin/card_detail.py), and `fixtures/contracts/sealed-card-v1-vector.json` is
+shared with the app's tests.
+
+A card with detail gets an update for each new step, at most one every 8 seconds. A new step alone is sent
+with `quiet: true`, which the service sends at low priority, except that one update in every 30 seconds is not
+quiet. A question, a command that waits for approval and the end of the turn go at once. A chat without a key
+gets the updates it always got, 30 seconds apart. If the service refuses an update that has `sealed`, the host
+drops that card's key and sends plain updates.
+
+While the agent asks a question with `clarify`, or a command waits for approval, the card's phase is `waiting`.
 
 ## Host storage
 

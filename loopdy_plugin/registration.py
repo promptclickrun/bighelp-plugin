@@ -215,6 +215,13 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
         for hook in ("pre_llm_call", "post_llm_call", "pre_tool_call", "post_tool_call",
                      "on_session_end", "subagent_start", "subagent_stop"):
             _register_notification_observer(ctx, hook, partial(observe_managed, hook))
+        # Each model request of a turn, for the card's sealed detail (card_detail.py). Older Hermes has no such hook.
+        try:
+            from hermes_cli.plugins import VALID_HOOKS as _hooks
+            if "post_api_request" in _hooks:
+                ctx.register_hook("post_api_request", partial(observe_managed, "post_api_request"))
+        except ImportError:
+            pass
         # Registration is additive: retain the explicitly selected legacy
         # transport. Older SDKs can warn-and-register unknown names, so
         # registration alone is not proof of an emitter.

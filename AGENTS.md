@@ -79,7 +79,7 @@ Many features span both repos. The app's side of each route lives in the app rep
 | `loopdy_plugin/agent_guide.py`, `skills/bighelp/` | What agents are told about bighelp: the chat brief and the `bighelp` skill |
 | `loopdy_plugin/agent_board.py`, `provider_usage.py`, `secure_input.py`, `agent_templates.py`, `reactions.py` | Feature modules |
 | `loopdy_plugin/live_voice_*.py`, `native_voice.py` | Live voice |
-| `loopdy_plugin/managed_notifications*.py`, `sealed_alerts.py`, `notification_crypto.py` | Notifications and Live Activities |
+| `loopdy_plugin/managed_notifications*.py`, `sealed_alerts.py`, `card_detail.py`, `notification_crypto.py` | Notifications and Live Activities (`card_detail.py`: what a card shows beyond its phase, sealed for the phone) |
 | `loopdy_plugin/plugin_update*.py`, `host_restart.py` | Self-update and the in-place restart |
 | `loopdy_plugin/store.py` | The local store for card templates, form answers, approvals and events (`get_service()` in `adapter.py`) |
 | `loopdy_plugin/adapter.py`, `service.py`, `provider.py`, `providers/` | The `loopdy` gateway platform and the legacy push provider, kept only for older setups |
