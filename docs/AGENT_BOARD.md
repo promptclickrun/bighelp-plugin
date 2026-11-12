@@ -78,11 +78,14 @@ chunks. Without the feature, posts have no files and the app shows Feed as befor
 ### Answers to ideas
 
 Ideas also carry `answer`: `yes` (Let's do it), `goal` (Make it a goal), `not now`
-(hidden) or `none`:
+(hidden) or `none`, and `answeredAt` (Unix seconds; 0 with no answer). The app lists
+ideas answered `yes` under Completed on Ideas, with that time.
 
 - **Let's do it** calls `board/accept` with the idea's `itemId` (see below), then
-  opens a chat with the message `Yes, go ahead with this idea: “<title>”.` The id
-  never goes into the chat. Apps from before `board/accept` send only the message.
+  sends "Let's do it!" with the idea attached as a card: a block before the message,
+  `[Idea (<section>): "<title>"]`, the idea's text, then `[End of idea]`. The id
+  never goes into the chat. Apps from before `board/accept` sent only the message
+  `Yes, go ahead with this idea: “<title>”.`
   For them, the board's `pre_llm_call` observer marks the newest visible idea with that
   title `yes`. When a visible idea with that title is already `yes`, the observer
   does nothing, so a same-title twin never gets a second yes.

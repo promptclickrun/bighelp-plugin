@@ -169,6 +169,9 @@ class AgentBoardStoreTests(unittest.TestCase):
         with self.store._db() as db:
             rows = dict(db.execute("SELECT id, answered FROM items WHERE kind='idea'").fetchall())
         self.assertEqual(rows, {"older": 300, "newer": 0})
+        # The app shows when under Completed.
+        listed = {row["id"]: row["answeredAt"] for row in self.store.items(("idea",))}
+        self.assertEqual(listed, {"older": 300, "newer": 0})
         # The chat message the app still sends must not mark the twin too.
         recorder = ActivityRecorder(lambda: self.store)
         recorder.observe("pre_llm_call", session_id="s1", turn_id="t1",
