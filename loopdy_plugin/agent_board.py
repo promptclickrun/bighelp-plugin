@@ -577,7 +577,9 @@ class BoardStore:
                       for index, file in enumerate(json.loads(row["files"]))],
             "liked": row["rating"] == 1, "dismissed": bool(row["dismissed"]),
             "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
-            "read": bool(row["read"]), "answer": row["answer"] or "none", "category": row["category"],
+            "read": bool(row["read"]), "answer": row["answer"] or "none",
+            # When the person answered; 0 for none. The app shows "Started today" under Completed.
+            "answeredAt": int(row["answered"]) if row["answer"] else 0, "category": row["category"],
             "createdAt": int(row["created"]), "updatedAt": int(row["updated"]),
         }
 
