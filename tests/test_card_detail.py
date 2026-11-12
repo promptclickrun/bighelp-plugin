@@ -47,7 +47,13 @@ class SealedCardUpdateTests(ManagedNotificationTests):
         self.service.observe("pre_llm_call", profile="default", session_id="native-session", turn_id="turn-a", platform="desktop")
         with sqlite3.connect(self.service.db_path) as db:
             db.execute("INSERT INTO activities(activity_id,grant_id,profile,session_id,session_ref,lease_expires,work_turn,state) VALUES(?,?,?,?,?,?,?,'active')",
-                       ("activity-a", self.grant_id, "default", "native-session", "x" * 43, self.now + 600, "turn-a"))
+                       ("activity-a", self.grant_id, "default", "native-session", "x" * 43, self.now + 7_200, "turn-a"))
+        original = self.service.transport
+        def transport(method, path, raw, headers):
+            # The notification service takes an update.
+            if path.endswith("/updates"): return {"version": 1, "status": "accepted", "deliveryId": "live_fixture"}
+            return original(method, path, raw, headers)
+        self.service.transport = transport
         if key: self.service.set_card_key(self.grant_id, "activity-a", b64url_encode(key))
 
     def pending(self) -> dict:
@@ -140,3 +146,61 @@ class SealedCardUpdateTests(ManagedNotificationTests):
             with self.assertRaises(ManagedNotificationError): self.service.set_card_key(self.grant_id, "activity-a", bad)
         with self.assertRaises(ManagedNotificationError): self.service.set_card_key(self.grant_id, "activity-b", b64url_encode(KEY))
         self.assertEqual(self.service.capabilities()["sealedCardDetail"], {"version": 1})
+
+
+class CardRefreshTests(SealedCardUpdateTests):
+    def test_a_question_that_waits_is_sent_again_before_the_card_goes_stale(self):
+        self.bind()
+        self.tool("pre_tool_call", "clarify", question="Send the order for $47.00?")
+        first = self.pending()
+        self.service.drain_pending()
+        self.now += 30
+        self.service.refresh_activities()  # inside the minute: nothing new
+        with sqlite3.connect(self.service.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM pending WHERE activity_id='activity-a' AND state='pending'").fetchone()[0], 0)
+        self.now += 2_000  # no hook for half an hour and more: a question still waits
+        self.service.refresh_activities()
+        again = self.pending()
+        self.assertEqual(again["phase"], "waiting")
+        self.assertGreater(again["timestamp"], first["timestamp"])
+        self.assertEqual(self.detail(again)["q"], "Send the order for $47.00?")
+        self.assertNotIn("quiet", again)
+
+    def test_a_long_tool_call_is_sent_again_but_not_for_ever(self):
+        self.bind()
+        self.tool("pre_tool_call", "terminal", command="make build")
+        self.service.drain_pending()
+        self.now += 90
+        self.service.refresh_activities()
+        self.assertEqual(self.detail(self.pending())["t"], "terminal")
+        self.service.drain_pending()
+        self.now += 1_900
+        self.service.refresh_activities()
+        with sqlite3.connect(self.service.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM pending WHERE activity_id='activity-a' AND state='pending'").fetchone()[0], 0)
+
+    def test_a_phase_change_that_never_left_keeps_its_priority_when_a_step_takes_its_place(self):
+        self.bind()
+        self.service.drain_pending()
+        self.now += 2
+        self.tool("pre_tool_call", "web_search", query="one")   # thinking -> using_tool, waits for its turn
+        self.assertNotIn("quiet", self.pending())
+        self.tool("post_tool_call", "web_search")
+        self.tool("pre_tool_call", "read_file", path="a.txt")    # same phase, takes its place
+        self.assertNotIn("quiet", self.pending())
+
+    def test_the_same_key_again_changes_nothing_and_odd_input_never_stops_updates(self):
+        self.bind()
+        self.service.drain_pending()
+        self.service.set_card_key(self.grant_id, "activity-a", b64url_encode(KEY))
+        with sqlite3.connect(self.service.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM pending WHERE activity_id='activity-a' AND state='pending'").fetchone()[0], 0)
+        self.now += 10
+        self.tool("pre_tool_call", "web_extract", url="http://[broken")
+        self.assertEqual(self.pending()["phase"], "using_tool")
+        detail = card_detail.new_detail(1)
+        for index in range(3):
+            card_detail.tool_started(detail, "工" * 48 + str(index), {})
+            card_detail.tool_finished(detail, "工" * 48 + str(index), {})
+        detail["tool"] = "具" * 48
+        self.assertLessEqual(len(card_detail.seal(KEY, 1, card_detail.plaintext(detail, "using_tool"))), card_detail.MAX_SEALED_CHARS)

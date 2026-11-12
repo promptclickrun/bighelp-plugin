@@ -92,6 +92,9 @@ _ACTIVITY_REFRESH_SECONDS = 60
 # Seconds between a card's updates while it carries sealed detail, and between its high-priority ones.
 _DETAIL_SPACING = 8
 _LOUD_SPACING = 30
+# How often each process looks for running turns to send again, and how long after a turn's last hook it still does.
+_CARD_REFRESH_TICK = 15
+_REFRESH_WITHOUT_HOOKS = 1800
 # A rotating sign-in (the Nous Portal's lasts a day) runs out if bighelp stays closed.
 # Waking the phone this often gives it more than one chance to renew before then.
 _SIGN_IN_WAKE_SECONDS = 8 * 3600
@@ -366,6 +369,7 @@ class ManagedNotifications:
         self._lock = state["lock"]
         self._wake, self._stop = state["wake"], threading.Event()
         self._worker: threading.Thread | None = None
+        self._keeper: threading.Thread | None = None
         self._worker_lock = None
         self._loaded_profiles: set[str] = state["loaded_profiles"]
         self._approval_profiles: set[str] = state["approval_profiles"]
@@ -417,9 +421,10 @@ class ManagedNotifications:
             """)
             # Added for sealed card detail: the chat row's key from the phone, and when an
             # update last went out at high priority.
-            columns = {row[1] for row in db.execute("PRAGMA table_info(activities)")}
-            if "card_key" not in columns: db.execute("ALTER TABLE activities ADD COLUMN card_key BLOB")
-            if "last_loud_at" not in columns: db.execute("ALTER TABLE activities ADD COLUMN last_loud_at INTEGER NOT NULL DEFAULT 0")
+            # The dashboard and the gateway can start together: the one that comes second finds the column there.
+            for column in ("card_key BLOB", "last_loud_at INTEGER NOT NULL DEFAULT 0"):
+                try: db.execute("ALTER TABLE activities ADD COLUMN " + column)
+                except sqlite3.OperationalError: pass
             db.executescript(live_alerts.SCHEMA)
             db.executescript(scheduled_links.SCHEMA)
 
@@ -906,8 +911,11 @@ class ManagedNotifications:
         if secret is None: raise ManagedNotificationError("notification_card_key_invalid", 400)
         with self._lock:
             with self._db() as db:
-                row = db.execute("SELECT profile,session_id,work_turn FROM activities WHERE activity_id=? AND grant_id=?", (activity_id, grant_id)).fetchone()
+                row = db.execute("SELECT profile,session_id,work_turn,card_key FROM activities WHERE activity_id=? AND grant_id=?", (activity_id, grant_id)).fetchone()
                 if not row: raise ManagedNotificationError("notification_activity_unknown", 404)
+                if row["card_key"] is not None and bytes(row["card_key"]) == secret:
+                    # The app sends the key again with each registration it repeats. Nothing changed.
+                    return {"version": 1, "activityId": activity_id, "grantId": grant_id, "state": "sealed"}
                 db.execute("UPDATE activities SET card_key=?,last_signature=NULL WHERE activity_id=?", (secret, activity_id))
             work = self._work.get((row["profile"], row["session_id"], row["work_turn"])) if row["work_turn"] else None
             if work is not None and not work["terminal"]:
@@ -1637,6 +1645,7 @@ class ManagedNotifications:
         with self._lock:
             work = self._work.get((profile, session_id, turn))
             if work is None or work["terminal"] or work["outcome"] is not None: return
+            work.setdefault("detail", card_detail.new_detail(work["observed_at"]))
             asking = hook == "pre_approval_request"
             work["detail"]["question"] = self._rich_text(payload.get("description") or payload.get("command")) if asking else ""
             work["phase"] = "waiting" if asking else "using_tool"
@@ -1677,8 +1686,10 @@ class ManagedNotifications:
                     update["sealed"] = card_detail.seal(key, timestamp, plain)
                     # Apple limits high-priority card updates. A new step alone goes at low priority,
                     # except that one update every _LOUD_SPACING is high, so a locked phone keeps up.
+                    # An update that takes the place of a high-priority one that never left is high too.
                     same_status = (row["last_signature"] or "").startswith(status[:-1] + ",")
-                    loud = urgent or not same_status or due - row["last_loud_at"] >= _LOUD_SPACING
+                    waiting_loud = pending is not None and not json.loads(bytes(pending["raw"])).get("quiet")
+                    loud = urgent or waiting_loud or not same_status or due - row["last_loud_at"] >= _LOUD_SPACING
                     if not loud: update["quiet"] = True
                 # Only nonterminal updates may be superseded; terminal is durable.
                 db.execute("DELETE FROM pending WHERE activity_id=? AND state='pending'", (row["activity_id"],))
@@ -1696,6 +1707,10 @@ class ManagedNotifications:
                 self._approval_profiles.add(profile)
             if clarification_producer_loaded:
                 self._clarification_profiles.add(profile)
+            if start_worker and self._keeper is None:
+                # In every Hermes process, not only the one that sends: a turn's state lives where it runs.
+                self._keeper = threading.Thread(target=self._keep_cards_current, name="loopdy-card-refresh", daemon=True)
+                self._keeper.start()
             if start_worker and self._worker is None:
                 lock_path = self.directory / "worker.lock"
                 fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -1706,6 +1721,27 @@ class ManagedNotifications:
                 self._worker_lock = lock
                 self._worker = threading.Thread(target=self._run, name="loopdy-managed-notifications", daemon=True)
                 self._worker.start()
+
+    def _keep_cards_current(self):
+        while not self._stop.wait(_CARD_REFRESH_TICK):
+            try: self.refresh_activities()
+            except (ValueError, OSError, sqlite3.Error): logger.warning("Live Activity refresh unavailable")
+
+    def refresh_activities(self):
+        """Sends a running turn's state again while no hook fires.
+
+        A card goes stale 120 seconds after its last update. A question that waits for the person,
+        or one long tool call, fires no hook in that time, and the card then said its updates paused.
+        `_queue_activity` sends an unchanged state at most once in _ACTIVITY_REFRESH_SECONDS. A turn with
+        no hook for _REFRESH_WITHOUT_HOOKS is left alone, unless it waits for the person.
+        """
+        now = int(self.clock())
+        with self._lock:
+            for (profile, session_id, turn), work in list(self._work.items()):
+                if work["terminal"] or work["outcome"] is not None: continue
+                if work["phase"] != "waiting" and now - work["observed_at"] > _REFRESH_WITHOUT_HOOKS: continue
+                phase, count, terminal = self._work_projection(work)
+                self._queue_activity(profile, session_id, turn, phase, count, terminal, detail=work.get("detail"))
 
     def close(self):
         self._stop.set(); self._wake.set()

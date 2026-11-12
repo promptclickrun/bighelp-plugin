@@ -397,6 +397,10 @@ drops that card's key and sends plain updates.
 
 While the agent asks a question with `clarify`, or a command waits for approval, the card's phase is `waiting`.
 
+A card goes stale on the phone 120 seconds after its last update. While a turn runs and no hook fires (a question
+that waits, one long tool call), each Hermes process sends that turn's state again once a minute. It stops 30
+minutes after the turn's last hook, unless the turn waits for the person.
+
 ## Host storage
 
 The host's notification key and its grants, subscriptions, content keys and pending events live under

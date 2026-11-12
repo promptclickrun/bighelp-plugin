@@ -65,7 +65,10 @@ def _line(value: Any, limit: int) -> str:
 def _site(value: Any) -> str:
     if isinstance(value, list): value = value[0] if value else ""
     if not isinstance(value, str): return ""
-    host = urlsplit(value if "//" in value else "//" + value).hostname or ""
+    try:
+        host = urlsplit(value if "//" in value else "//" + value).hostname or ""
+    except ValueError:
+        return ""
     return _line(host.removeprefix("www."), 60)
 
 
@@ -149,6 +152,9 @@ def plaintext(detail: dict[str, Any], phase: str) -> bytes:
     for key in ("p", "q"):
         while len(encoded()) > _MAX_PLAINTEXT_BYTES and len(body.get(key, "")) > 40:
             body[key] = body[key][:len(body[key]) // 2].rstrip() + "…"
+    if len(encoded()) > _MAX_PLAINTEXT_BYTES:
+        # Tool names or what is left in a script that takes many bytes a character: the timer and count alone.
+        body = {"v": VERSION, "b": detail["started"], "s": detail["steps"]}
     return encoded()
 
 
