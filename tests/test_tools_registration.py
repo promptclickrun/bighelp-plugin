@@ -176,6 +176,14 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertEqual(renderer_schema["parameters"], expected)
                 self.assertIn("tool_search", description)
                 continue
+            if tool_name in ("bighelp_draft_space", "bighelp_update_space", "bighelp_space_settings"):
+                from loopdy_plugin import spaces_tools
+                expected = {"bighelp_draft_space": spaces_tools.draft_parameters,
+                            "bighelp_update_space": spaces_tools.update_parameters,
+                            "bighelp_space_settings": spaces_tools.settings_parameters}[tool_name]()
+                self.assertEqual(renderer_schema["parameters"], expected)
+                self.assertIn("tool_search", description)
+                continue
             if tool_name in ("bighelp_catalog_login", "bighelp_submit_catalog_template"):
                 from loopdy_plugin import catalog_submissions
                 expected = (catalog_submissions.LOGIN_PARAMETERS if tool_name.endswith("login")

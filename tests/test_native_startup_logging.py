@@ -60,6 +60,7 @@ PROCESS_FEATURES = (
     "native-uploads-small-pieces-v1",
     "native-agent-deliveries-v1",
     "native-chat-live-v1",
+    "native-spaces-v1",
 )
 
 
@@ -159,13 +160,15 @@ class NativeStartupLoggingTests(unittest.TestCase):
         self.agents_today = module("loopdy_plugin.agents_today", CAPABILITY=PROCESS_FEATURES[61],
                                    DETAIL_CAPABILITY=PROCESS_FEATURES[62],
                                    available=Mock(return_value=True))
+        self.spaces = module("loopdy_plugin.spaces", CAPABILITY=PROCESS_FEATURES[-1],
+                             available=Mock(return_value=True))
         modules = [self.constants, self.profiles, self.device, self.room, self.git,
                    self.templates, self.files, self.restart, self.usage, self.sign_in, self.workflows,
                    self.live_alerts, self.quiet, self.composio, self.agent_talk, self.chat_activity, self.agents_activity, self.team,
                    self.my_templates, self.plugin_links, self.image_drafts, self.telemetry,
                    self.bot_chat, self.voice_catalog, self.skills_import, self.vault_link,
                    self.uploads, self.marketplace, self.core_files, self.app_state, self.agents_background,
-                   self.agents_today, module("hermes_cli.dashboard_auth.base", Session=Session)]
+                   self.agents_today, self.spaces, module("hermes_cli.dashboard_auth.base", Session=Session)]
         self.stack.enter_context(patch.dict(sys.modules, {value.__name__: value for value in modules}))
         self.stack.enter_context(patch.object(native_context, "_startup_advertisement_logged", False))
         self.stack.enter_context(patch.object(native_context, "_journal_problem", return_value=None))

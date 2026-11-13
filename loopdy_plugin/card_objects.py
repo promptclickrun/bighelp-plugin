@@ -1,4 +1,4 @@
-"""Contact, place and music card components (and photo drafts and apps), and which chats may use them.
+"""Contact, place and music card components (and photo drafts, apps and spaces), and which chats may use them.
 
 Older bighelp apps reject an element type they don't know ("Invalid or
 unsupported card"). So a card with an object component is accepted only in a
@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Iterable
 
-from .loopdy_cards import APP_TYPES, DRAFT_TYPES, OBJECT_TYPES, BighelpCardError
+from .loopdy_cards import APP_TYPES, DRAFT_TYPES, OBJECT_TYPES, SPACE_TYPES, BighelpCardError
 
 logger = logging.getLogger("hermes.plugins.bighelp")
 
@@ -38,9 +38,9 @@ TOOL_NOTE = (
 Renders = Callable[[str], Iterable[str]]
 
 
-# What a chat's app may say it draws: the object components, the photo drafts (image_drafts.py) and
-# HTML apps (html_apps.py).
-DECLARABLE = OBJECT_TYPES | DRAFT_TYPES | APP_TYPES
+# What a chat's app may say it draws: the object components, the photo drafts (image_drafts.py),
+# HTML apps (html_apps.py) and space drafts (spaces.py).
+DECLARABLE = OBJECT_TYPES | DRAFT_TYPES | APP_TYPES | SPACE_TYPES
 
 
 def known(names: Iterable[Any]) -> frozenset[str]:

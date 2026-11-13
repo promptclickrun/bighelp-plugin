@@ -44,6 +44,13 @@ class FeatureLimitTests(unittest.TestCase):
         self.assertNotIn(late, listed)
         self.assertEqual(listed, list(known), "Everything those apps know, in order")
 
+    def test_spaces_never_pushes_out_a_feature_older_apps_know(self) -> None:
+        known = tuple(f"native-fixture-{index}-v1" for index in range(LEGACY_FEATURE_LIMIT))
+        context = _context(known + ("native-spaces-v1",))
+        self.assertIn("native-spaces-v1", LATE_FEATURES)
+        self.assertEqual(context.payload(full=False)["features"], list(known))
+        self.assertEqual(context.payload()["features"][-1], "native-spaces-v1")
+
     def test_newer_apps_get_every_feature_with_late_ones_last(self) -> None:
         late = LATE_FEATURES[0]
         known = tuple(f"native-fixture-{index}-v1" for index in range(LEGACY_FEATURE_LIMIT))

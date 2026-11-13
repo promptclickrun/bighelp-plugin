@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal, TypeVar
 from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
@@ -1668,3 +1668,152 @@ async def html_apps_route(operation: str, request: Request) -> Response:
     maximum = MAX_GET_RESPONSE_BYTES if operation == "get" else MAX_DATA_RESPONSE_BYTES
     # The data keeps its keys in the order the agent wrote them.
     return _response(value, owner, request_id, maximum=maximum, sort_keys=False)
+
+
+# MARK: Spaces (docs/SPACES.md)
+
+_OPERATION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+_SPACE_ID = r"^s_[0-9a-f]{32}$"
+_SPACE_KNOWN_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}/s_[0-9a-f]{32}\Z")
+_SPACE_KNOWN_SHA = re.compile(r"^[0-9a-f]{64}\Z")
+# A list answer stops adding cards at 3.5 MiB (the app asks for them one by one) and never passes 4 MiB.
+SPACES_LIST_BUDGET = 3_670_016
+SPACES_LIST_RESPONSE_BYTES = 4_194_304
+SPACES_RESPONSE_BYTES = 524_288
+_SPACE_POSITION_LIMIT = 1e12
+
+
+class _SpacesList(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agentIds: list[Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")]] = Field(min_length=1, max_length=64)
+    # "<agentId>/<spaceId>" -> the cardsSha256 the app already has.
+    known: dict[str, str] = Field(default_factory=dict, max_length=512)
+
+    @model_validator(mode="after")
+    def _checked(self) -> "_SpacesList":
+        if len(set(self.agentIds)) != len(self.agentIds):
+            raise ValueError("Duplicate agent")
+        for key, digest in self.known.items():
+            if _SPACE_KNOWN_KEY.fullmatch(key) is None or _SPACE_KNOWN_SHA.fullmatch(digest) is None:
+                raise ValueError("Invalid known space")
+        return self
+
+
+class _SpaceRef(_Body):
+    spaceId: str = Field(pattern=_SPACE_ID)
+
+
+class _SpaceMutation(_SpaceRef):
+    # The retry key: a repeated one gets the stored answer and nothing is done twice.
+    operationId: str = Field(pattern=_OPERATION_ID)
+
+
+class _OptionalFields(BaseModel):
+    """Optional keys are left out, never null."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    @model_validator(mode="after")
+    def _no_nulls(self) -> "_OptionalFields":
+        if any(getattr(self, name) is None for name in self.model_fields_set):
+            raise ValueError("Null value")
+        return self
+
+
+class _SpaceAdd(_SpaceMutation, _OptionalFields):
+    draftRevision: int = Field(ge=1, le=2_147_483_647, strict=True)
+    size: Literal["small", "wide", "tall"] | None = None
+    position: float | None = Field(default=None, ge=-_SPACE_POSITION_LIMIT, le=_SPACE_POSITION_LIMIT, strict=True)
+
+
+class _SpaceChanges(_OptionalFields):
+    size: Literal["small", "wide", "tall"] | None = None
+    hidden: StrictBool | None = None
+    position: float | None = Field(default=None, ge=-_SPACE_POSITION_LIMIT, le=_SPACE_POSITION_LIMIT, strict=True)
+    title: str | None = Field(default=None, min_length=1, max_length=60)
+
+    @model_validator(mode="after")
+    def _something(self) -> "_SpaceChanges":
+        if not self.model_fields_set:
+            raise ValueError("Nothing to change")
+        return self
+
+
+class _SpaceUpdate(_SpaceMutation):
+    changes: _SpaceChanges
+
+
+_SPACES = {
+    "list": _SpacesList, "get": _SpaceRef, "add": _SpaceAdd, "update": _SpaceUpdate,
+    "refresh": _SpaceMutation, "delete": _SpaceMutation,
+}
+
+
+def _spaces_list(body: _SpacesList) -> dict:
+    """Each agent's live spaces. A card the app already has (same hash) or that won't fit the budget is left out."""
+    from . import spaces
+    known: dict[str, dict[str, str]] = {}
+    for key, digest in body.known.items():
+        agent, _, space_id = key.partition("/")
+        known.setdefault(agent, {})[space_id] = digest
+    found: list[dict] = []
+    agents: dict[str, str] = {}
+    budget = SPACES_LIST_BUDGET
+    for agent in body.agentIds:
+        try:
+            listed = spaces.list_spaces(agent, known.get(agent, {}), budget)
+        except spaces.SpaceError as error:
+            agents[agent] = "profile_not_found" if error.code == "profile_not_found" else "unavailable"
+            continue
+        except Exception as error:  # one bot's locked or broken store never fails the others
+            logger.warning("bighelp spaces: one agent's spaces couldn't be listed (%s)", type(error).__name__)
+            agents[agent] = "unavailable"
+            continue
+        agents[agent] = "ok"
+        for space in listed:
+            budget -= len(json.dumps(space, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        found.extend(listed)
+    return {"spaces": found, "agents": agents}
+
+
+def _spaces(operation: str, body: BaseModel) -> dict:
+    from . import spaces
+    try:
+        if operation == "list":
+            return _spaces_list(body)
+        if operation == "get":
+            return {"space": spaces.get_space(body.agentId, body.spaceId)}
+        if operation == "add":
+            return {"space": spaces.add(body.agentId, body.spaceId, body.draftRevision, body.operationId,
+                                        size=body.size, position=body.position)}
+        if operation == "update":
+            return {"space": spaces.update(body.agentId, body.spaceId, body.operationId,
+                                           body.changes.model_dump(exclude_unset=True))}
+        if operation == "refresh":
+            return spaces.refresh(body.agentId, body.spaceId, body.operationId)
+        return spaces.delete(body.agentId, body.spaceId, body.operationId)
+    except spaces.SpaceError as error:
+        raise NativeAPIError(error.status, error.code, error.message, error.details) from None
+
+
+@router.post("/spaces/{operation}")
+async def spaces_route(operation: str, request: Request) -> Response:
+    """Spaces: live panels on the app's Today tab. Read, add, change, refresh and delete (docs/SPACES.md)."""
+    from .spaces import CAPABILITY
+    if operation not in _SPACES:
+        raise NativeAPIError(404, "operation_not_found", "The operation is not supported.")
+    owner = native_context(request)
+    request_id = _precondition(request, owner)
+    if CAPABILITY not in owner.features:
+        raise NativeAPIError(503, "spaces_unavailable", "Spaces aren't available on this host.")
+    try:
+        body = await _body(request, _SPACES[operation])
+    except NativeAPIError as error:
+        if error.status == 422 and error.code == "invalid_request":
+            raise NativeAPIError(400, error.code, error.message) from None
+        raise
+    # The routine of a script space runs here for a refresh (up to 50 s), so none of this runs on the event loop.
+    value = await run_in_threadpool(_spaces, operation, body)
+    if native_context(request) != owner:
+        raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
+    maximum = SPACES_LIST_RESPONSE_BYTES if operation == "list" else SPACES_RESPONSE_BYTES
+    return _response(value, owner, request_id, maximum=maximum)
