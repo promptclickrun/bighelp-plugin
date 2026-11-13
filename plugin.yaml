@@ -84,6 +84,9 @@ provides_tools:
   - bighelp_offer_photo_action
   - bighelp_show_app
   - bighelp_update_app_data
+  - bighelp_draft_space
+  - bighelp_update_space
+  - bighelp_space_settings
   - bighelp_templates_search
   - bighelp_templates_get
   - bighelp_templates_fill

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -96,6 +97,16 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     # HTML apps: interactive pages the person opens from a card in the chat.
     from .html_apps import register as register_html_apps
     register_html_apps(ctx)
+    # Spaces: live panels on the person's Today. The tools draft and update them; the person adds them.
+    from .spaces_tools import register as register_spaces_tools
+    register_spaces_tools(ctx)
+    # Space jobs' scripts follow the plugin's folder after an update, and jobs no space holds go.
+    # Nothing for a bot without spaces; it never stops the plugin from loading.
+    try:
+        from .spaces import on_start as spaces_on_start
+        spaces_on_start(profile)
+    except Exception as error:
+        logger.warning("bighelp spaces start-up check failed: %s", type(error).__name__)
     # An agent tells the person something now, when they aren't in the chat.
     from .notify_tool import register as register_notify_tool
     register_notify_tool(ctx)
@@ -465,6 +476,17 @@ def setup_cli(parser: Any) -> None:
     diff.add_argument("--offset", type=int, default=0)
     diff.add_argument("--limit", type=int, default=300)
 
+    space = actions.add_parser(
+        "space",
+        help="Update a space on the person's Today from a script",
+    )
+    space_actions = space.add_subparsers(dest="bighelp_space_action", required=True)
+    space_update = space_actions.add_parser(
+        "update",
+        help="Read an update ({card, sizes, data}) as JSON on stdin and apply it to a space",
+    )
+    space_update.add_argument("space_id")
+
     update = actions.add_parser(
         "update",
         help="Install the latest bighelp plugin release",
@@ -519,6 +541,9 @@ def handle_cli(
         return
     if action == "telemetry":
         _handle_telemetry_cli(args)
+        return
+    if action == "space":
+        _handle_space_cli(args, profile)
         return
     if action == "catalog":
         from .catalog_submissions import handle_cli as handle_catalog_cli
@@ -629,6 +654,38 @@ def _handle_telemetry_cli(args: Any) -> None:
     elif state == "on":
         host_telemetry.set_cli_enabled(True)
     _print_json(host_telemetry.describe())
+
+
+# The most a collector may print (docs/SPACES.md); a script's update on stdin has the same limit.
+_SPACE_UPDATE_STDIN_BYTES = 1_310_720
+
+
+def _handle_space_cli(args: Any, profile: str) -> None:
+    """`hermes bighelp space update <space_id>`: for any script that isn't the space's own collector.
+    Prints `updated <time>`, or one fixed error code and exits 1."""
+    from . import spaces
+
+    # This process changes one space and sends nothing itself.
+    from . import host_telemetry
+    host_telemetry.mute_process()
+    try:
+        if getattr(args, "bighelp_space_action", "") != "update":
+            raise spaces.SpaceError(400, "invalid_request", "Unknown space command.")
+        raw = sys.stdin.buffer.read(_SPACE_UPDATE_STDIN_BYTES + 1)
+        try:
+            update = json.loads(raw.decode("utf-8")) if len(raw) <= _SPACE_UPDATE_STDIN_BYTES else None
+        except (ValueError, UnicodeError):
+            update = None
+        if not isinstance(update, dict) or not update or set(update) - {"card", "sizes", "data"}:
+            raise spaces.SpaceError(400, "invalid_request", "Give one JSON object with card, sizes or data.")
+        result = spaces.apply_update(
+            profile, str(args.space_id), card=update.get("card"), sizes=update.get("sizes"),
+            data=update.get("data"), source="cli",
+        )
+    except spaces.SpaceError as error:
+        print(error.code)
+        raise SystemExit(1) from None
+    print(f"updated {result['updated_at']}")
 
 
 def _app_notifications_status() -> dict[str, Any]:

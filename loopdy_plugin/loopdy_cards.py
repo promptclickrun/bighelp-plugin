@@ -62,8 +62,11 @@ DRAFT_TYPES = frozenset({"contact_draft", "event_draft"})
 # An HTML app the person opens from the card (docs/HTML_APPS.md). Only bighelp_show_app makes
 # one, alone in its card, and a chat's app must say it draws it.
 APP_TYPES = frozenset({"html_app"})
+# A space the person can add to Today (docs/SPACES.md). Only bighelp_draft_space makes one, alone in
+# its card, and a chat's app must say it draws it.
+SPACE_TYPES = frozenset({"space_draft"})
 _CONTAINERS = {"card", "vstack", "hstack", "grid"}
-_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES | DRAFT_TYPES | APP_TYPES) - _CONTAINERS - {"list"}
+_LEAVES = (_ELEMENT_TYPES | OBJECT_TYPES | DRAFT_TYPES | APP_TYPES | SPACE_TYPES) - _CONTAINERS - {"list"}
 _SEMANTICS = {
     "primary",
     "secondary",
@@ -190,6 +193,7 @@ def validate_card_input(
     allow_objects: bool = False,
     allow_drafts: bool = False,
     allow_apps: bool = False,
+    allow_spaces: bool = False,
 ) -> dict[str, object]:
     reference = _utc(now, code="invalid_clock")
     encoded = canonical_json(payload)
@@ -244,7 +248,7 @@ def validate_card_input(
     source_ids = {source["id"] for source in sources}
     for element_id, element in elements.items():
         _element(element_id, element, source_ids, warn=warn, allow_objects=allow_objects,
-                 allow_drafts=allow_drafts, allow_apps=allow_apps)
+                 allow_drafts=allow_drafts, allow_apps=allow_apps, allow_spaces=allow_spaces)
 
     root = _identifier(value["root"])
     _validate_tree(root, elements)
@@ -254,16 +258,19 @@ def validate_card_input(
     apps = [element_id for element_id, element in elements.items() if element["type"] in APP_TYPES]
     if apps and (len(elements) != 1 or apps != [root]):
         _raise("invalid_children", "An app is the only element in its card")
+    spaces = [element_id for element_id, element in elements.items() if element["type"] in SPACE_TYPES]
+    if spaces and (len(elements) != 1 or spaces != [root]):
+        _raise("invalid_children", "A space is the only element in its card")
     return value
 
 
 def render_card(
     payload: object, *, now: datetime, allow_objects: bool = False, allow_drafts: bool = False,
-    allow_apps: bool = False,
+    allow_apps: bool = False, allow_spaces: bool = False,
 ) -> dict[str, object]:
     created = _utc(now, code="invalid_clock")
     validated = validate_card_input(payload, now=created, allow_objects=allow_objects,
-                                    allow_drafts=allow_drafts, allow_apps=allow_apps)
+                                    allow_drafts=allow_drafts, allow_apps=allow_apps, allow_spaces=allow_spaces)
     content_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -315,9 +322,9 @@ def validate_card_result(payload: object, *, now: datetime) -> dict[str, object]
 
     card_input = {key: value[key] for key in input_keys if key in value}
     # render_card already warned about this document's unknown values.
-    # A rendered result was already allowed its objects (and drafts and apps) when it was made.
+    # A rendered result was already allowed its objects (and drafts, apps and spaces) when it was made.
     validated = validate_card_input(card_input, now=created, warn=False, allow_objects=True,
-                                    allow_drafts=True, allow_apps=True)
+                                    allow_drafts=True, allow_apps=True, allow_spaces=True)
     expected_hash = hashlib.sha256(
         canonical_json(validated).encode("utf-8")
     ).hexdigest()
@@ -397,6 +404,7 @@ def _element(
     allow_objects: bool = False,
     allow_drafts: bool = False,
     allow_apps: bool = False,
+    allow_spaces: bool = False,
 ) -> None:
     _object(
         value,
@@ -421,7 +429,12 @@ def _element(
             "apps_tool_only",
             f"Element {element_id}: apps come only from bighelp_show_app.",
         )
-    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES | DRAFT_TYPES | APP_TYPES:
+    if element_type in SPACE_TYPES and not allow_spaces:
+        _raise(
+            "spaces_tool_only",
+            f"Element {element_id}: spaces come only from bighelp_draft_space.",
+        )
+    if element_type not in _ELEMENT_TYPES and element_type not in OBJECT_TYPES | DRAFT_TYPES | APP_TYPES | SPACE_TYPES:
         _raise("unsupported_element", f"Element {element_id} has an unsupported type")
     props = value["props"]
     if not isinstance(props, dict):
@@ -544,6 +557,8 @@ def _element(
         draft_props(element_type, props)
     elif element_type in APP_TYPES:
         app_props(props)
+    elif element_type in SPACE_TYPES:
+        space_draft_props(props)
 
 
 # Object component props are plain values, not bindings: they name one real
@@ -730,6 +745,35 @@ def app_props(props: dict[str, object]) -> None:
     for key in ("sends_answers", "live"):
         if not isinstance(props[key], bool):
             _raise("invalid_value", f"App {key} must be boolean")
+
+
+# A space draft: what the person adds to Today. The plugin writes every prop (spaces.py).
+SPACE_ID = re.compile(r"^s_[0-9a-f]{32}$")
+MAX_SPACE_UPDATES = 60
+
+
+def _one_line(value: object, maximum: int, what: str) -> str:
+    """1 to ``maximum`` characters, single spaces, no line breaks or control characters."""
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        _raise("limit_exceeded", f"{what} is 1 to {maximum} characters")
+    if value != " ".join(value.split()):
+        _raise("invalid_value", f"{what} has single spaces and no line breaks")
+    if any(unicodedata.category(scalar) in ("Cc", "Cs") for scalar in value):
+        _raise("invalid_value", f"{what} has a forbidden control character")
+    return value
+
+
+def space_draft_props(props: dict[str, object]) -> None:
+    keys = {"space_id", "description", "updates", "uses_ai", "revision"}
+    _props(props, keys, keys)
+    if not isinstance(props["space_id"], str) or not SPACE_ID.fullmatch(props["space_id"]):
+        _raise("invalid_value", "space_id must be s_ and 32 lowercase hex characters")
+    _one_line(props["description"], MAX_APP_DESCRIPTION, "A space description")
+    _one_line(props["updates"], MAX_SPACE_UPDATES, "How often a space updates")
+    if not isinstance(props["uses_ai"], bool):
+        _raise("invalid_value", "uses_ai must be boolean")
+    if not 1 <= _integer(props["revision"]) <= _MAX_REVISION:
+        _raise("invalid_value", "revision must be a positive integer")
 
 
 def draft_message(key: str, value: object) -> str:

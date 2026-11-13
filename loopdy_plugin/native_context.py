@@ -26,7 +26,8 @@ LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1",
                  "native-core-files-chat-v1", "native-app-state-v1", "native-html-apps-v1",
                  "native-agents-background-v1", "native-agents-today-v1",
                  "native-agents-today-detail-v1", "native-computer-screen-v1",
-                 "native-uploads-small-pieces-v1", "native-agent-deliveries-v1", "native-chat-live-v1")
+                 "native-uploads-small-pieces-v1", "native-agent-deliveries-v1", "native-chat-live-v1",
+                 "native-spaces-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -591,4 +592,10 @@ def _native_features(
         features.append(chat_live_capability)
     else:
         skip(chat_live_capability, "this Hermes has no gateway owner forward.")
+    # Spaces: live panels on the app's Today tab, kept up to date by a Hermes scheduled task.
+    from .spaces import CAPABILITY as spaces_capability, available as spaces_available
+    if spaces_available():
+        features.append(spaces_capability)
+    else:
+        skip(spaces_capability, "this Hermes has no scheduled tasks here.")
     return profile, tuple(features)

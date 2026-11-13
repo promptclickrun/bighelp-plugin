@@ -135,5 +135,82 @@ class HtmlAppCardTests(unittest.TestCase):
         self.assertEqual("Here you go. Trip planner: Plan the stops of a road trip.", reply_preview(reply))
 
 
+SPACE_FIXTURE = PLUGIN_ROOT / "fixtures" / "loopdy_card_v1" / "static-space-draft.json"
+SPACE_ID = "s_0123456789abcdef0123456789abcdef"
+
+
+def space_card(**props) -> dict:
+    card = json.loads(SPACE_FIXTURE.read_text(encoding="utf-8"))
+    card["elements"]["space"]["props"].update(props)
+    return card
+
+
+def render_space(card: dict) -> dict:
+    return render_card(card, now=NOW, allow_spaces=True)
+
+
+class SpaceDraftCardTests(unittest.TestCase):
+    """The space_draft element (docs/SPACES.md): only bighelp_draft_space may make one."""
+
+    def test_the_shared_fixture_is_accepted_and_matches_the_contract(self):
+        card = render_space(space_card())
+        self.assertEqual({"type": "space_draft", "children": [], "props": {
+            "space_id": SPACE_ID, "description": "Drive time to work, from live traffic.",
+            "updates": "Every 15 minutes", "uses_ai": False, "revision": 1}}, card["elements"]["space"])
+        self.assertEqual("A space to add to Today: Commute. Updates every 15 minutes, without AI.",
+                         card["spoken_summary"])
+        self.assertEqual(card, validate_card_result(card, now=NOW))
+
+    def test_nothing_else_may_make_one(self):
+        for allowed in ({}, {"allow_objects": True, "allow_drafts": True, "allow_apps": True}):
+            with self.subTest(allowed=allowed), self.assertRaises(BighelpCardError) as caught:
+                render_card(space_card(), now=NOW, **allowed)
+            self.assertEqual("spaces_tool_only", caught.exception.code)
+
+    def test_props_are_exactly_the_five_keys(self):
+        for missing in ("space_id", "description", "updates", "uses_ai", "revision"):
+            card = space_card()
+            del card["elements"]["space"]["props"][missing]
+            with self.subTest(missing=missing), self.assertRaises(BighelpCardError):
+                render_space(card)
+        with self.assertRaises(BighelpCardError):
+            render_space(space_card(extra=True))
+
+    def test_each_prop_is_checked(self):
+        bad = {
+            "space_id": ["s_" + "1" * 31, "s_" + "A" * 32, "a_" + "1" * 32, 5, None],
+            "description": ["", "x" * 241, "two  spaces", " padded", "line\nbreak", "bell\x07", 5],
+            "updates": ["", "x" * 61, "Every  hour", "Every\nhour", None],
+            "uses_ai": ["no", 0, None],
+            "revision": [0, -1, 1.5, True, "1", 9_007_199_254_740_992],
+        }
+        for key, values in bad.items():
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaises(BighelpCardError):
+                    render_space(space_card(**{key: value}))
+        render_space(space_card(description="x" * 240, updates="x" * 60, revision=9_007_199_254_740_991))
+
+    def test_a_space_is_the_only_element_in_its_card(self):
+        wrapped = space_card()
+        wrapped["elements"]["root"] = {"type": "vstack", "props": {}, "children": ["space"]}
+        wrapped["root"] = "root"
+        beside = space_card()
+        beside["elements"]["other"] = {"type": "text", "props": {"value": {"literal": "hi"}}, "children": []}
+        leaf = space_card()
+        leaf["elements"]["space"]["children"] = ["space"]
+        for card in (wrapped, beside, leaf):
+            with self.assertRaises(BighelpCardError):
+                render_space(card)
+
+    def test_a_chat_can_say_it_draws_spaces(self):
+        self.assertEqual(frozenset({"space_draft"}), card_objects.known(["space_draft", "nonsense"]))
+        self.assertIn("space_draft", card_objects.DECLARABLE)
+
+    def test_a_notification_says_what_the_space_shows(self):
+        card = rendered_card_delivery(render_card(space_card(), now=datetime.now(timezone.utc), allow_spaces=True))
+        reply = "Here it is.\n\n" + card["display_markdown"]
+        self.assertEqual("Here it is. Commute: Drive time to work, from live traffic.", reply_preview(reply))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -165,6 +165,23 @@ class AgentGuideTests(unittest.TestCase):
         self.assertIn("## Files on a post", skill)
         self.assertIn("`files`", skill)
 
+    def test_agents_learn_spaces_from_one_short_line_and_the_skill_has_the_rest(self) -> None:
+        # The brief is frozen into every chat and shared with all plugins, so a space gets one line.
+        line = next(line for line in agent_guide.CHAT_BRIEF.splitlines() if "bighelp_draft_space" in line)
+        self.assertLessEqual(len(line), 160)
+        self.assertIn("a script routine, not AI, when it can", line)
+        skill = (ROOT / "skills" / "bighelp" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Spaces", skill)
+        for phrase in ("until the person taps Add to Today", "Never say a space is on",
+                       "Small", "Wide", "Tall", '{"skip": true}', "hermes bighelp space update <space_id>",
+                       "Don't call AI APIs from a script", "Hermes gateway running", "`prompt` routine",
+                       "BIGHELP_SPACE_ID", "spaces_unavailable"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, skill)
+        for tool in ("bighelp_draft_space", "bighelp_update_space", "bighelp_space_settings"):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, _provided_tools())
+
     def test_a_phone_tool_that_is_off_asks_with_a_card_and_health_trends_get_a_chart(self) -> None:
         brief = agent_guide.prompt_section({"platform": "bighelp"})
         self.assertIn("iphone_health", brief)

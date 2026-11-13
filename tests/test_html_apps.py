@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -256,6 +257,14 @@ class ShowAppTests(ToolCase):
         self.assertIn("isn't one of your apps", self.assert_refused(result, "app_not_found"))
         self.assertEqual([], os.listdir(self.host.store.pages))
 
+    def test_a_spaces_page_is_changed_only_through_its_space(self):
+        app_id = "a_" + "5" * 32
+        self.host.store.save(app_id, replace=False, session_id=CHAT, title="Commute", description="D",
+                             sends_answers=False, html=b"<p>space</p>", space_id="s_" + "5" * 32)
+        result = self.host.show(app_id=app_id)
+        self.assertEqual("Change a space's page with bighelp_draft_space.", self.assert_refused(result, "app_in_space"))
+        self.assertEqual(b"<p>space</p>", self.host.store.read_html(app_id)[1])
+
     def test_another_agents_app_cant_be_replaced(self):
         other = Host(self, "research")
         theirs = other.show()["app_id"]
@@ -430,6 +439,60 @@ class StoreTests(unittest.TestCase):
 
     def test_the_database_is_private_to_the_host_user(self):
         self.assertEqual(0o600, self.store.path.stat().st_mode & 0o777)
+
+    def test_a_spaces_page_is_never_pruned(self):
+        with patch.object(html_apps, "MAX_APPS", 2):
+            page = self.add(1, space_id="s_" + "1" * 32)
+            first, second = self.add(2), self.add(3)
+            third = self.add(4)
+            # Two apps of the agent's own are kept beside the space's page, which is the oldest.
+            self.assertEqual([True, False, True, True],
+                             [self.store.get(app) is not None for app in (page, first, second, third)])
+            self.assertEqual("s_" + "1" * 32, self.store.get(page).space_id)
+
+    def test_replacing_a_page_keeps_its_space(self):
+        app_id = self.add(1, space_id="s_" + "1" * 32)
+        self.store.save(app_id, replace=True, session_id=CHAT, title="T", description="D", sends_answers=False,
+                        html=b"<p>new</p>")
+        self.assertEqual(("s_" + "1" * 32, 2), (self.store.get(app_id).space_id, self.store.get(app_id).revision))
+
+    def test_delete_takes_the_row_and_every_page(self):
+        app_id = self.add(1)
+        self.store.save(app_id, replace=True, session_id=CHAT, title="T", description="D", sends_answers=False,
+                        html=b"<p>two</p>")
+        stray = self.store.pages / f"{app_id}.{'0' * 64}.html"
+        stray.write_bytes(b"left over")
+        other = self.add(2)
+        self.assertTrue(self.store.delete(app_id))
+        self.assertIsNone(self.store.get(app_id))
+        self.assertEqual([f"{other}.{self.store.get(other).html_sha256}.html"], os.listdir(self.store.pages))
+        self.assertFalse(self.store.delete(app_id))
+
+    def test_a_store_from_before_spaces_gets_the_space_column(self):
+        folder = Path(self.store.path.parent) / "old"
+        folder.mkdir()
+        # The schema this plugin wrote before spaces, with one app in it.
+        db = sqlite3.connect(folder / "html-apps.sqlite3")
+        db.execute("""
+            CREATE TABLE apps(
+                app_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, title TEXT NOT NULL,
+                description TEXT NOT NULL, sends_answers INTEGER NOT NULL, data_kind TEXT NOT NULL,
+                data_path TEXT, inline_json TEXT, data_updated REAL, revision INTEGER NOT NULL,
+                created REAL NOT NULL, updated REAL NOT NULL, html_sha256 TEXT NOT NULL,
+                html_bytes INTEGER NOT NULL)""")
+        old_id = "a_" + "7" * 32
+        db.execute("INSERT INTO apps VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (old_id, CHAT, "Old", "D", 0, "none", None, None, None, 1, 1.0, 1.0, "0" * 64, 3))
+        db.commit()
+        db.close()
+        store = HtmlAppStore(folder)
+        self.assertIsNone(store.get(old_id).space_id)
+        # A second plugin copy opening it again finds the column already there.
+        HtmlAppStore(folder)
+        new_id = "a_" + "8" * 32
+        store.save(new_id, replace=False, session_id=CHAT, title="New", description="D", sends_answers=False,
+                   html=b"<p>n</p>", space_id="s_" + "8" * 32)
+        self.assertEqual("s_" + "8" * 32, HtmlAppStore(folder).get(new_id).space_id)
 
 
 if __name__ == "__main__":

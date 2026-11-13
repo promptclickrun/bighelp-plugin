@@ -136,6 +136,8 @@ workspace_not_configured workspace_on_remote workspace_unavailable workspace_unr
 workspace_windows_unsupported
 upload_chunk_corrupt upload_conflict upload_corrupt upload_finished upload_incomplete upload_length_invalid
 upload_chunk_timeout upload_no_space upload_not_found upload_offset_invalid uploads_busy uploads_unavailable
+draft_changed refresh_too_soon routine_failed schedules_unavailable space_not_draft space_not_found
+spaces_full spaces_unavailable notification_activity_unknown notification_card_key_invalid
 """.split())
 RESULT_WORDS = frozenset({"accepted", "duplicate"})
 # Where an error can come from. A code is accepted from these places only.
@@ -215,6 +217,7 @@ bighelp_save_ui_template bighelp_react_to_message bighelp_request_secure_input b
 bighelp_people bighelp_send_notification bighelp_templates_search bighelp_templates_get bighelp_templates_fill
 bighelp_templates_create_agent bighelp_workflows bighelp_catalog_login bighelp_submit_catalog_template
 bighelp_draft_contact bighelp_draft_event bighelp_offer_photo_action bighelp_show_app bighelp_update_app_data
+bighelp_draft_space bighelp_update_space bighelp_space_settings
 """.split())
 _KNOWN_TOOLS = _HERMES_TOOLS | _BIGHELP_TOOLS | {"mcp", "custom"}
 

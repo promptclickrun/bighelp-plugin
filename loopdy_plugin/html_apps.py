@@ -93,6 +93,8 @@ class HtmlApp:
     updated: float
     html_sha256: str
     html_bytes: int
+    # The space (spaces.py) whose page this is: kept past MAX_APPS, and changed only through the space.
+    space_id: str | None = None
 
     @property
     def live(self) -> bool:
@@ -119,7 +121,22 @@ class HtmlAppStore:
                     description TEXT NOT NULL, sends_answers INTEGER NOT NULL, data_kind TEXT NOT NULL,
                     data_path TEXT, inline_json TEXT, data_updated REAL, revision INTEGER NOT NULL,
                     created REAL NOT NULL, updated REAL NOT NULL, html_sha256 TEXT NOT NULL,
-                    html_bytes INTEGER NOT NULL)""")
+                    html_bytes INTEGER NOT NULL, space_id TEXT)""")
+        self._add_space_column()
+
+    def _add_space_column(self) -> None:
+        """A store made before spaces gets their column. Another plugin copy may add it at the same time."""
+        with self._db() as db:
+            if "space_id" in {row["name"] for row in db.execute("PRAGMA table_info(apps)")}:
+                return
+        try:
+            with self._db(write=True) as db:
+                if "space_id" not in {row["name"] for row in db.execute("PRAGMA table_info(apps)")}:
+                    db.execute("ALTER TABLE apps ADD COLUMN space_id TEXT")
+        except sqlite3.OperationalError:
+            with self._db() as db:
+                if "space_id" not in {row["name"] for row in db.execute("PRAGMA table_info(apps)")}:
+                    raise
 
     @contextmanager
     def _db(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -148,7 +165,7 @@ class HtmlAppStore:
             description=row["description"], sends_answers=bool(row["sends_answers"]), data_kind=row["data_kind"],
             data_path=row["data_path"], inline_json=row["inline_json"], data_updated=row["data_updated"],
             revision=row["revision"], created=row["created"], updated=row["updated"],
-            html_sha256=row["html_sha256"], html_bytes=row["html_bytes"])
+            html_sha256=row["html_sha256"], html_bytes=row["html_bytes"], space_id=row["space_id"])
 
     def _page(self, app_id: str, sha256: str) -> Path:
         return self.pages / f"{app_id}.{sha256}.html"
@@ -180,9 +197,9 @@ class HtmlAppStore:
 
     def save(self, app_id: str, *, replace: bool, session_id: str, title: str, description: str,
              sends_answers: bool, html: bytes, data_json: str | None = None,
-             data_path: str | None = None) -> HtmlApp:
+             data_path: str | None = None, space_id: str | None = None) -> HtmlApp:
         """Keep a new app, or with ``replace`` swap an existing one's page, texts and data source and bump
-        its revision. Its id and the session it was made in stay."""
+        its revision. Its id, the session it was made in and the space it belongs to stay."""
         sha256 = hashlib.sha256(html).hexdigest()
         kind = "path" if data_path is not None else "inline" if data_json is not None else "none"
         new_id = app_id
@@ -196,11 +213,12 @@ class HtmlAppStore:
                 values = (session_id if old is None else old["session_id"], title, description, int(sends_answers),
                           kind, data_path, data_json, now if kind == "inline" else None,
                           1 if old is None else old["revision"] + 1,
-                          now if old is None else old["created"], now, sha256, len(html))
+                          now if old is None else old["created"], now, sha256, len(html),
+                          space_id if space_id is not None or old is None else old["space_id"])
                 db.execute(
                     "INSERT OR REPLACE INTO apps(session_id, title, description, sends_answers, data_kind, data_path, "
-                    "inline_json, data_updated, revision, created, updated, html_sha256, html_bytes, app_id) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (*values, new_id))
+                    "inline_json, data_updated, revision, created, updated, html_sha256, html_bytes, space_id, "
+                    "app_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (*values, new_id))
                 evicted = self._prune(db, keep=new_id)
         except BaseException:
             # Drop the page just written, keeping the one the app still holds.
@@ -216,14 +234,23 @@ class HtmlAppStore:
 
     @staticmethod
     def _prune(db: sqlite3.Connection, *, keep: str) -> list[str]:
-        """Past MAX_APPS, the least recently updated go."""
-        extra = db.execute("SELECT COUNT(*) FROM apps").fetchone()[0] - MAX_APPS
+        """Past MAX_APPS, the least recently updated go. A space's page stays until its space goes
+        (spaces.py keeps their number small)."""
+        extra = db.execute("SELECT COUNT(*) FROM apps WHERE space_id IS NULL").fetchone()[0] - MAX_APPS
         if extra <= 0:
             return []
         gone = [row["app_id"] for row in db.execute(
-            "SELECT app_id FROM apps WHERE app_id != ? ORDER BY updated, app_id LIMIT ?", (keep, extra))]
+            "SELECT app_id FROM apps WHERE app_id != ? AND space_id IS NULL ORDER BY updated, app_id LIMIT ?",
+            (keep, extra))]
         db.executemany("DELETE FROM apps WHERE app_id = ?", [(app_id,) for app_id in gone])
         return gone
+
+    def delete(self, app_id: str) -> bool:
+        """Remove an app and its pages. Whether it was there."""
+        with self._db(write=True) as db:
+            existed = db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,)).rowcount > 0
+        self._drop_pages(app_id)
+        return existed
 
     def set_inline_data(self, app_id: str, data_json: str | None) -> tuple[HtmlApp, float]:
         """Replace an app's inline data (``None`` clears it). An app that reads a file refuses."""
@@ -538,8 +565,12 @@ def show(args: Any, context: dict[str, Any], *, now: Callable[[], datetime], pro
     if data is not None and data_path is not None:
         raise _ToolError("invalid_arguments", "Give at most one of data or data_path.")
     store = current_store()
-    if app_id is not None and store.get(app_id) is None:
-        raise _ToolError("app_not_found", "That app_id isn't one of your apps. Leave app_id out to make a new one.")
+    if app_id is not None:
+        existing = store.get(app_id)
+        if existing is None:
+            raise _ToolError("app_not_found", "That app_id isn't one of your apps. Leave app_id out to make a new one.")
+        if existing.space_id is not None:
+            raise _ToolError("app_in_space", "Change a space's page with bighelp_draft_space.")
     page = _page(args, profile)
     data_json = _inline_data(data) if data is not None else None
     data_problem = None
