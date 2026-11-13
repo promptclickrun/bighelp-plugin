@@ -311,6 +311,62 @@ form is better for a simple answer.
   card opens the new version.
 - `apps_unavailable` means their bighelp can't show apps: ask them to update the app.
 
+## Spaces: live panels on Today
+
+A space is a panel on the person's Today tab: a card they see at a glance, an HTML page that opens when they tap
+it, and a routine that keeps both current (a commute time, a tracker, a score). Make one only when the person
+asks for it.
+
+1. Call `bighelp_draft_space` with a `title`, a one-line `description`, a `card`, a page (`html`, or `path` to a
+   file you wrote in your working folder) and a `routine` (`schedule`, plus `script` or `prompt`). The card needs
+   real, current data and `data_sources: []`. Use basic components: `skill_view("loopdy:generative-ui")`.
+2. Put the returned `display_markdown` in your reply once. It shows a draft with an Add to Today button.
+3. **Nothing is scheduled, and nothing is on Today, until the person taps Add to Today.** Never say a space is on
+   Today before then. To change a draft, call `bighelp_draft_space` again with its `space_id`. For a space that
+   is already on Today, a changed schedule, script or prompt waits for the person to tap Add again; the old
+   routine keeps running until they do.
+4. `spaces_unavailable` means their bighelp can't show spaces: ask them to update the app.
+
+### Sizes
+
+The person picks the size (Small, Wide or Tall) and can change it any time. Read it with
+`bighelp_space_settings` and set it only when they ask. A panel is clipped, not scrolled, so fit the size:
+
+| Size | Shape | Fits |
+|---|---|---|
+| Small | A square, half the width | One number and a label. At most 3 list items, 3 table rows or 3 columns, 2 lines of text. |
+| Wide | Full width, the same height | A headline and a short list or table: 3 rows, 5 columns. |
+| Tall | Full width, twice as high | A list or table of up to 8 rows, or a chart. |
+
+Give `card` for the size you designed for (`size`, default `wide`). Add `sizes` (`small`, `wide`, `tall`) when a
+card made for one size reads better. Keep the headline first: the most important number or word at the top.
+
+### The routine: script first
+
+Every update that needs no judgment is a script. Hermes runs it on the schedule and a script spends no AI. Use a
+`.py` or `.sh` file in your working folder, and a schedule that repeats (`every 15m`, `0 7 * * 1-5`; at most
+once every 5 minutes).
+
+- On stdin the script gets one JSON object: `{"spaceId", "size", "hidden", "lastData", "lastUpdatedAt"}`. The
+  environment has `BIGHELP_SPACE_ID` and `BIGHELP_SPACE_SIZE`. It has 120 seconds.
+- The person approves the script as it is when they tap Add to Today. If you change the script, draft the
+  space again with its `space_id`; the person adds it again. Until then it doesn't run, and the panel says it
+  stopped (`script_changed`).
+- On stdout it prints one JSON object, up to 1,310,720 bytes: `{"card": <card>, "sizes": {...}, "data": <any JSON>}`
+  (each key optional; `data` is for the page), or `{"skip": true}` when nothing changed. A non-zero exit or
+  anything else on stdout counts as a failed update, and the panel shows it stopped.
+- Don't call AI APIs from a script. If an update needs judgment (a summary, a choice), use a `prompt` routine
+  instead: at most 2,000 characters, every update uses AI, at most once an hour, and the draft card says
+  "Uses AI". A prompt routine updates with `bighelp_update_space` and replies `[SILENT]`.
+- Another script of yours can update a space too: `bighelp_update_space`, or
+  `hermes bighelp space update <space_id>` with the same JSON (`card`, `sizes`, `data`) on stdin.
+- `bighelp_space_settings` lists your spaces with their last problem. `problem_note` is for you only: read it,
+  fix the script, and never repeat it to the person as it is.
+- Updates need this computer's Hermes gateway running, because it runs scheduled tasks. If it isn't, the panel
+  says it stopped. Tell the person, and say that Try again on the panel runs a script space once.
+- `script_unavailable` means this computer can't reach your folder for scripts (a container or a remote
+  terminal). Use a `prompt` routine and tell the person it uses AI.
+
 ## Template Catalog
 
 When the user wants a template or a new kind of agent, look in bighelp's
