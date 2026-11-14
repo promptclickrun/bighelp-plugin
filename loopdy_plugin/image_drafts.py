@@ -100,9 +100,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
 }
 
-UPDATE_NOTE = ("This chat's bighelp app can't show drafts. Ask the person to update bighelp. Until then, "
+UPDATE_NOTE = ("This chat's Bighelp app can't show drafts. Ask the person to update Bighelp. Until then, "
                "don't save the contact or event yourself.")
-UNSAVED_NOTE = ("Nothing is saved yet. The person checks this draft in bighelp and saves or discards it "
+UNSAVED_NOTE = ("Nothing is saved yet. The person checks this draft in Bighelp and saves or discards it "
                 "there; you'll hear what they chose on your next turn. Don't say it's saved.")
 
 
@@ -229,7 +229,7 @@ def _timestamp(seconds: float) -> str:
 
 _NOUN = {"contact_draft": "contact", "event_draft": "event"}
 _REASON_WORDS = {
-    "permission_denied": "bighelp has no access to Contacts or Calendar on the phone",
+    "permission_denied": "Bighelp has no access to Contacts or Calendar on the phone",
     "destination_unavailable": "the account or calendar they chose isn't available",
     "invalid_fields": "some details weren't valid",
     "write_failed": "the phone couldn't save it",
@@ -247,7 +247,7 @@ def _note(kind: str, draft_id: str, label: str, state: str, destination: str | N
     draft = f"the {noun} draft {draft_id}"
     if state == "saved":
         sentence = f"The person saved {draft}." + ("" if verified is not False else
-                                                   " bighelp couldn't read it back to check.")
+                                                   " Bighelp couldn't read it back to check.")
     elif state == "failed":
         sentence = f"The {noun} draft {draft_id} didn't save: {_REASON_WORDS.get(reason or '', 'it failed')}."
     elif state == "outcome_unknown":
@@ -609,7 +609,7 @@ def session_lineage(db_path: Path, session_id: str) -> list[str]:
                 lineage.append(current)
     except sqlite3.Error as error:
         # A locked or damaged state.db leaves the chat itself: its own drafts still answer.
-        logger.warning("bighelp chat lineage unreadable: %s", type(error).__name__)
+        logger.warning("Bighelp chat lineage unreadable: %s", type(error).__name__)
         return [session_id]
     return lineage
 
@@ -715,7 +715,7 @@ def chat_pictures(home: Path, lineage: list[str], *, strict: bool = False) -> li
     except (OSError, sqlite3.Error) as error:
         if strict:
             raise
-        logger.debug("bighelp phone photos unreadable: %s", type(error).__name__)
+        logger.debug("Bighelp phone photos unreadable: %s", type(error).__name__)
     # sorted() keeps each message's own order for ties, so its last picture stays the newest.
     pictures: list[str] = []
     for _when, path in sorted(entries, key=lambda entry: entry[0], reverse=True):
@@ -863,7 +863,7 @@ def _json(value: Any) -> str:
 def _session(context: dict[str, Any]) -> str:
     session_id = tool_session.session_id(context, "HERMES_SESSION_ID")
     if SESSION_ID.fullmatch(session_id or "") is None:
-        raise _ToolError("drafts_unavailable", "Drafts work only in a bighelp chat with the person.")
+        raise _ToolError("drafts_unavailable", "Drafts work only in a Bighelp chat with the person.")
     return session_id
 
 
@@ -871,7 +871,7 @@ def _declared(session_id: str) -> frozenset[str]:
     try:
         return card_objects.declared_for(session_id) & DRAFT_TYPES
     except Exception as error:  # a broken store refuses, never shows a card the app can't draw
-        logger.debug("bighelp draft renders lookup failed: %s", type(error).__name__)
+        logger.debug("Bighelp draft renders lookup failed: %s", type(error).__name__)
         return frozenset()
 
 
@@ -903,7 +903,7 @@ def build_card(kind: str, *, draft_id: str, picture: Picture, config_revision: i
         "version": 1,
         "title": f"{noun.capitalize()} draft" + (f": {label}" if label else ""),
         "spoken_summary": f"{article} {noun} draft" + (f" for {label}" if label else "")
-                          + " to review in bighelp. Nothing is saved yet.",
+                          + " to review in Bighelp. Nothing is saved yet.",
         "data_sources": [],
         "root": "draft",
         "elements": {"draft": {"type": kind, "props": props, "children": []}},
@@ -1019,8 +1019,8 @@ _BRIDGE = (" If Hermes has progressively disclosed this tool, run it through too
            "tool_call; never substitute another tool.")
 
 DRAFT_CONTACT_DESCRIPTION = (
-    "Make a contact draft from a picture in this bighelp chat (a business card): one the person sent, or a "
-    "photo you read from their library with iphone_photos in this chat. They check and save it in bighelp. Use it only when they asked for a contact; if they asked only about the picture, "
+    "Make a contact draft from a picture in this Bighelp chat (a business card): one the person sent, or a "
+    "photo you read from their library with iphone_photos in this chat. They check and save it in Bighelp. Use it only when they asked for a contact; if they asked only about the picture, "
     "just answer. " + _RULES + " Leave out what isn't in the picture. Mark a value you inferred as guessed and "
     "one that is hard to read as unclear (marks: field paths like given_name, phones.0, postal_address.city). "
     "image: 1 is the newest picture in this chat, 2 the one before. replaces: the draft_id of an "
@@ -1029,8 +1029,8 @@ DRAFT_CONTACT_DESCRIPTION = (
     + _BRIDGE
 )
 DRAFT_EVENT_DESCRIPTION = (
-    "Make one calendar event draft from a picture in this bighelp chat (a poster or flyer): one the person "
-    "sent, or a photo you read from their library with iphone_photos in this chat. They check and add it in bighelp. Use it only when they asked for an event; if they asked only about the "
+    "Make one calendar event draft from a picture in this Bighelp chat (a poster or flyer): one the person "
+    "sent, or a photo you read from their library with iphone_photos in this chat. They check and add it in Bighelp. Use it only when they asked for an event; if they asked only about the "
     "picture, just answer. " + _RULES + " A timed event takes start and end (RFC 3339 with an offset) and "
     "time_zone (an IANA name); an all-day one takes all_day true, start_date and an end_date that is the day "
     "after the last day. Never guess a year, a time zone or an end time silently: leave it out and mark it "
@@ -1103,7 +1103,7 @@ def _handler(work: Callable[..., dict[str, Any]], **options: Any) -> Callable[..
         except _ToolError as error:
             return _json({"success": False, "error": error.code, "message": error.message})
         except (OSError, sqlite3.Error) as error:
-            logger.warning("bighelp photo action failed: %s", type(error).__name__)
+            logger.warning("Bighelp photo action failed: %s", type(error).__name__)
             return _json({"success": False, "error": "drafts_unavailable",
                           "message": "Drafts aren't available on this computer right now."})
     return handle
@@ -1124,7 +1124,7 @@ def _photo_context(declared: frozenset[str], overrides: dict[str, dict[str, Any]
     presets = [preset for preset in PRESETS if PRESET_KINDS[preset] in declared]
     tools = "; ".join(f"{_PRESET_NAMES[preset][0].lower()}: {_PRESET_NAMES[preset][1]}" for preset in presets)
     questions = " or ".join(json.dumps(DEFAULTS[preset]["question"], ensure_ascii=False) for preset in presets)
-    head = (f"[bighelp] The person sent a picture. Photo actions for this agent ({tools}). Defaults: read only "
+    head = (f"[Bighelp] The person sent a picture. Photo actions for this agent ({tools}). Defaults: read only "
             f"what's printed; offer when a picture comes with no words: yes; if it's unclear, ask {questions}.")
     rules = (
         "Rules: " + _RULES + " If the person asked only about the picture, just answer; no draft. If they asked "
@@ -1133,7 +1133,7 @@ def _photo_context(declared: frozenset[str], overrides: dict[str, dict[str, Any]
         "normally. An unclear picture, or several events that disagree: ask the question, no draft. Leave out "
         "what isn't in the picture, mark inferred values guessed and hard-to-read ones unclear, and never fill "
         "in a year, time zone or end time silently. Nothing is saved until the person reviews the draft in "
-        "bighelp; never say it's saved.")
+        "Bighelp; never say it's saved.")
     changed = []
     for preset in presets:
         chosen = overrides.get(preset, {})
@@ -1165,13 +1165,13 @@ def _pre_llm_call(**payload: Any) -> dict[str, str] | None:
         store = current_store()
         notes = store.take_notes(lineage)
         if notes:
-            parts.append("[bighelp] Since your last turn: " + " ".join(notes))
+            parts.append("[Bighelp] Since your last turn: " + " ".join(notes))
         if message_has_picture(payload.get("user_message")):
             declared = _declared(session_id)
             if declared:
                 parts.append(_photo_context(declared, store.settings()[1]))
     except Exception as error:  # photo actions must never fail a turn
-        logger.debug("bighelp photo actions context skipped: %s", type(error).__name__)
+        logger.debug("Bighelp photo actions context skipped: %s", type(error).__name__)
     return {"context": "\n\n".join(parts)} if parts else None
 
 

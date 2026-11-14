@@ -66,7 +66,7 @@ def build_event(
     detail: Mapping[str, Any] | None = None,
 ) -> BighelpEvent:
     if kind not in EVENT_TYPES:
-        raise ValueError(f"Unsupported bighelp event type: {kind}")
+        raise ValueError(f"Unsupported Bighelp event type: {kind}")
     return BighelpEvent(
         event_id=_event_id(kind, correlation),
         type=kind,

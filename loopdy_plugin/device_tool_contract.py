@@ -139,7 +139,7 @@ def device_tool_request(
 def parse_device_tool_request(value: Any, *, max_window: int = MAX_DEVICE_TOOL_REQUEST_SECONDS) -> dict[str, Any]:
     """Check one request. ``max_window`` is longer only for a permission request, and never past its bound."""
     if not MAX_DEVICE_TOOL_REQUEST_SECONDS <= max_window <= MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS:
-        raise ValueError("bighelp device tool expiry is invalid")
+        raise ValueError("Bighelp device tool expiry is invalid")
     expected = {
         "version", "type", "requestId", "deviceId", "hostId", "authorizationEpoch",
         "sessionId", "agentId", "turnId", "operation", "arguments", "sentAt", "expiresAt",
@@ -151,7 +151,7 @@ def parse_device_tool_request(value: Any, *, max_window: int = MAX_DEVICE_TOOL_R
         or value.get("version") != 1
         or value.get("type") != "device.tool.request"
     ):
-        raise ValueError("bighelp device tool request is invalid")
+        raise ValueError("Bighelp device tool request is invalid")
     request_id = _opaque(value.get("requestId"), "requestId", 16, 128)
     device_id = _opaque(value.get("deviceId"), "deviceId", 1, 96)
     host_id = _opaque(value.get("hostId"), "hostId", 1, 96)
@@ -161,14 +161,14 @@ def parse_device_tool_request(value: Any, *, max_window: int = MAX_DEVICE_TOOL_R
     turn_id = _device_tool_turn_id(value.get("turnId"))
     operation = value.get("operation")
     if not isinstance(operation, str) or operation not in DEVICE_TOOL_OPERATIONS:
-        raise ValueError("bighelp device tool operation is invalid")
+        raise ValueError("Bighelp device tool operation is invalid")
     arguments = _device_tool_arguments(operation, value.get("arguments"))
     if _json_size(arguments) > MAX_DEVICE_TOOL_ARGUMENT_BYTES:
-        raise ValueError("bighelp device tool arguments are too large")
+        raise ValueError("Bighelp device tool arguments are too large")
     sent_at = _positive(value.get("sentAt"), "sentAt")
     expires_at = _positive(value.get("expiresAt"), "expiresAt")
     if not 20 <= expires_at - sent_at <= max_window:
-        raise ValueError("bighelp device tool expiry is invalid")
+        raise ValueError("Bighelp device tool expiry is invalid")
     result = dict(value)
     result.update(
         requestId=request_id,
@@ -184,7 +184,7 @@ def parse_device_tool_request(value: Any, *, max_window: int = MAX_DEVICE_TOOL_R
         expiresAt=expires_at,
     )
     if _json_size(result) > MAX_DEVICE_TOOL_PAYLOAD_BYTES:
-        raise ValueError("bighelp device tool request is too large")
+        raise ValueError("Bighelp device tool request is too large")
     return result
 
 
@@ -196,7 +196,7 @@ def device_tool_result(
     request = parse_device_tool_request(request, max_window=MAX_DEVICE_TOOL_PERMISSION_REQUEST_SECONDS)
     result_sent_at = _positive(sent_at, "sentAt")
     if result_sent_at < request["sentAt"]:
-        raise ValueError("bighelp device tool result timestamp is invalid")
+        raise ValueError("Bighelp device tool result timestamp is invalid")
     result = {
         "version": 1,
         "type": "device.tool.result",
@@ -228,18 +228,18 @@ def parse_device_tool_result(
         "sessionId", "agentId", "turnId", "operation", "status", "payload", "sentAt",
     }
     if not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(required | {"code"}):
-        raise ValueError("bighelp device tool result is invalid")
+        raise ValueError("Bighelp device tool result is invalid")
     if type(value.get("version")) is not int or value.get("version") != 1 or value.get("type") != "device.tool.result":
-        raise ValueError("bighelp device tool result is invalid")
+        raise ValueError("Bighelp device tool result is invalid")
     device_id = _opaque(value.get("deviceId"), "deviceId", 1, 96)
     if sender_device_id is not None and device_id != sender_device_id:
-        raise ValueError("bighelp device tool result sender is invalid")
+        raise ValueError("Bighelp device tool result sender is invalid")
     if sender_epoch is not None and value.get("authorizationEpoch") != sender_epoch:
-        raise ValueError("bighelp device tool result epoch is invalid")
+        raise ValueError("Bighelp device tool result epoch is invalid")
     if value.get("status") not in {"completed", "failed"}:
-        raise ValueError("bighelp device tool result status is invalid")
+        raise ValueError("Bighelp device tool result status is invalid")
     if not isinstance(value.get("payload"), dict):
-        raise ValueError("bighelp device tool result payload is invalid")
+        raise ValueError("Bighelp device tool result payload is invalid")
     payload = _device_tool_result_payload(value.get("operation"), value["payload"])
     code = value.get("code")
     if code is not None:
@@ -262,7 +262,7 @@ def parse_device_tool_result(
     else:
         result["code"] = code
     if _json_size(result) > MAX_DEVICE_TOOL_RESULT_BYTES:
-        raise ValueError("bighelp device tool result is too large")
+        raise ValueError("Bighelp device tool result is too large")
     return result
 
 
@@ -274,13 +274,13 @@ def _device_tool_turn_id(value: Any) -> str:
         not isinstance(value, str)
         or re.fullmatch(r"[A-Za-z0-9_:-]{1,512}", value) is None
     ):
-        raise ValueError("bighelp device tool turnId is invalid")
+        raise ValueError("Bighelp device tool turnId is invalid")
     return value
 
 
 def _device_tool_operation(value: Any) -> str:
     if not isinstance(value, str) or value not in DEVICE_TOOL_OPERATIONS:
-        raise ValueError("bighelp device tool operation is invalid")
+        raise ValueError("Bighelp device tool operation is invalid")
     return value
 
 
@@ -291,7 +291,7 @@ def _device_tool_result_payload(operation: Any, payload: dict[str, Any]) -> dict
         return _device_tool_json(payload, max_depth=MAX_DEVICE_TOOL_RESULT_DEPTH)
     data = image["data"]
     if len(data) > MAX_PHOTO_BASE64_CHARACTERS or re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", data) is None:
-        raise ValueError("bighelp device tool picture is invalid")
+        raise ValueError("Bighelp device tool picture is invalid")
     checked = _device_tool_json(
         {**payload, "image": {**image, "data": ""}}, max_depth=MAX_DEVICE_TOOL_RESULT_DEPTH)
     checked["image"]["data"] = data
@@ -300,32 +300,32 @@ def _device_tool_result_payload(operation: Any, payload: dict[str, Any]) -> dict
 
 def _device_tool_json(value: Any, *, depth: int = 0, max_depth: int = 4) -> Any:
     if depth > max_depth:
-        raise ValueError("bighelp device tool JSON is too deep")
+        raise ValueError("Bighelp device tool JSON is too deep")
     if value is None or isinstance(value, (str, bool, int, float)):
         if isinstance(value, float) and (not math.isfinite(value)):
-            raise ValueError("bighelp device tool JSON is invalid")
+            raise ValueError("Bighelp device tool JSON is invalid")
         if isinstance(value, str) and len(value) > 8_000:
-            raise ValueError("bighelp device tool text is too large")
+            raise ValueError("Bighelp device tool text is too large")
         return value
     if isinstance(value, list):
         if len(value) > 200:
-            raise ValueError("bighelp device tool list is too large")
+            raise ValueError("Bighelp device tool list is too large")
         return [_device_tool_json(item, depth=depth + 1, max_depth=max_depth) for item in value]
     if isinstance(value, dict):
         if len(value) > 64:
-            raise ValueError("bighelp device tool object is too large")
+            raise ValueError("Bighelp device tool object is too large")
         return {
             _opaque(key, "device tool key", 1, 96): _device_tool_json(item, depth=depth + 1, max_depth=max_depth)
             for key, item in value.items()
         }
-    raise ValueError("bighelp device tool JSON is invalid")
+    raise ValueError("Bighelp device tool JSON is invalid")
 
 
 def _device_tool_string(value: Any, field: str, *, required: bool = False, maximum: int = 4_000) -> str | None:
     if value is None and not required:
         return None
     if not isinstance(value, str) or not value or len(value) > maximum:
-        raise ValueError(f"bighelp device tool {field} is invalid")
+        raise ValueError(f"Bighelp device tool {field} is invalid")
     return value
 
 
@@ -338,7 +338,7 @@ def _device_tool_date(value: Any, field: str, *, required: bool = False) -> str 
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"bighelp device tool {field} is invalid") from exc
+        raise ValueError(f"Bighelp device tool {field} is invalid") from exc
     return raw
 
 
@@ -356,7 +356,7 @@ def _device_tool_range(
         end_date = datetime.fromisoformat(end.replace("Z", "+00:00"))
         elapsed = (end_date - start_date).total_seconds()
         if elapsed <= 0 or elapsed > MAX_DEVICE_TOOL_DATE_RANGE_SECONDS:
-            raise ValueError("bighelp device tool date range is invalid")
+            raise ValueError("Bighelp device tool date range is invalid")
 
 
 def _device_tool_ordered_dates(
@@ -367,14 +367,14 @@ def _device_tool_ordered_dates(
     start_date = datetime.fromisoformat(start.replace("Z", "+00:00"))
     end_date = datetime.fromisoformat(end.replace("Z", "+00:00"))
     if end_date <= start_date:
-        raise ValueError("bighelp device tool date range is invalid")
+        raise ValueError("Bighelp device tool date range is invalid")
 
 
 def _device_tool_limit(value: Any) -> None:
     if value is not None and (
         type(value) is not int or not 1 <= value <= MAX_DEVICE_TOOL_LIST_LIMIT
     ):
-        raise ValueError("bighelp device tool limit is invalid")
+        raise ValueError("Bighelp device tool limit is invalid")
 
 
 def _device_tool_id_list(value: dict[str, Any], field: str) -> None:
@@ -386,12 +386,12 @@ def _device_tool_id_list(value: dict[str, Any], field: str) -> None:
         or not 1 <= len(ids) <= MAX_DEVICE_TOOL_ID_COUNT
         or any(not isinstance(item, str) or not item or len(item) > 512 for item in ids)
     ):
-        raise ValueError(f"bighelp device tool {field} is invalid")
+        raise ValueError(f"Bighelp device tool {field} is invalid")
 
 
 def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("bighelp device tool arguments are invalid")
+        raise ValueError("Bighelp device tool arguments are invalid")
     if operation in EXTENDED_OPERATIONS:
         return _device_tool_json(validate_operation(operation, value))
     common_range = {"start", "end", "timeZone", "limit"}
@@ -421,7 +421,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
     else:
         allowed = {"id", "expectedRevision"}
     if not set(value).issubset(allowed):
-        raise ValueError("bighelp device tool arguments contain an unknown key")
+        raise ValueError("Bighelp device tool arguments contain an unknown key")
     result = dict(value)
     if operation in {"health.read", "calendar.list"}:
         _device_tool_range(result, required=True)
@@ -433,7 +433,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             or not 1 <= len(types) <= len(HEALTH_TYPES)
             or any(item not in HEALTH_TYPES for item in types)
         ):
-            raise ValueError("bighelp device tool types are invalid")
+            raise ValueError("Bighelp device tool types are invalid")
     if operation == "calendar.list":
         _device_tool_id_list(result, "calendarIDs")
     elif operation == "reminders.list":
@@ -441,9 +441,9 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
         _device_tool_limit(result.get("limit"))
         _device_tool_id_list(result, "listIDs")
         if "completed" in result and type(result["completed"]) is not bool:
-            raise ValueError("bighelp device tool completed is invalid")
+            raise ValueError("Bighelp device tool completed is invalid")
         if "includeUndated" in result and type(result["includeUndated"]) is not bool:
-            raise ValueError("bighelp device tool includeUndated is invalid")
+            raise ValueError("Bighelp device tool includeUndated is invalid")
     if operation in {"calendar.create", "reminders.create"}:
         _device_tool_string(result.get("title"), "title", required=True)
     if operation.startswith("calendar.") and operation != "calendar.list":
@@ -454,7 +454,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             _device_tool_string(result.get("id"), "id", required=True, maximum=512)
             _device_tool_string(result.get("expectedRevision"), "expectedRevision", required=True, maximum=512)
         if "span" in result and result["span"] != "thisEvent":
-            raise ValueError("bighelp device tool recurrence is unsupported")
+            raise ValueError("Bighelp device tool recurrence is unsupported")
         for field in ("calendarID", "location", "notes", "url", "title"):
             if field in result:
                 _device_tool_string(result[field], field)
@@ -464,7 +464,7 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
         if "occurrenceStart" in result:
             _device_tool_date(result["occurrenceStart"], "occurrenceStart", required=True)
         if ("start" in result or "end" in result) and "timeZone" not in result:
-            raise ValueError("bighelp device tool timeZone is required")
+            raise ValueError("Bighelp device tool timeZone is required")
         if "timeZone" in result:
             _device_tool_string(result["timeZone"], "timeZone", required=True, maximum=128)
     if operation.startswith("reminders.") and operation != "reminders.list":
@@ -480,30 +480,30 @@ def _device_tool_arguments(operation: str, value: Any) -> dict[str, Any]:
             if field in result:
                 _device_tool_date(result[field], field, required=True)
         if ("dueDate" in result or "startDate" in result) and "timeZone" not in result:
-            raise ValueError("bighelp device tool timeZone is required")
+            raise ValueError("Bighelp device tool timeZone is required")
         if "timeZone" in result:
             _device_tool_string(result["timeZone"], "timeZone", required=True, maximum=128)
         if "priority" in result and (type(result["priority"]) is not int or not 0 <= result["priority"] <= 9):
-            raise ValueError("bighelp device tool priority is invalid")
+            raise ValueError("Bighelp device tool priority is invalid")
         if "completed" in result and type(result["completed"]) is not bool:
-            raise ValueError("bighelp device tool completed is invalid")
+            raise ValueError("Bighelp device tool completed is invalid")
         if "locationTrigger" in result:
             check_value(result["locationTrigger"], LOCATION_TRIGGER, "locationTrigger")
         if "clearLocationTrigger" in result:
             if result["clearLocationTrigger"] is not True:
-                raise ValueError("bighelp device tool clearLocationTrigger is invalid")
+                raise ValueError("Bighelp device tool clearLocationTrigger is invalid")
             if "locationTrigger" in result:
-                raise ValueError("bighelp device tool locationTrigger and clearLocationTrigger conflict")
+                raise ValueError("Bighelp device tool locationTrigger and clearLocationTrigger conflict")
     if operation == "appearance.set":
         if not result:
-            raise ValueError("bighelp device tool appearance needs a mode or a color")
+            raise ValueError("Bighelp device tool appearance needs a mode or a color")
         if "mode" in result and result["mode"] not in APPEARANCE_MODES:
-            raise ValueError("bighelp device tool mode is invalid")
+            raise ValueError("Bighelp device tool mode is invalid")
         if "color" in result and (
             not isinstance(result["color"], str)
             or not re.fullmatch(APPEARANCE_COLOR_PATTERN, result["color"])
         ):
-            raise ValueError("bighelp device tool color is invalid")
+            raise ValueError("Bighelp device tool color is invalid")
     return _device_tool_json(result)
 
 
@@ -518,7 +518,7 @@ def _opaque(value: Any, field: str, minimum: int, maximum: int) -> str:
         or len(value) > maximum
         or not _OPAQUE.fullmatch(value)
     ):
-        raise ValueError(f"bighelp {field} is invalid")
+        raise ValueError(f"Bighelp {field} is invalid")
     return value
 
 
@@ -529,6 +529,6 @@ def _session_coordinate(value: Any, field: str = "sessionId") -> str:
 
 def _positive(value: Any, field: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-        raise ValueError(f"bighelp {field} is invalid")
+        raise ValueError(f"Bighelp {field} is invalid")
     return value
 

@@ -156,7 +156,7 @@ async def _session_detail(session_id: str, agent_id: str) -> dict[str, Any]:
 async def enrich_completion_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add each scheduled task's name and result, and never drop a saved event."""
     if not isinstance(rows, list) or len(rows) > _DASHBOARD_EVENT_LIMIT:
-        raise CompletionEventError("bighelp event catalog is invalid")
+        raise CompletionEventError("Bighelp event catalog is invalid")
     catalogs: dict[str, dict[str, str] | None] = {}
     for row in rows:
         if not isinstance(row, dict) or row.get("type") not in _COMPLETION_EVENT_TYPES:

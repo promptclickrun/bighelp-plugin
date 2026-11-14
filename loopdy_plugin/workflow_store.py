@@ -273,7 +273,7 @@ class WorkflowStore:
             connection.execute("PRAGMA synchronous=FULL")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1, 2, 3, SCHEMA_VERSION):
-                raise StoreUnavailable("This workflow store needs a newer bighelp plugin.")
+                raise StoreUnavailable("This workflow store needs a newer Bighelp plugin.")
             if version != SCHEMA_VERSION:
                 self._migrate(connection)
         except sqlite3.Error:

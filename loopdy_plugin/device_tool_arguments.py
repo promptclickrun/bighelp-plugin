@@ -79,7 +79,7 @@ LOCATION_TRIGGER = _object(
 
 def check_value(value: Any, schema: dict[str, Any], name: str) -> None:
     """Raise ValueError unless `value` fits the JSON-schema subset used above."""
-    invalid = ValueError(f"bighelp device tool {name} is invalid")
+    invalid = ValueError(f"Bighelp device tool {name} is invalid")
     kind = schema["type"]
     if kind == "string":
         if not isinstance(value, str) or not schema["minLength"] <= len(value) <= schema["maxLength"]:
@@ -121,19 +121,19 @@ def parse_date_time(raw: str, name: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        raise ValueError(f"bighelp device tool {name} is invalid") from None
+        raise ValueError(f"Bighelp device tool {name} is invalid") from None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"bighelp device tool {name} is invalid")
+        raise ValueError(f"Bighelp device tool {name} is invalid")
     return parsed
 
 
 def _fail(name: str) -> ValueError:
-    return ValueError(f"bighelp device tool {name} is invalid")
+    return ValueError(f"Bighelp device tool {name} is invalid")
 
 
 def _changes(arguments: dict[str, Any], *identity: str) -> None:
     if not set(arguments) - set(identity):
-        raise ValueError("bighelp device tool update has nothing to change")
+        raise ValueError("Bighelp device tool update has nothing to change")
 
 
 # Contacts ---------------------------------------------------------------------------------------
@@ -172,7 +172,7 @@ def _check_contact(arguments: dict[str, Any]) -> None:
 
 def _check_contact_create(arguments: dict[str, Any]) -> None:
     if not any(arguments.get(name) for name in ("givenName", "familyName", "organization")):
-        raise ValueError("bighelp device tool contact needs a name or an organization")
+        raise ValueError("Bighelp device tool contact needs a name or an organization")
     _check_contact(arguments)
 
 
@@ -185,7 +185,7 @@ def _check_contact_update(arguments: dict[str, Any]) -> None:
 
 def _check_photo_list(arguments: dict[str, Any]) -> None:
     if ("start" in arguments) != ("end" in arguments):
-        raise ValueError("bighelp device tool start and end go together")
+        raise ValueError("Bighelp device tool start and end go together")
     if "start" in arguments and parse_date_time(arguments["end"], "end") <= parse_date_time(arguments["start"], "start"):
         raise _fail("end")
 
@@ -200,9 +200,9 @@ def _check_geofence(arguments: dict[str, Any]) -> None:
     where = {"latitude", "longitude"} & set(arguments)
     if arguments.get("here") is True:
         if where:
-            raise ValueError("bighelp device tool place is either here or coordinates")
+            raise ValueError("Bighelp device tool place is either here or coordinates")
     elif where != {"latitude", "longitude"}:
-        raise ValueError("bighelp device tool place needs latitude and longitude, or here")
+        raise ValueError("Bighelp device tool place needs latitude and longitude, or here")
 
 
 # Alarms and timers ------------------------------------------------------------------------------
@@ -219,9 +219,9 @@ _ALARM_FIELDS = {
 def _check_schedule(arguments: dict[str, Any], *, exactly_one: bool) -> None:
     chosen = [name for name in ("time", "date", "timerSeconds") if name in arguments]
     if len(chosen) > 1 or (exactly_one and not chosen):
-        raise ValueError("bighelp device tool alarm needs exactly one of time, date or timerSeconds")
+        raise ValueError("Bighelp device tool alarm needs exactly one of time, date or timerSeconds")
     if "weekdays" in arguments and "time" not in arguments:
-        raise ValueError("bighelp device tool weekdays need a time")
+        raise ValueError("Bighelp device tool weekdays need a time")
 
 
 def _check_alarm_create(arguments: dict[str, Any]) -> None:
@@ -244,9 +244,9 @@ def _check_music_play(arguments: dict[str, Any]) -> None:
     by_result = {"id", "type", "source"} & set(arguments)
     if "query" in arguments:
         if by_result:
-            raise ValueError("bighelp device tool play is either a query or a search result")
+            raise ValueError("Bighelp device tool play is either a query or a search result")
     elif by_result != {"id", "type", "source"}:
-        raise ValueError("bighelp device tool play needs a query, or id, type and source from a result")
+        raise ValueError("Bighelp device tool play needs a query, or id, type and source from a result")
 
 
 OPERATIONS: dict[str, Operation] = {
@@ -326,9 +326,9 @@ def validate_operation(operation: str, arguments: dict[str, Any]) -> dict[str, A
     """Check `arguments` of one of OPERATIONS; return them unchanged or raise ValueError."""
     spec = OPERATIONS[operation]
     if not set(arguments).issubset(spec.properties):
-        raise ValueError("bighelp device tool arguments contain an unknown key")
+        raise ValueError("Bighelp device tool arguments contain an unknown key")
     if not set(spec.required).issubset(arguments):
-        raise ValueError("bighelp device tool arguments are missing a required key")
+        raise ValueError("Bighelp device tool arguments are missing a required key")
     for key, value in arguments.items():
         check_value(value, spec.properties[key], key)
     if spec.rule is not None:

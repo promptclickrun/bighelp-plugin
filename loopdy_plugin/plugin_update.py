@@ -148,7 +148,7 @@ class _FileLock:
                     raise
                 if time.monotonic() >= deadline:
                     handle.close()
-                    raise TimeoutError("bighelp plugin update state is busy") from exc
+                    raise TimeoutError("Bighelp plugin update state is busy") from exc
                 time.sleep(0.05)
 
     def __exit__(self, _kind: Any, _value: Any, _traceback: Any) -> None:
@@ -197,7 +197,7 @@ class PluginUpdateManager:
         operation_id = _operation_id(operation_id)
         device_id = _device_id(device_id)
         if type(restart) is not bool:
-            raise ValueError("bighelp plugin update restart choice is invalid")
+            raise ValueError("Bighelp plugin update restart choice is invalid")
 
         with _FileLock(self.state_lock_path):
             state = self._read_state()
@@ -209,12 +209,12 @@ class PluginUpdateManager:
                     or existing.get("profile") != self.profile
                     or existing.get("plugin_root") != str(self.plugin_root)
                 ):
-                    raise ValueError("bighelp plugin update operation conflicts with existing state")
+                    raise ValueError("Bighelp plugin update operation conflicts with existing state")
                 return self._public_status(state, existing)
 
             for operation in state["operations"].values():
                 if operation.get("phase") not in _TERMINAL_PHASES:
-                    raise ValueError("Another bighelp plugin update is already in progress")
+                    raise ValueError("Another Bighelp plugin update is already in progress")
 
             runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
             now = int(time.time())
@@ -225,7 +225,7 @@ class PluginUpdateManager:
                 "profile": self.profile,
                 "plugin_root": str(self.plugin_root),
                 "phase": "launching",
-                "message": "Preparing the bighelp plugin update.",
+                "message": "Preparing the Bighelp plugin update.",
                 "target_revision": "",
                 "prior_revision": _metadata_revision(self.plugin_root),
                 "started_runtime_id": str(runtime.get("runtime_id") or ""),
@@ -271,10 +271,10 @@ class PluginUpdateManager:
             operation = state["operations"].get(selected) if selected else None
             if operation is None:
                 if operation_id is not None:
-                    raise ValueError("bighelp plugin update operation was not found")
+                    raise ValueError("Bighelp plugin update operation was not found")
                 return self._idle_status(state)
             if device_id is not None and operation.get("device_id") not in {device_id, local_cli_device_id(self.profile)}:
-                raise ValueError("bighelp plugin update operation belongs to another device")
+                raise ValueError("Bighelp plugin update operation belongs to another device")
             if self._reconcile_completion(state, operation):
                 self._write_state(state)
             return self._public_status(state, operation)
@@ -340,16 +340,16 @@ class PluginUpdateManager:
         try:
             value = json.loads(self.journal_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise PluginUpdateError("bighelp plugin update journal is unreadable") from exc
+            raise PluginUpdateError("Bighelp plugin update journal is unreadable") from exc
         if (
             not isinstance(value, dict)
             or value.get("version") != 1
             or not isinstance(value.get("operations"), dict)
         ):
-            raise PluginUpdateError("bighelp plugin update journal is invalid")
+            raise PluginUpdateError("Bighelp plugin update journal is invalid")
         operations = value["operations"]
         if len(operations) > 64:
-            raise PluginUpdateError("bighelp plugin update journal is invalid")
+            raise PluginUpdateError("Bighelp plugin update journal is invalid")
         for key, operation in operations.items():
             if (
                 not isinstance(key, str)
@@ -357,13 +357,13 @@ class PluginUpdateManager:
                 or not isinstance(operation, dict)
                 or operation.get("operation_id") != key
             ):
-                raise PluginUpdateError("bighelp plugin update journal is invalid")
+                raise PluginUpdateError("Bighelp plugin update journal is invalid")
         latest = value.get("latest_operation_id", "")
         if latest and (not isinstance(latest, str) or latest not in operations):
-            raise PluginUpdateError("bighelp plugin update journal is invalid")
+            raise PluginUpdateError("Bighelp plugin update journal is invalid")
         runtime = value.get("runtime")
         if runtime is not None and not isinstance(runtime, dict):
-            raise PluginUpdateError("bighelp plugin update journal is invalid")
+            raise PluginUpdateError("Bighelp plugin update journal is invalid")
         return value
 
     def _write_state(self, state: dict[str, Any]) -> None:
@@ -414,7 +414,7 @@ class PluginUpdateManager:
             "installed_revision": installed,
             "active_revision": str(runtime.get("revision") or "")[:40],
             "runtime_id": str(runtime.get("runtime_id") or "")[:128],
-            "message": "No bighelp plugin update is in progress.",
+            "message": "No Bighelp plugin update is in progress.",
         }
         return _wire_status(value)
 
@@ -436,7 +436,7 @@ class PluginUpdateManager:
             and fresh
         ):
             operation["phase"] = "complete"
-            operation["message"] = "The updated bighelp plugin is active."
+            operation["message"] = "The updated Bighelp plugin is active."
             operation["updated_at"] = int(time.time())
             return True
         installed = _metadata_revision(self.plugin_root)
@@ -478,7 +478,7 @@ class PluginUpdateManager:
     def _launch_detached_worker(self, operation_id: str) -> None:
         expected = self.hermes_home / "plugins" / PLUGIN_NAME
         if self.plugin_root != expected:
-            raise PluginUpdateError("Self-update requires an installed bighelp plugin")
+            raise PluginUpdateError("Self-update requires an installed Bighelp plugin")
 
         worker_root = self.data_root / "workers" / operation_id
         worker_root.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -703,19 +703,19 @@ def _wire_status(value: dict[str, Any]) -> dict[str, Any]:
 
 def _operation_id(value: Any) -> str:
     if not isinstance(value, str) or _OPERATION_ID.fullmatch(value) is None:
-        raise ValueError("bighelp plugin update operation ID is invalid")
+        raise ValueError("Bighelp plugin update operation ID is invalid")
     return value
 
 
 def _device_id(value: Any) -> str:
     if not isinstance(value, str) or _DEVICE_ID.fullmatch(value) is None:
-        raise ValueError("bighelp plugin update device ID is invalid")
+        raise ValueError("Bighelp plugin update device ID is invalid")
     return value
 
 
 def _profile(value: Any) -> str:
     if not isinstance(value, str) or _PROFILE.fullmatch(value) is None:
-        raise ValueError("bighelp plugin update profile is invalid")
+        raise ValueError("Bighelp plugin update profile is invalid")
     return value
 
 

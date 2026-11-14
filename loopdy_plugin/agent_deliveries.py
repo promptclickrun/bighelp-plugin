@@ -76,7 +76,7 @@ def deliveries(items: Iterable[tuple[str, str]], *, now: Callable[[], float] | N
                 try:
                     turn = chat_live.gateway_turn(home, session, clock)
                 except Exception:
-                    logger.debug("bighelp agent deliveries: turn unreadable")
+                    logger.debug("Bighelp agent deliveries: turn unreadable")
                     turn = None
                 if turn is not None:
                     value["state"] = "working"

@@ -160,7 +160,7 @@ def definition_sha256(definition: dict) -> str:
 def parse_definition(value: Any) -> dict:
     """A normalized copy of a well-formed definition, or DefinitionError. Semantics are left to validate()."""
     if type(value) is dict and type(value.get("schemaVersion")) is int and value["schemaVersion"] > SCHEMA_VERSION:
-        _fail("This workflow needs a newer bighelp plugin.")
+        _fail("This workflow needs a newer Bighelp plugin.")
     version = value.get("schemaVersion") if type(value) is dict else None
     code = type(version) is int and version >= 3
     top = _object(value, "The workflow", ("schemaVersion", "name", "stages") + (("projects",) if code else ()),
@@ -168,7 +168,7 @@ def parse_definition(value: Any) -> dict:
                   + (("layout",) if type(version) is int and version >= 2 else ())
                   + (("workspace",) if code else ()))
     if type(top["schemaVersion"]) is not int or top["schemaVersion"] not in SCHEMA_VERSIONS:
-        _fail("This workflow needs a newer bighelp plugin.")
+        _fail("This workflow needs a newer Bighelp plugin.")
     result: dict[str, Any] = {
         "schemaVersion": top["schemaVersion"],
         "name": _text(top["name"], "The name", MAX_TITLE, empty=True).strip(),

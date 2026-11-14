@@ -47,8 +47,8 @@ def remove_retired_link_keys(
         for key in present:
             removed += int(bool(remover(key)))
     except Exception:
-        logger.warning("bighelp could not remove the retired Link settings (legacy_cleanup_failed)")
+        logger.warning("Bighelp could not remove the retired Link settings (legacy_cleanup_failed)")
         return removed
     if removed:
-        logger.info("bighelp removed %d retired Link settings from .env", removed)
+        logger.info("Bighelp removed %d retired Link settings from .env", removed)
     return removed

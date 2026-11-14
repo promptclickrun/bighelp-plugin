@@ -164,7 +164,7 @@ class CatalogClient:
                     self._failed_at = None
                 except FetchError as error:
                     self._failed_at = now
-                    logger.info("bighelp template catalog check failed: %s", error.args[0] if error.args else "")
+                    logger.info("Bighelp template catalog check failed: %s", error.args[0] if error.args else "")
             if self._copy is None:
                 raise CatalogUnavailable("catalog_unavailable")
             if self._parsed is None:
@@ -229,7 +229,7 @@ class CatalogClient:
                 raise
         except OSError:
             # The copy in memory still serves this process.
-            logger.warning("bighelp template catalog copy not saved")
+            logger.warning("Bighelp template catalog copy not saved")
 
 
 # MARK: - Parsing

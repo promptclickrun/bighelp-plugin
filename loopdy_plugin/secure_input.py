@@ -128,7 +128,7 @@ def request(
                        message="Use an UPPER_SNAKE_CASE name like GITHUB_TOKEN (not a system variable).")
     if provider_credential(name):
         return _result(success=False, error="provider_credential", stored_as=name,
-                       message="AI provider keys are set in the bighelp app under Settings, not here.")
+                       message="AI provider keys are set in the Bighelp app under Settings, not here.")
     prompt = _clean(args.get("prompt"), 400)
     if not prompt:
         return _result(success=False, error="missing_prompt", message="Say what to enter and why.")
@@ -139,7 +139,7 @@ def request(
     capture = callback if callback is not None else _capture_callback()
     if capture is None or not interactive():
         return _result(success=False, error="secure_input_unavailable", stored_as=name,
-                       message=f"Secure input needs the bighelp app or the Hermes TUI. Ask the person to add {name} "
+                       message=f"Secure input needs the Bighelp app or the Hermes TUI. Ask the person to add {name} "
                                "to this agent's .env file on the computer instead. Never ask for it in chat.")
     metadata = {"source": "agent"}
     if label := _clean(args.get("label"), 60):

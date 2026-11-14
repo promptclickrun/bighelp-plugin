@@ -92,7 +92,7 @@ async def _ask_gateway(home: Path, request: str) -> str:
     # explicitly rather than read from HERMES_TUI_GATEWAY_URL, so the chat lands on this agent.
     found = await asyncio.to_thread(ensure_gateway_runtime, home, timeout=START_SECONDS, idle_exit=True)
     if not attachable(found):
-        logger.warning("bighelp bot chat: gateway %s", getattr(found, "state", "unknown"))
+        logger.warning("Bighelp bot chat: gateway %s", getattr(found, "state", "unknown"))
         raise BotChatError("bot_chat_gateway_unavailable", busy=True)
     params = {"request_id": request, "title": TITLE, "source": "cli", "cwd": str(Path.home()),
               "follow_profile_config": True, "hidden": True}
@@ -109,11 +109,11 @@ async def _ask_gateway(home: Path, request: str) -> str:
                 snapshot = await client.rpc("session.create", **params)
     except GatewayRPCError as error:
         reason = str(error)
-        logger.warning("bighelp bot chat: gateway refused (%s)", reason)
+        logger.warning("Bighelp bot chat: gateway refused (%s)", reason)
         raise BotChatError("bot_chat_refused", busy=reason in _BUSY, reason=reason) from None
     except (GatewayClientError, ValueError, OSError):
         # A lost connection, or a ticket the gateway's control socket wouldn't mint (DiscoveryError).
-        logger.warning("bighelp bot chat: gateway connection lost")
+        logger.warning("Bighelp bot chat: gateway connection lost")
         raise BotChatError("bot_chat_gateway_unavailable", busy=True) from None
     stored = snapshot.get("stored_session_id") if isinstance(snapshot, dict) else None
     if not isinstance(stored, str) or not SESSION_ID.fullmatch(stored):
@@ -125,7 +125,7 @@ async def _read(home: Path, request: str) -> dict | None:
     try:
         return await asyncio.to_thread(_existing, home, request)
     except (OSError, sqlite3.Error):
-        logger.warning("bighelp bot chat: history unreadable")
+        logger.warning("Bighelp bot chat: history unreadable")
         raise BotChatError("bot_chat_storage_unavailable", busy=True) from None
 
 
@@ -148,7 +148,7 @@ async def create(profile: str, idempotency_key: str) -> dict:
                 stored = await _ask_gateway(home, request)
         except TimeoutError:
             # Hermes may still finish it; a retry with the same key gets that chat.
-            logger.warning("bighelp bot chat: gateway too slow")
+            logger.warning("Bighelp bot chat: gateway too slow")
             raise BotChatError("bot_chat_timeout", busy=True) from None
         answered = await _read(home, request)
     if answered is not None and answered["storedSessionId"] == stored:

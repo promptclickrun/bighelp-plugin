@@ -64,7 +64,7 @@ def install(server: Any | None = None) -> bool:
 
         setattr(finalize, _MARK, True)
         server._finalize_session = finalize
-        logger.info("bighelp chats keep their sessions when the app's connection drops")
+        logger.info("Bighelp chats keep their sessions when the app's connection drops")
     _reopen_in_background()
     return True
 
@@ -85,7 +85,7 @@ def _waits_for_background_work(session: Any) -> bool:
     try:
         processes = _running_processes()
     except Exception:  # an unreadable registry never holds a chat
-        logger.warning("bighelp chat background work unreadable")
+        logger.warning("Bighelp chat background work unreadable")
         return False
     return any(isinstance(process, dict) and process.get("owner_task_id") in owners
                and process.get("status") == "running" and process.get("notify_on_complete")
@@ -110,7 +110,7 @@ def _wait_for_background_work(server: Any) -> None:
 
     setattr(has_live_work, _WAIT_MARK, True)
     server._session_has_active_delegations = has_live_work
-    logger.info("bighelp chats keep running while their agents wait on background work")
+    logger.info("Bighelp chats keep running while their agents wait on background work")
 
 
 def _reopen_in_background() -> None:
@@ -136,12 +136,12 @@ def reopen_automatically_ended(stores: Any | None = None) -> int:
                 db.reopen_session(row["id"])
                 reopened += 1
         except Exception:
-            logger.warning("Reopening ended bighelp chats unavailable")
+            logger.warning("Reopening ended Bighelp chats unavailable")
         finally:
             if stores is None:
                 db.close()
     if reopened:
-        logger.info("Reopened %d bighelp chat(s) ended when the app's connection dropped", reopened)
+        logger.info("Reopened %d Bighelp chat(s) ended when the app's connection dropped", reopened)
     return reopened
 
 

@@ -104,7 +104,7 @@ def catalog(profile: str, provider: str) -> dict:
                 return value
             voices, models, default = plugin.list_voices(), plugin.list_models(), plugin.default_voice()
         except Exception as error:  # the plugin's own code: its text can carry paths or keys
-            logger.warning("bighelp voice catalog failed: %s", type(error).__name__)
+            logger.warning("Bighelp voice catalog failed: %s", type(error).__name__)
             raise VoiceCatalogError() from None
     budget = [MAX_LIST_BYTES]
     value["models"] = _entries(models, MAX_MODELS, budget, language=False)

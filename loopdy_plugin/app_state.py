@@ -226,7 +226,7 @@ class AppStateStore:
             with self._locked():
                 return self._computer_id(locked=True)
         if path.exists() or path.is_symlink():
-            logger.warning("bighelp app state unavailable: computer_id_unreadable")
+            logger.warning("Bighelp app state unavailable: computer_id_unreadable")
             raise AppStateError(503, "app_state_unavailable", "The app state on this computer can't be read.")
         computer = str(uuid.uuid4())
         self._write(path, json.dumps({"schemaVersion": SCHEMA_VERSION, "computerId": computer},
@@ -271,12 +271,12 @@ class AppStateStore:
                     or not _is_revision(entry["revision"], minimum=1) \
                     or not isinstance(entry["updatedAt"], str) or _UPDATED.fullmatch(entry["updatedAt"]) is None \
                     or not isinstance(entry["device"], str) or _UUID.fullmatch(entry["device"]) is None:
-                logger.warning("bighelp app state entry skipped: incomplete")
+                logger.warning("Bighelp app state entry skipped: incomplete")
                 continue
             try:
                 encoded_value(entry["value"])
             except AppStateError as error:
-                logger.warning("bighelp app state entry skipped: %s", error.code)
+                logger.warning("Bighelp app state entry skipped: %s", error.code)
                 continue
             entries[key] = entry
         return entries
@@ -284,7 +284,7 @@ class AppStateStore:
     @staticmethod
     def _skip(reason: str) -> dict:
         # A fixed code only: person IDs and values stay on the computer.
-        logger.warning("bighelp app state unreadable: %s", reason)
+        logger.warning("Bighelp app state unreadable: %s", reason)
         return {}
 
     def _people_count(self) -> int:

@@ -36,7 +36,7 @@ MAX_PROVIDER_EVENT_NAME_BYTES = 128
 VOICES = frozenset({"arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"})
 _CALL_ID = re.compile(r"(?:rtc_[A-Za-z0-9_-]{1,124}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z")
 DEFAULT_INSTRUCTIONS = (
-    "You are bighelp's conversational voice front end. You have no tools of your own; "
+    "You are Bighelp's conversational voice front end. You have no tools of your own; "
     "delegate every request that needs facts, current information or careful reasoning to the "
     "client Hermes agent. This includes calendar, reminders and health questions, and any request "
     "to do, check, find, make, fix, run, remember or schedule something. Delegate before answering "
@@ -798,7 +798,7 @@ class PublicLiveProvider(_LiveTransport):
     voices = frozenset({"marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
                         "meridian", "bossa", "tempo", "beacon", "delta", "cinder"})
     default_instructions = (
-        "You are bighelp's conversational voice front end. Delegate real work to the client; "
+        "You are Bighelp's conversational voice front end. Delegate real work to the client; "
         "you have no tools. People pause mid-thought, especially in longer requests: wait until a "
         "request sounds complete before you delegate or answer it, and never delegate half a "
         "sentence; if they trail off or say there's more, keep listening. "

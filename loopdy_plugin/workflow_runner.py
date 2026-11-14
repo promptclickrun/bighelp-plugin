@@ -252,7 +252,7 @@ def text_query(brief: str | None, path: Path | None = None) -> str:
     if brief is not None and len(brief.encode("utf-8")) <= MAX_INLINE_QUERY_BYTES:
         return brief
     where = str(path) if path is not None else "brief.md in your working folder"
-    return (f"You are one stage of a bighelp workflow. Your full task is in the file {where}. Read it first and "
+    return (f"You are one stage of a Bighelp workflow. Your full task is in the file {where}. Read it first and "
             "follow it exactly, including how to hand off at the end.")
 
 
@@ -624,12 +624,12 @@ def render_brief(*, workflow_name: str, run_number: int, stage: dict, iteration:
     """
     run = f"run {run_number}" + (f", round {iteration}" if iteration > 1 else "")
     if workspace is None or folder is None:
-        intro = [f"You are one stage of the bighelp workflow \"{workflow_name}\" ({run}).",
+        intro = [f"You are one stage of the Bighelp workflow \"{workflow_name}\" ({run}).",
                  "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
                  "yourself. Your working folder is this stage's own folder; read-only copies of earlier work are in "
                  "inputs/ and any file you hand off goes in out/."]
     else:
-        intro = [f"You are one stage of the bighelp workflow \"{workflow_name}\" ({run}) for the project "
+        intro = [f"You are one stage of the Bighelp workflow \"{workflow_name}\" ({run}) for the project "
                  f"{project['label'] if project else 'you work on'}.",
                  "Work only on this stage. Nobody can answer questions while it runs, so make sensible choices "
                  "yourself.",

@@ -610,7 +610,7 @@ def describe() -> dict[str, Any]:
             "BIGHELP_TELEMETRY": "off" if not switches["env"] else "not off",
             "config bighelp.telemetry": "off (false)" if not switches["config"] else "not off",
             "hermes bighelp telemetry": "off" if not switches["cli"] else "not off",
-            "bighelp app": "off" if not switches["app"] else "not off",
+            "Bighelp app": "off" if not switches["app"] else "not off",
         },
         "fields": DOC_URL,
     }
@@ -732,7 +732,7 @@ def _emit(name: str, props: dict[str, Any]) -> None:
     try:
         _enqueue(name, {key: value for key, value in props.items() if value is not None})
     except Exception:
-        logger.debug("bighelp telemetry unavailable")
+        logger.debug("Bighelp telemetry unavailable")
 
 
 def host_started() -> None:
@@ -744,7 +744,7 @@ def host_started() -> None:
         stream.started = True
         _emit("host.started", {})
     except Exception:
-        logger.debug("bighelp telemetry unavailable")
+        logger.debug("Bighelp telemetry unavailable")
 
 
 def announce_host_started() -> None:
@@ -766,7 +766,7 @@ def _quiet(function: Callable[..., None]) -> Callable[..., None]:
         try:
             function(*args, **kwargs)
         except Exception:
-            logger.debug("bighelp telemetry unavailable")
+            logger.debug("Bighelp telemetry unavailable")
     return emit
 
 
@@ -834,7 +834,7 @@ def error(*, code: Any = None, stage: Any = None) -> None:
             stream.error_last[(code, stage)] = now
         _emit("error", {"code": code, "stage": stage})
     except Exception:
-        logger.debug("bighelp telemetry unavailable")
+        logger.debug("Bighelp telemetry unavailable")
 
 
 # ---------------------------------------------------------------- sending
@@ -914,7 +914,7 @@ def flush(*, timeout: float = TIMEOUT_SECONDS, posts: int = _POSTS_PER_FLUSH) ->
                 stream.sent_batches += 1
             # Any other answer: the batch is dropped, silently.
     except Exception:
-        logger.debug("bighelp telemetry unavailable")
+        logger.debug("Bighelp telemetry unavailable")
     return sent
 
 
@@ -1023,7 +1023,7 @@ def _finish_unflagged(key: str, state: dict[str, Any]) -> None:
             del stream.turns[key]
         _report_turn(state, "ok", {})
     except Exception:
-        logger.debug("bighelp telemetry unavailable")
+        logger.debug("Bighelp telemetry unavailable")
 
 
 def on_pre_llm_call(**payload: Any) -> None:
@@ -1148,13 +1148,13 @@ def _guarded(callback: Callable[..., None]) -> Callable[..., None]:
         try:
             callback(**payload)
         except Exception:
-            logger.debug("bighelp telemetry unavailable")
+            logger.debug("Bighelp telemetry unavailable")
         return None
     observe.__name__ = getattr(callback, "__name__", "observe")
     return observe
 
 
-NOTICE = ("bighelp host telemetry is on: timings and counts under a random host ID, never text, paths or names. "
+NOTICE = ("Bighelp host telemetry is on: timings and counts under a random host ID, never text, paths or names. "
           "Turn it off with `hermes bighelp telemetry off`, BIGHELP_TELEMETRY=0 or DO_NOT_TRACK=1. "
           "Fields: " + DOC_URL)
 
@@ -1199,4 +1199,4 @@ def register(ctx: Any) -> None:
         _on_start()
         announce_host_started()
     except Exception:
-        logger.warning("bighelp telemetry unavailable")
+        logger.warning("Bighelp telemetry unavailable")

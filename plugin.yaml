@@ -1,22 +1,22 @@
 manifest_version: 1
 name: loopdy
-label: bighelp
+label: Bighelp
 kind: platform
-version: "3.54.0"
+version: "3.55.0"
 license: Apache-2.0
 description: >
-  The bighelp app's plugin for Hermes: native cards, Feed, Ideas and Goals,
+  The Bighelp app's plugin for Hermes: native cards, Feed, Ideas and Goals,
   iPhone tools, live voice, files, provider usage, secure input and optional
   end-to-end encrypted notifications. Hermes keeps owning chats, tools and
   approvals.
-author: bighelp contributors
+author: Bighelp contributors
 config_schema:
   templates_allow_create_agent:
     type: bool
     default: false
     label: Agents can make agents from templates
     description: >
-      Lets agents make a new agent from a bighelp Template Catalog template
+      Lets agents make a new agent from a Bighelp Template Catalog template
       (bighelp_templates_create_agent). Hermes still asks you to approve each
       one. Off by default.
 optional_env:

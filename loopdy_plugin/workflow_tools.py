@@ -32,7 +32,7 @@ APPROVAL_PREVIEW = 1_500
 SCHEMA = {
     "name": TOOL,
     "description": (
-        "The person's bighelp workflows on this computer: multi-step flows where agents hand work from stage to "
+        "The person's Bighelp workflows on this computer: multi-step flows where agents hand work from stage to "
         "stage (agent, check, decision and sign-off stages, delivery stages that send earlier outputs to a place "
         "`hermes send --to` takes, and parallel blocks that run 2 to 5 agent stages at once; a decision can read "
         "all their verdicts; each of its two ways can go on or back, or end the run as succeeded, cancelled or "
@@ -48,7 +48,7 @@ SCHEMA = {
         "(a run of the newest published version, with inputs), runs, run (one run in full: stages, outputs, "
         "sign-offs), control (pause, resume, cancel or retry a run), set_trigger (manual, or a cron schedule like "
         "'0 9 * * 1-5' with saved inputs; the person approves a schedule) and archive. The person signs off "
-        "in the bighelp app, never through this tool. Call get before save_draft and send its draftVersion. "
+        "in the Bighelp app, never through this tool. Call get before save_draft and send its draftVersion. "
         "Workflows you create or change stay drafts. Publish only when the person explicitly asks you to publish "
         "it or make it live, never on your own; the person approves it, as this computer's approval settings say. "
         "Call it directly when it is in your tool list; when Hermes has hidden it, use tool_search, "
@@ -90,7 +90,7 @@ def _ask(description: str, rule_key: str) -> tuple[bool, str]:
     """Hermes' approval prompt for one change. Fails closed when no person can answer."""
     from .template_tools import unattended_reason
     if unattended_reason() is not None:
-        return False, "No one can approve this right now. Ask the person to do it in the bighelp app."
+        return False, "No one can approve this right now. Ask the person to do it in the Bighelp app."
     try:
         from tools.approval import request_tool_approval
     except ImportError:
@@ -282,7 +282,7 @@ class WorkflowTools:
             from .workflow_coordinator import ensure_coordinator
             ensure_coordinator(store.root)
         except Exception as error:
-            logger.warning("bighelp workflows: coordinator start failed (%s)", type(error).__name__)
+            logger.warning("Bighelp workflows: coordinator start failed (%s)", type(error).__name__)
 
 
 def register(ctx: Any, *, tools: WorkflowTools | None = None) -> None:
@@ -292,7 +292,7 @@ def register(ctx: Any, *, tools: WorkflowTools | None = None) -> None:
         try:
             result = selected.call(payload, context)
         except Exception as error:
-            logger.warning("bighelp workflow tool failed (%s)", type(error).__name__)
+            logger.warning("Bighelp workflow tool failed (%s)", type(error).__name__)
             result = _error("workflow_tool_failed", "The workflow tool failed. Try again later.")
         return json.dumps(result, ensure_ascii=False)
 

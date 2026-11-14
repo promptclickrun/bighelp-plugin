@@ -114,7 +114,7 @@ def link(profile: str | None, item_ids: list[str], origins: list[str]) -> dict[s
                 raise
             except Exception as error:
                 # Hermes' text may carry paths; only the class name is logged.
-                logger.error("bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
+                logger.error("Bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
                 raise _unavailable() from None
             return {"copies": _write(store, vault_store, saved, plan, targets)}
 
@@ -184,7 +184,7 @@ def _write(store: Any, vault_store: Any, saved: dict[str, Any], plan: list[tuple
             try:
                 created = store.add_item(kind=meta.kind, label=meta.label, secret=dict(secret), origin=origin)
             except Exception as error:
-                logger.error("bighelp vault link failed: vault_write_failed (%s)", type(error).__name__)
+                logger.error("Bighelp vault link failed: vault_write_failed (%s)", type(error).__name__)
                 raise VaultLinkError(500, "vault_write_failed",
                                      "Some copies were made and then the vault could not be written. Try again to finish the rest.",
                                      {"copies": copies}) from None

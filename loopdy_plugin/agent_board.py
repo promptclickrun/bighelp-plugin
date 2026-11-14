@@ -703,7 +703,7 @@ def session_titles(profile: str, session_ids: list[str]) -> dict[str, str]:
 # MARK: Tool
 
 TOOL_DESCRIPTION = (
-    "Publish to the user's bighelp app. Actions: 'post' adds a Feed post (a briefing, news item or "
+    "Publish to the user's Bighelp app. Actions: 'post' adds a Feed post (a briefing, news item or "
     "update with optional images, links and files the user can open, save and share), or updates the "
     "post with that id; 'idea' proposes something you could do for the user; "
     "'goal' adds or updates a Goal (section 'tracking' for things you watch, 'goal' for the user's "
@@ -845,7 +845,7 @@ class ActivityRecorder:
         try:
             self._observe(hook, **payload)
         except Exception as error:  # observability must never break a turn
-            logger.debug("bighelp board observer skipped %s: %s", hook, type(error).__name__)
+            logger.debug("Bighelp board observer skipped %s: %s", hook, type(error).__name__)
 
     def _observe(self, hook: str, **payload: Any) -> None:
         if payload.get("parent_session_id") or payload.get("platform") == "subagent":
@@ -916,7 +916,7 @@ def register(ctx: Any) -> None:
         ctx.register_hook(hook, lambda _hook=hook, **payload: recorder.observe(_hook, **payload))
     skill = Path(__file__).resolve().parents[1] / "skills" / "bighelp-feed-and-ideas" / "SKILL.md"
     description = ("Use when the user wants regular updates, briefings, news, ideas or goal tracking "
-                   "surfaced in the bighelp app's Feed, Ideas or Goals.")
+                   "surfaced in the Bighelp app's Feed, Ideas or Goals.")
     ctx.register_skill("bighelp-feed-and-ideas", skill, description=description,
                        frontmatter={"name": "bighelp-feed-and-ideas", "description": description})
 

@@ -31,7 +31,7 @@ _BIGHELP_SOURCES = frozenset({BIGHELP, "loopdy", "ios", "bot_room", "workflow", 
 _TERMINAL_SOURCES = frozenset({"cli", "tui", "oneshot", "tool", "local", ""})
 _SCHEDULED_SOURCES = frozenset({"cron"})
 _NAMES = {
-    BIGHELP: "bighelp", TERMINAL: "Terminal", "imsg": "iMessage", "bluebubbles": "BlueBubbles",
+    BIGHELP: "Bighelp", TERMINAL: "Terminal", "imsg": "iMessage", "bluebubbles": "BlueBubbles",
     "telegram": "Telegram", "discord": "Discord", "slack": "Slack", "whatsapp": "WhatsApp",
     "whatsapp_cloud": "WhatsApp", "signal": "Signal", "matrix": "Matrix", "mattermost": "Mattermost",
     "email": "Email", "sms": "SMS", "desktop": "Hermes Desktop", "webui": "Web UI", "api_server": "API server",

@@ -206,9 +206,9 @@ def http_json(url: str, headers: dict[str, str], *, timeout: float = _CALL_SECON
             raise ValueError("too large")
         value = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeError):
-        raise Unavailable(ERROR, "The provider sent usage bighelp couldn't read.") from None
+        raise Unavailable(ERROR, "The provider sent usage Bighelp couldn't read.") from None
     if not isinstance(value, dict):
-        raise Unavailable(ERROR, "The provider sent usage bighelp couldn't read.")
+        raise Unavailable(ERROR, "The provider sent usage Bighelp couldn't read.")
     return value
 
 
@@ -715,7 +715,7 @@ def copilot_from_api(payload: dict[str, Any], source: _Source) -> Report:
     resets = _when(payload.get("quota_reset_date_utc")) or _when(payload.get("quota_reset_date"))
     window = _copilot_window(used, limit, bucket.get("percent_remaining"), label, resets)
     if window is None:
-        raise Unavailable(ERROR, "GitHub sent Copilot usage bighelp couldn't read.")
+        raise Unavailable(ERROR, "GitHub sent Copilot usage Bighelp couldn't read.")
     report.windows.append(window)
     overage = _num(bucket.get("overage_count"))
     if overage:
@@ -751,7 +751,7 @@ def copilot_from_cli(cli: str, token: str | None, source: _Source) -> Report:
     window = _copilot_window(_num(bucket.get("usedRequests")), _num(bucket.get("entitlementRequests")),
                              bucket.get("remainingPercentage"), label, None)
     if window is None:
-        raise Unavailable(ERROR, "The Copilot CLI sent usage bighelp couldn't read.")
+        raise Unavailable(ERROR, "The Copilot CLI sent usage Bighelp couldn't read.")
     report.windows.append(window)
     return report
 
@@ -1068,7 +1068,7 @@ def detect(active: str | None) -> list[_Source]:
         try:
             found = detector(active)
         except Exception as error:  # noqa: BLE001 - one broken detector never hides the others
-            logger.warning("bighelp usage: detection failed (%s)", type(error).__name__)
+            logger.warning("Bighelp usage: detection failed (%s)", type(error).__name__)
             continue
         sources.extend(found if isinstance(found, list) else [found] if found else [])
     return sources
@@ -1090,7 +1090,7 @@ def collect(*, deadline: float = DEADLINE_SECONDS) -> list[dict[str, Any]]:
         except Unavailable as problem:
             results[index] = [_failed(source, problem.status, problem.message)]
         except Exception as error:  # noqa: BLE001 - never echo exception text; it may hold paths or secrets
-            logger.warning("bighelp usage: %s failed (%s)", source.id, type(error).__name__)
+            logger.warning("Bighelp usage: %s failed (%s)", source.id, type(error).__name__)
             results[index] = [_failed(source, ERROR, "Couldn't read usage right now.")]
 
     threads = []

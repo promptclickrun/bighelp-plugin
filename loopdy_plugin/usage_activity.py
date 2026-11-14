@@ -51,7 +51,7 @@ def activity(agent_id: str, days: int, now: float | None = None) -> dict:
             _model_days(db, cutoff, result)
     except sqlite3.Error as error:
         # A locked or older database: say nothing rather than something wrong.
-        logger.warning("bighelp usage activity unreadable: %s", type(error).__name__)
+        logger.warning("Bighelp usage activity unreadable: %s", type(error).__name__)
         return {"days": days, "hours": None, "messages": None, "modelDays": [], "truncated": False}
     return result
 

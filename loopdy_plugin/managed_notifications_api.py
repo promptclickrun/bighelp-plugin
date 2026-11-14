@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from . import host_telemetry
-from .managed_notifications import ManagedNotificationError, get_managed_notifications
+from .managed_notifications import WORK_WAIT_SECONDS, ManagedNotificationError, get_managed_notifications
 
 logger = logging.getLogger("hermes.plugins.bighelp.notifications")
 router = APIRouter(prefix="/notifications")
@@ -92,7 +92,7 @@ def _call(operation, *args):
     except ManagedNotificationError as error:
         if error.status >= 500:
             # The app gets the code; the host owner's log and host telemetry get it too.
-            logger.warning("bighelp notification request failed: %s", error.code)
+            logger.warning("Bighelp notification request failed: %s", error.code)
             host_telemetry.error(code=error.code, stage="native_route")
         raise HTTPException(status_code=error.status, detail={"code": error.code}) from None
     except (OSError, ValueError):
@@ -166,7 +166,9 @@ def channels(grant_id: str):
 
 @router.post("/enrollments/{grant_id}/work")
 def work_snapshot(grant_id: str, body: WorkBody):
-    return _call(lambda: get_managed_notifications().work_snapshot(grant_id, body.profile, body.sessionId))
+    # The app asks as a turn starts, before Hermes fires the turn's first hook: wait for it.
+    return _call(lambda: get_managed_notifications().work_snapshot(
+        grant_id, body.profile, body.sessionId, wait=WORK_WAIT_SECONDS))
 
 
 @router.get("/enrollments/{grant_id}/events/{event_id}")
