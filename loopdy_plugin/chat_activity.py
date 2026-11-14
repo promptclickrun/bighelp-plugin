@@ -141,5 +141,5 @@ def stop(profile: str, session_id: str) -> bool:
             os.kill(int(holder["pid"]), signal.SIGINT)
             stopped = True
         except (ProcessLookupError, PermissionError) as error:
-            logger.debug("bighelp chat stop skipped: %s", type(error).__name__)
+            logger.debug("Bighelp chat stop skipped: %s", type(error).__name__)
     return stopped

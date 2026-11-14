@@ -192,7 +192,7 @@ class ToolRegistrationTests(unittest.TestCase):
                 self.assertRegex(description, "Only (start a sign-in|when the user asked)")
                 self.assertIn("tool_search", description)
                 continue
-            self.assertIn("direct callable native bighelp renderer", description)
+            self.assertIn("direct callable native Bighelp renderer", description)
             self.assertIn("visible in the current tool list", description)
             self.assertIn("tool_search", description)
             self.assertIn("tool_describe", description)

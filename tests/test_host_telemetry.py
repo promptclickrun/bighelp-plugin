@@ -729,7 +729,7 @@ class CliTests(TelemetryCase):
         shown = self.run_cli("status")
         self.assertTrue(shown["enabled"])
         self.assertEqual(set(shown["sources"]), {"DO_NOT_TRACK", "BIGHELP_TELEMETRY", "config bighelp.telemetry",
-                                                 "hermes bighelp telemetry", "bighelp app"})
+                                                 "hermes bighelp telemetry", "Bighelp app"})
         self.assertEqual(shown["fields"], "https://github.com/promptclickrun/bighelp-plugin/blob/main/docs/HOST_TELEMETRY.md")
         self.assertNotIn("fieldsUrl", shown)
         with patch.dict(os.environ, {"DO_NOT_TRACK": "1"}):

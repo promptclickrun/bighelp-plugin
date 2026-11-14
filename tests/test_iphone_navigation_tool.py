@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Made-up pages, as the phone would answer them.
 PLACES = {
     "places": [{
-        "id": "settings.appearance", "title": "Appearance", "what": "How bighelp looks.",
+        "id": "settings.appearance", "title": "Appearance", "what": "How Bighelp looks.",
         "steps": ["Open the menu", "Tap Settings", "Tap Appearance"], "needs": None,
     }],
     "total": 1,

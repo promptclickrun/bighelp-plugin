@@ -217,7 +217,7 @@ class ScheduledRunTests(RoutineCase):
         root = os.path.dirname(os.path.dirname(os.path.abspath(spaces.__file__)))
         self.assertEqual(
             "# -*- coding: utf-8 -*-\n"
-            "# Made by bighelp: keeps a space on Today up to date. Change or remove it in bighelp (Today).\n"
+            "# Made by Bighelp: keeps a space on Today up to date. Change or remove it in bighelp (Today).\n"
             "import sys\n"
             f"sys.path.insert(0, {root!r})\n"
             "from loopdy_plugin.spaces import run_scheduled\n"

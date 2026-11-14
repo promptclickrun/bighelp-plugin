@@ -22,7 +22,7 @@ from .naming import TOOLSET
 
 logger = logging.getLogger("hermes.plugins.bighelp")
 
-UPDATE_NOTE = "This chat's bighelp app can't show spaces. Ask the person to update bighelp."
+UPDATE_NOTE = "This chat's Bighelp app can't show spaces. Ask the person to update Bighelp."
 
 
 class _ToolError(Exception):
@@ -34,7 +34,7 @@ class _ToolError(Exception):
 def _session(context: dict[str, Any]) -> str:
     session_id = tool_session.session_id(context, "HERMES_SESSION_ID")
     if html_apps.SESSION_ID.fullmatch(session_id or "") is None:
-        raise _ToolError("spaces_unavailable", "Spaces are drafted only in a bighelp chat with the person.")
+        raise _ToolError("spaces_unavailable", "Spaces are drafted only in a Bighelp chat with the person.")
     return session_id
 
 
@@ -42,7 +42,7 @@ def _declared(session_id: str) -> bool:
     try:
         return bool(card_objects.declared_for(session_id) & SPACE_TYPES)
     except Exception as error:  # a broken store refuses, never shows a card the app can't draw
-        logger.debug("bighelp space renders lookup failed: %s", type(error).__name__)
+        logger.debug("Bighelp space renders lookup failed: %s", type(error).__name__)
         return False
 
 
@@ -174,18 +174,18 @@ def _handler(work: Callable[..., dict[str, Any]], **options: Any) -> Callable[..
         except _ToolError as error:
             return _json({"success": False, "error": error.code, "message": error.message})
         except (ValueError, RecursionError) as error:  # what a model's odd input can still raise (a NUL)
-            logger.warning("bighelp space tool refused its input: %s", type(error).__name__)
+            logger.warning("Bighelp space tool refused its input: %s", type(error).__name__)
             return _json({"success": False, "error": "invalid_request",
                           "message": "An argument isn't usable (a control character or too deeply nested)."})
         except (OSError, sqlite3.Error) as error:
-            logger.warning("bighelp space tool failed: %s", type(error).__name__)
+            logger.warning("Bighelp space tool failed: %s", type(error).__name__)
             return _json({"success": False, "error": "spaces_unavailable",
                           "message": "Spaces aren't available on this computer right now."})
     return handle
 
 
 DRAFT_DESCRIPTION = (
-    "Draft a space for the person's Today in the bighelp app: a live panel (a commute time, a tracker, a "
+    "Draft a space for the person's Today in the Bighelp app: a live panel (a commute time, a tracker, a "
     "garden's soil moisture) that keeps itself up to date. Use it only when the person asks for something on "
     "Today. A space has three parts. card: the panel, a loopdy.card (bighelp.card accepted) with real, current "
     "data, data_sources [] and basic components only (text, metric, list, table, chart, badge, progress); keep "

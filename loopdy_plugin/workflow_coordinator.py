@@ -1123,7 +1123,7 @@ class Coordinator:
         except (OSError, ValueError, StoreUnavailable) as error:
             program = (shlex.split(command) or ["the command"])[0] if command else "the command"
             why = "isn't on this computer's PATH" if isinstance(error, FileNotFoundError) else "couldn't start"
-            runner.write_private(log, f"bighelp: {program} {why}.\n".encode("utf-8"))
+            runner.write_private(log, f"Bighelp: {program} {why}.\n".encode("utf-8"))
             with self.store.read() as connection:
                 attempt = connection.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
             self._command_ended(attempt, 127, timed_out=False)
@@ -1298,7 +1298,7 @@ class Coordinator:
                         break
             workflow = connection.execute("SELECT name FROM workflows WHERE id=?", (run["workflow_id"],)).fetchone()
         name = workflow["name"] if workflow else definition["name"]
-        footer = f"Opened by the bighelp workflow \"{name}\" (run {run['number']}) for {project['label']}."
+        footer = f"Opened by the Bighelp workflow \"{name}\" (run {run['number']}) for {project['label']}."
         body = rest[:MAX_PULL_REQUEST_BODY].strip()
         return title, (f"{body}\n\n---\n{footer}\n" if body else f"{footer}\n")
 

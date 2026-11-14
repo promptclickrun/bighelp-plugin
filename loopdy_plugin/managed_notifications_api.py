@@ -92,7 +92,7 @@ def _call(operation, *args):
     except ManagedNotificationError as error:
         if error.status >= 500:
             # The app gets the code; the host owner's log and host telemetry get it too.
-            logger.warning("bighelp notification request failed: %s", error.code)
+            logger.warning("Bighelp notification request failed: %s", error.code)
             host_telemetry.error(code=error.code, stage="native_route")
         raise HTTPException(status_code=error.status, detail={"code": error.code}) from None
     except (OSError, ValueError):

@@ -351,7 +351,7 @@ class ToolSchemaTests(unittest.TestCase):
             "contacts": ("expectedRevision", "list first", "replaces"),
             "photos": ("vision tool", "50 MB", "cancelled", "outcome_unknown"),
             "geofences": ("Only when asked", "iphone_reminders"),
-            "alarms": ("bighelp's own", "Clock app"),
+            "alarms": ("Bighelp's own", "Clock app"),
             "music": ("unchanged", "subscription_required"),
             "focus": ("can't be changed",),
             "shortcuts": ("only names you may run", "don't rerun"),
@@ -827,7 +827,7 @@ class PhotoResultTests(ChannelCase):
                 self.assertEqual(result["code"], "photo_unreadable")
                 self.assertEqual(result["payload"], {})
                 self.assertEqual([record.getMessage() for record in logs.records],
-                                 ["bighelp phone photo not stored: photo_unreadable"])
+                                 ["Bighelp phone photo not stored: photo_unreadable"])
         self.assertFalse(self.pictures.exists() and list(self.pictures.iterdir()))
 
     async def test_a_picture_over_ninety_kilobytes_never_gets_this_far(self):

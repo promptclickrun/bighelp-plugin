@@ -500,7 +500,7 @@ class NativeAPITests(unittest.TestCase):
                         refused = self.listen()
                 self.assertEqual((refused.status_code, refused.json()["error"]["code"]),
                                  (503, "live_alerts_unavailable"))
-                self.assertIn("bighelp live alerts unavailable: " + code, "\n".join(logs.output))
+                self.assertIn("Bighelp live alerts unavailable: " + code, "\n".join(logs.output))
                 self.assertNotIn(str(self.home), "\n".join(logs.output))
                 events = sent()
                 self.assertIn(("error", {"code": code, "stage": "native_route"}), events)

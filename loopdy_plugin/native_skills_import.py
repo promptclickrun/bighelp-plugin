@@ -215,7 +215,7 @@ def _read_archive(raw: bytes, tool: Any) -> _Skill:
                     data = stream.read(info.file_size + 1)
             except Exception as error:
                 # BadZipFile, zlib.error and friends: a damaged entry. The class name is fixed and safe to log.
-                logger.warning("bighelp skill import: unreadable archive entry (%s)", type(error).__name__)
+                logger.warning("Bighelp skill import: unreadable archive entry (%s)", type(error).__name__)
                 raise _invalid("The archive is damaged.") from None
             read += len(data)
             if len(data) != info.file_size or read > MAX_TOTAL_BYTES:
@@ -373,7 +373,7 @@ def _rollback(tool: Any, name: str, skill_dir: Path) -> None:
         if tool._delete_skill(name).get("success"):
             return
     except Exception as error:
-        logger.warning("bighelp skill import: rollback by Hermes failed (%s)", type(error).__name__)
+        logger.warning("Bighelp skill import: rollback by Hermes failed (%s)", type(error).__name__)
     shutil.rmtree(skill_dir, ignore_errors=True)
     try:
         parent = skill_dir.parent

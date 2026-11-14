@@ -217,9 +217,9 @@ def validate_card_input(
     required = allowed - {"importance", "valid_until"}
     _object(value, allowed, required)
     if value["schema"] != "loopdy.card":
-        _raise("invalid_schema", "Unsupported bighelp Card schema")
+        _raise("invalid_schema", "Unsupported Bighelp Card schema")
     if isinstance(value["version"], bool) or value["version"] != 1:
-        _raise("unsupported_version", "Unsupported bighelp Card version")
+        _raise("unsupported_version", "Unsupported Bighelp Card version")
     _text(value["title"])
     _text(value["spoken_summary"])
     if "importance" in value and value["importance"] not in {"normal", "important", "urgent"}:
@@ -238,7 +238,7 @@ def validate_card_input(
     if sources and not allow_live_data_for_testing:
         _raise(
             "live_data_unavailable",
-            "Live bighelp Card data sources are not available in this release",
+            "Live Bighelp Card data sources are not available in this release",
         )
     elements = value["elements"]
     if not isinstance(elements, dict) or not 1 <= len(elements) <= MAX_ELEMENTS:
@@ -1003,7 +1003,7 @@ def _background(value: object, *, warn: bool) -> None:
         if warn and token not in known:
             # Kept, not rejected: a newer app may know it, and this one falls
             # back to a plain gradient. The value itself isn't logged.
-            _LOG.warning("bighelp card background unknown value field=%s", field)
+            _LOG.warning("Bighelp card background unknown value field=%s", field)
 
 
 def _chart(props: dict[str, object], source_ids: set[str]) -> None:

@@ -59,7 +59,7 @@ class HtmlAppCardTests(unittest.TestCase):
 
     def test_the_tools_card_is_accepted_and_matches_the_contract(self):
         card = render(app_card())
-        self.assertEqual("An app to open in bighelp: Trip planner.", card["spoken_summary"])
+        self.assertEqual("An app to open in Bighelp: Trip planner.", card["spoken_summary"])
         self.assertEqual([], card["data_sources"])
         self.assertEqual({"type": "html_app", "children": [],
                          "props": {"app_id": APP_ID, "description": "Plan the stops of a road trip.",

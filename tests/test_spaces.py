@@ -339,7 +339,7 @@ class AddTests(SpaceCase):
         self.assertNotIn("no_agent", job)
         marker = job["prompt"].split("BIGHELP-SPACE-", 1)[1][:16]
         self.assertEqual(spaces.ai_prompt(space_id, "Commute", "Check the garden.", marker), job["prompt"])
-        self.assertTrue(job["prompt"].startswith(f"Update the bighelp space {space_id} on the person's Today."))
+        self.assertTrue(job["prompt"].startswith(f"Update the Bighelp space {space_id} on the person's Today."))
         self.assertIn(f"BIGHELP-SPACE-{marker}\nTitle: Commute\nCheck the garden.\nEND-BIGHELP-SPACE-{marker}\n",
                       job["prompt"])
         self.assertTrue(job["prompt"].endswith("Reply only [SILENT]."))
@@ -929,7 +929,7 @@ class SweepTests(SpaceCase):
         live = self.host.live()
         shim = spaces.shim_name("s_" + "e" * 32)
         self.job("orphan", "Space: Old", script=shim, no_agent=True)
-        self.job("retired", "Space: Garden", prompt="Update the bighelp space")
+        self.job("retired", "Space: Garden", prompt="Update the Bighelp space")
         self.host.store.record_job("retired", "s_" + "f" * 32)
         self.host.store.retire_job("retired")
         self.job("mine", "Space: mine", prompt="My own job")

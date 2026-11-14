@@ -1,15 +1,15 @@
 ---
 name: generative-ui
-description: Render bounded v1 or v2 native bighelp cards when structured presentation is clearer than prose.
+description: Render bounded v1 or v2 native Bighelp cards when structured presentation is clearer than prose.
 ---
 
-# bighelp Generative UI
+# Bighelp Generative UI
 
-Use a bighelp renderer when the user asks for a card, dashboard-like result, metrics, a bounded list, or a sequence of events. Keep normal prose when structured presentation adds no value.
+Use a Bighelp renderer when the user asks for a card, dashboard-like result, metrics, a bounded list, or a sequence of events. Keep normal prose when structured presentation adds no value.
 
-## bighelp Cards
+## Bighelp Cards
 
-Use the generic `bighelp_render_card` tool, documented in `references/bighelp-cards.md`, for new static compositions that do not match a typed renderer. These are called **bighelp Cards**. Use typed v2 for existing polished use cases until generic rendering reaches visual parity. In this release, `data_sources` must be empty and all displayed values must be embedded in the card payload; live device refresh is not available. Cards allow no downloaded code, HTML, WebViews, authenticated requests, or secrets.
+Use the generic `bighelp_render_card` tool, documented in `references/bighelp-cards.md`, for new static compositions that do not match a typed renderer. These are called **Bighelp Cards**. Use typed v2 for existing polished use cases until generic rendering reaches visual parity. In this release, `data_sources` must be empty and all displayed values must be embedded in the card payload; live device refresh is not available. Cards allow no downloaded code, HTML, WebViews, authenticated requests, or secrets.
 
 The renderers are first-class model tools in the `bighelp` toolset. If the exact
 renderer is visible in the current tool list, call it directly. If Hermes has
@@ -49,7 +49,7 @@ fill in again later; it's optional, not a step after every card.
 ### A. Inline card in the active chat
 
 Use this path when the card answers the message in the conversation currently
-open in bighelp. Call the renderer, then put its returned `display_markdown` in
+open in Bighelp. Call the renderer, then put its returned `display_markdown` in
 your reply exactly once.
 Do not use the notification channel just to answer the current chat, and don't
 schedule a job to show a card now.
@@ -61,11 +61,11 @@ Example instruction for an active weather chat:
 
 ### B. Proactive or scheduled card
 
-A scheduled job's run is its own chat. When it finishes, bighelp notifies the
+A scheduled job's run is its own chat. When it finishes, Bighelp notifies the
 user with the start of the run's reply, and tapping the alert opens the run
 (see `skill_view("loopdy:bighelp")`). So a scheduled card works like an inline
 one: the run calls the renderer and puts the returned `display_markdown` in its
-final reply once. Create the job with `deliver: "local"`; bighelp's alert comes
+final reply once. Create the job with `deliver: "local"`; Bighelp's alert comes
 from the run itself.
 
 Example task instruction:
@@ -129,7 +129,7 @@ timestamps and freshness provenance. The renderer derives `age_seconds` from
 those timestamp facts, so it may be omitted (or supplied as stale model
 metadata). Forms are bound by the host to the exact
 profile and session. After rendering a form or a selection, end your turn: the
-answers arrive as the user's next message. Older bighelp apps instead held a
+answers arrive as the user's next message. Older Bighelp apps instead held a
 form's answers on the host; if the user says they sent a form and no answers
 arrived, call `bighelp_await_form_response` with only its server-generated
 `request_id`. Do not invent an endpoint, route, command, URL, or action target.

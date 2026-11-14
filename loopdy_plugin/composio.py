@@ -77,7 +77,7 @@ def _plugin_server_names(servers: dict) -> set[str]:
     try:
         _merged, owners = server_configs_with_sources(servers)
     except Exception as error:
-        logger.warning("bighelp composio plugin servers unreadable: %s", type(error).__name__)
+        logger.warning("Bighelp composio plugin servers unreadable: %s", type(error).__name__)
         return set()
     return {name for name, plugin in owners.items() if plugin is not None}
 
@@ -124,7 +124,7 @@ def _signed_in(hermes: SimpleNamespace, name: str) -> bool | None:
         # The file check behind Hermes' `_oauth_tokens_present`, which says True when it can't tell.
         return bool(hermes.token_storage(name).has_cached_tokens())
     except Exception as error:
-        logger.warning("bighelp composio sign-in state unreadable: %s", type(error).__name__)
+        logger.warning("Bighelp composio sign-in state unreadable: %s", type(error).__name__)
         return None
 
 
@@ -206,7 +206,7 @@ def install(agent_id: str) -> dict:
                                     "Other MCP servers already use the names Composio Connect needs.")
             config = {"url": CONNECT_URL, "auth": "oauth", "enabled": True, "connect_timeout": CONNECT_TIMEOUT}
             if not hermes.save_server(name, config):
-                logger.warning("bighelp composio install refused: hermes_rejected_config")
+                logger.warning("Bighelp composio install refused: hermes_rejected_config")
                 raise ComposioError(503, "composio_install_refused", "Hermes refused the Composio Connect server.")
         return _project(hermes)
 

@@ -59,7 +59,7 @@ def _provider_rejection(error: LiveProviderError) -> NativeAPIError:
     code = error.code if isinstance(error.code, str) and _FIXED_NAME.fullmatch(error.code) else "failed"
     stage = error.stage if isinstance(error.stage, str) and _FIXED_NAME.fullmatch(error.stage) else "unknown"
     status = error.http_status if type(error.http_status) is int else None
-    logger.warning("bighelp native voice provider failed: code=%s stage=%s http_status=%s", code, stage, status)
+    logger.warning("Bighelp native voice provider failed: code=%s stage=%s http_status=%s", code, stage, status)
     return NativeAPIError(409, "voice_provider_" + code, "The live voice provider could not complete this call.")
 
 
@@ -363,7 +363,7 @@ def _has_gemini_key(agent_id: str) -> bool:
             return bool(_HUB.gemini_key())
     except Exception as error:
         # A host that can't scope this profile's secrets can't start the call either.
-        logger.warning("bighelp native voice could not read a Gemini key: %s", type(error).__name__)
+        logger.warning("Bighelp native voice could not read a Gemini key: %s", type(error).__name__)
         return False
 
 

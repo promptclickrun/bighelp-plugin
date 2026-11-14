@@ -560,7 +560,7 @@ def _safe(name: str, read: Callable[[], list[Work]]) -> list[Work]:
     try:
         return read()
     except (OSError, sqlite3.Error, ValueError):
-        logger.warning("bighelp agents background read failed: %s", name)
+        logger.warning("Bighelp agents background read failed: %s", name)
         return []
 
 
@@ -571,7 +571,7 @@ def work(home: Path, since: float | None, *, with_session: bool = False) -> list
         try:
             db = _state_db(home)
         except sqlite3.Error:
-            logger.warning("bighelp agents background read failed: state")
+            logger.warning("Bighelp agents background read failed: state")
             db = None
         if db is not None:
             stack.callback(db.close)

@@ -38,7 +38,7 @@ class DraftGateTests(ToolCase):
         self.refused(self.draft(session=None), "spaces_unavailable")
         self.host.people.set_renders(OTHER_CHAT, ["html_app"])
         message = self.refused(self.draft(session=OTHER_CHAT), "spaces_unavailable")
-        self.assertEqual("This chat's bighelp app can't show spaces. Ask the person to update bighelp.", message)
+        self.assertEqual("This chat's Bighelp app can't show spaces. Ask the person to update Bighelp.", message)
         self.assertEqual([], self.host.store.all())
 
     def test_the_card_must_be_basic_and_static(self):

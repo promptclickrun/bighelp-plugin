@@ -84,7 +84,7 @@ class LoopdyCardToolTests(unittest.TestCase):
         self.assertEqual("bighelp_render_card", schema["name"])
         self.assertEqual(expected, schema["parameters"])
         description = str(schema["description"])
-        self.assertIn("native bighelp Card", description)
+        self.assertIn("native Bighelp Card", description)
         self.assertIn("progressively disclosed", description)
         self.assertIn("data_sources must be empty", description)
         self.assertIn("live Card data refresh is unavailable", description)

@@ -220,7 +220,7 @@ class DraftToolTests(HostCase):
         self.people.set_renders(CHAT, ["contact"])
         result = self.draft_contact()
         self.assertEqual("drafts_unavailable", result["error"])
-        self.assertIn("update bighelp", result["message"])
+        self.assertIn("update Bighelp", result["message"])
         self.people.set_renders(CHAT, ["contact_draft"])
         self.assertEqual("drafts_unavailable", self.call("bighelp_draft_event", {"fields": event_fields()})["error"])
         self.assertEqual("drafts_unavailable", self.call("bighelp_draft_contact", {"fields": contact_fields()},

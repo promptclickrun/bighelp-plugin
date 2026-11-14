@@ -17,7 +17,7 @@ class PluginUpdateCLITests(unittest.TestCase):
             try:
                 args = parser.parse_args(["update", "--restart"])
             except SystemExit:
-                self.fail("bighelp CLI must expose update --restart")
+                self.fail("Bighelp CLI must expose update --restart")
         self.assertEqual(args.bighelp_action, "update")
         self.assertTrue(args.restart)
 
@@ -28,7 +28,7 @@ class PluginUpdateCLITests(unittest.TestCase):
             try:
                 args = parser.parse_args(["update-status"])
             except SystemExit:
-                self.fail("bighelp CLI must expose update-status")
+                self.fail("Bighelp CLI must expose update-status")
         self.assertEqual(args.bighelp_action, "update-status")
 
 

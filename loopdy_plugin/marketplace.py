@@ -98,7 +98,7 @@ def _feed_facts() -> tuple[float | None, dict[str, dict]]:
             facts = _fetch()
         except Exception as error:
             # Offline or a changed feed: the last good copy stays, whatever its age.
-            logger.info("bighelp marketplace feed unavailable: %s", type(error).__name__)
+            logger.info("Bighelp marketplace feed unavailable: %s", type(error).__name__)
             _feed_failed_at = now
             return _feed or (None, {})
         _feed = (now, facts)
@@ -231,7 +231,7 @@ def _save(feed: tuple[float, dict[str, dict]]) -> None:
             json.dump({"fetchedAt": feed[0], "plugins": feed[1]}, file, separators=(",", ":"))
         os.replace(temporary, path)
     except Exception:
-        logger.info("bighelp marketplace feed couldn't be saved")
+        logger.info("Bighelp marketplace feed couldn't be saved")
         if temporary is not None:
             with contextlib.suppress(OSError):
                 temporary.unlink(missing_ok=True)

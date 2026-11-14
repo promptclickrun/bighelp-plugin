@@ -111,25 +111,25 @@ def log_native_feature_startup(profile: str | None = None) -> None:
         serving_profile, advertised = _native_features(skipped=skipped)
     except NativeAPIError as exc:
         logger.warning(
-            "bighelp native startup inventory unavailable: %s; "
+            "Bighelp native startup inventory unavailable: %s; "
             "the context API cannot advertise features.", exc.code)
         return
     except Exception as exc:
         # Diagnostics must not turn a failing capability probe into a plugin
         # registration failure. The request path retains its original errors.
         logger.warning(
-            "bighelp native startup inventory unavailable: capability probe "
+            "Bighelp native startup inventory unavailable: capability probe "
             "failed (%s); no advertisement claimed.", type(exc).__name__)
         return
     if profile is not None and profile != serving_profile:
         logger.warning(
-            "bighelp registration profile %r differs from verified serving "
+            "Bighelp registration profile %r differs from verified serving "
             "profile %r; startup inventory uses the serving profile.",
             profile, serving_profile)
     for feature, reason in skipped:
-        logger.warning("bighelp native feature %r NOT advertised: %s", feature, reason)
+        logger.warning("Bighelp native feature %r NOT advertised: %s", feature, reason)
     logger.info(
-        "bighelp native features advertised at startup: %s",
+        "Bighelp native features advertised at startup: %s",
         ", ".join(advertised))
 
 

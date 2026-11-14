@@ -169,7 +169,7 @@ class _Watch:
             if isinstance(error, OwnerNotRunning):
                 with _lock:
                     _no_gateway[str(self.home)] = time.monotonic()
-            logger.info("bighelp chat live watch ended: %s", type(error).__name__)
+            logger.info("Bighelp chat live watch ended: %s", type(error).__name__)
         finally:
             with self.changed:
                 self.ended = True
@@ -329,7 +329,7 @@ def interrupt(home: Path, session_id: str) -> bool:
     try:
         return asyncio.run(stop())
     except Exception as error:
-        logger.warning("bighelp chat live stop failed: %s", type(error).__name__)
+        logger.warning("Bighelp chat live stop failed: %s", type(error).__name__)
         return False
 
 

@@ -32,7 +32,7 @@ def register_legacy_toolset_alias() -> bool:
     try:
         register(LEGACY_TOOLSET, TOOLSET)
     except Exception:
-        logger.warning("bighelp toolset alias unavailable")
+        logger.warning("Bighelp toolset alias unavailable")
         return False
     return True
 

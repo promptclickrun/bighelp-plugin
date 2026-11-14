@@ -29,7 +29,7 @@ from loopdy_plugin.native_device_tools import NativeDeviceToolError, NativeDevic
 
 
 CALENDAR = {"start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z", "timeZone": "UTC"}
-NOTE = "bighelp isn't open on the phone right now. Ask the person to open bighelp, then try again."
+NOTE = "Bighelp isn't open on the phone right now. Ask the person to open Bighelp, then try again."
 
 
 @dataclass(frozen=True)
@@ -906,11 +906,11 @@ class ImmediateFailureLogTests(WaitCase):
         return [record.getMessage() for record in logs.records]
 
     async def test_a_chat_with_no_channel(self) -> None:
-        self.assertEqual(await self.logged(), ["bighelp phone tool call failed: phone_unavailable (no_channel)"])
+        self.assertEqual(await self.logged(), ["Bighelp phone tool call failed: phone_unavailable (no_channel)"])
 
     async def test_a_chat_hermes_does_not_know(self) -> None:
         self.assertEqual(await self.logged(session="chat-9"),
-                         ["bighelp phone tool call failed: phone_unavailable (session_unknown)"])
+                         ["Bighelp phone tool call failed: phone_unavailable (session_unknown)"])
 
     async def test_a_session_check_that_breaks(self) -> None:
         def broken(_profile: str, _session: str) -> bool:
@@ -918,7 +918,7 @@ class ImmediateFailureLogTests(WaitCase):
 
         self.hub.profile_session_validator = broken
         self.assertEqual(await self.logged(),
-                         ["bighelp phone tool call failed: phone_unavailable (session_check_failed)"])
+                         ["Bighelp phone tool call failed: phone_unavailable (session_check_failed)"])
 
 
 class SessionValidatorFallbackTests(unittest.TestCase):

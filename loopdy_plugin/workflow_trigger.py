@@ -36,8 +36,8 @@ def _script(workflow_id: str, name: str) -> str:
     plugin_root = str(Path(__file__).resolve().parents[1])
     label = " ".join(name.split())[:80].replace('"', "'")
     return (
-        f'# Made by bighelp: starts one run of the workflow "{label}" on its schedule.\n'
-        "# Change or stop it in bighelp (Workflows, then this workflow, then Trigger).\n"
+        f'# Made by Bighelp: starts one run of the workflow "{label}" on its schedule.\n'
+        "# Change or stop it in Bighelp (Workflows, then this workflow, then Trigger).\n"
         "import sys\n"
         f"sys.path.insert(0, {plugin_root!r})\n"
         "from loopdy_plugin.workflow_trigger import run_scheduled\n"
@@ -72,7 +72,7 @@ def _remove_job(job_id: str | None) -> None:
         from cron.jobs import remove_job
         remove_job(job_id)
     except Exception as error:
-        logger.warning("bighelp workflows: the old schedule couldn't be removed (%s)", type(error).__name__)
+        logger.warning("Bighelp workflows: the old schedule couldn't be removed (%s)", type(error).__name__)
 
 
 def check_schedule(schedule: Any) -> str:
@@ -115,7 +115,7 @@ def set_trigger(store: WorkflowStore, workflow_id: str, trigger: dict, host: Hos
     except Exception as error:
         if old.get("kind") != "schedule":
             _remove_script(workflow_id)
-        logger.warning("bighelp workflows: the schedule couldn't be made (%s)", type(error).__name__)
+        logger.warning("Bighelp workflows: the schedule couldn't be made (%s)", type(error).__name__)
         raise WorkflowError(422, "schedule_invalid", "Hermes couldn't make that schedule.") from None
     job_id = str(job.get("id") or "") or None
     try:

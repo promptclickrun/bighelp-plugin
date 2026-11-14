@@ -95,7 +95,7 @@ class LoopdyCardTemplateStoreTests(unittest.TestCase):
             invalid_card["sha256"] = hashlib.sha256(
                 canonical_json(invalid_card["document"]).encode("utf-8")
             ).hexdigest()
-            with self.assertRaisesRegex(ValueError, "bighelp Card schema"):
+            with self.assertRaisesRegex(ValueError, "Bighelp Card schema"):
                 store.install_card_template(profile="personal", template=invalid_card)
 
             bad_hash = _template()
@@ -268,7 +268,7 @@ class LoopdyCardTemplateToolTests(unittest.TestCase):
             unsafe["sha256"] = hashlib.sha256(
                 canonical_json(unsafe["document"]).encode("utf-8")
             ).hexdigest()
-            with self.assertRaisesRegex(ValueError, "Live bighelp Card data sources"):
+            with self.assertRaisesRegex(ValueError, "Live Bighelp Card data sources"):
                 store.install_card_template(profile="personal", template=unsafe)
 
 

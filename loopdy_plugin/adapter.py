@@ -114,7 +114,7 @@ class BighelpAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=message_id)
         return SendResult(
             success=False,
-            error=str(result.get("error") or "bighelp delivery failed"),
+            error=str(result.get("error") or "Bighelp delivery failed"),
         )
 
     async def get_chat_info(self, chat_id: str) -> dict[str, str]:
@@ -133,7 +133,7 @@ async def standalone_send(
     adapter_factory: Callable[..., BighelpAdapter | Any] = BighelpAdapter,
 ) -> dict[str, Any]:
     if media_files:
-        return {"error": "bighelp proactive notifications do not accept attachments"}
+        return {"error": "Bighelp proactive notifications do not accept attachments"}
     del force_document
     target = str(
         chat_id
@@ -143,7 +143,7 @@ async def standalone_send(
     adapter = adapter_factory(pconfig, service=service or get_service())
     try:
         if not await adapter.connect():
-            return {"error": "bighelp delivery is unavailable"}
+            return {"error": "Bighelp delivery is unavailable"}
         result = await adapter.send(
             target,
             message,
@@ -154,7 +154,7 @@ async def standalone_send(
                 "success": True,
                 "message_id": str(result.message_id or ""),
             }
-        return {"error": str(result.error or "bighelp delivery failed")}
+        return {"error": str(result.error or "Bighelp delivery failed")}
     finally:
         await adapter.disconnect()
 
@@ -179,7 +179,7 @@ def env_enablement() -> dict[str, Any] | None:
         return None
     return {
         "home_target": target,
-        "home_channel": {"chat_id": target, "name": "bighelp"},
+        "home_channel": {"chat_id": target, "name": "Bighelp"},
     }
 
 

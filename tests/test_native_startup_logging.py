@@ -16,7 +16,7 @@ from loopdy_plugin import native_api, native_context, registration
 
 
 LOG = "hermes.plugins.bighelp"
-SUMMARY = "bighelp native features advertised at startup: "
+SUMMARY = "Bighelp native features advertised at startup: "
 PROCESS_FEATURES = (
     "native-context-v1", "serving-profile-v1", "native-card-templates-v1",
     "native-voice-v1", "native-device-tools-v1", "native-device-location-v1", "native-device-appearance-v1",
