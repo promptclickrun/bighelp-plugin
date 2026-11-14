@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import threading
+import time
 import unittest
 import uuid
 import hashlib
@@ -220,6 +222,27 @@ class ManagedNotificationTests(unittest.TestCase):
         self.assertIsNone(self.service.work_snapshot(self.grant_id,"default","unsubscribed")["work"])
         with self.assertRaises(ManagedNotificationError):
             self.service.work_snapshot(self.grant_id,"other","native-session")
+
+    def test_work_snapshot_waits_for_a_turn_that_is_starting(self):
+        # The app asks the moment a turn starts. Hermes fires the turn's first hook a little later.
+        self.service.observe("pre_llm_call", profile="default", session_id="native-session", turn_id="earlier")
+        self.service.observe("on_session_end", profile="default", session_id="native-session", turn_id="earlier", completed=True)
+        self.assertTrue(self.service.work_snapshot(self.grant_id, "default", "native-session")["work"]["terminal"])
+        starting = threading.Timer(0.3, lambda: self.service.observe(
+            "pre_llm_call", profile="default", session_id="native-session", turn_id="starting"))
+        starting.start()
+        try:
+            work = self.service.work_snapshot(self.grant_id, "default", "native-session", wait=5)["work"]
+        finally:
+            starting.join()
+        self.assertEqual((work["turnId"], work["terminal"]), ("starting", False))
+        # Running work is answered at once, and a chat where no turn starts gets its answer when the wait ends.
+        began = time.monotonic()
+        self.assertEqual(self.service.work_snapshot(self.grant_id, "default", "native-session", wait=5)["work"]["turnId"], "starting")
+        self.assertLess(time.monotonic() - began, 1)
+        began = time.monotonic()
+        self.assertIsNone(self.service.work_snapshot(self.grant_id, "default", "quiet-session", wait=0.3)["work"])
+        self.assertGreaterEqual(time.monotonic() - began, 0.3)
 
     def test_one_native_terminal_event_persists_and_retries_identical_rich_payload(self):
         payload=dict(profile="default",session_id="native-session",turn_id="turn-a",completed=True,platform="desktop")
