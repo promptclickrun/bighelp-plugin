@@ -134,7 +134,7 @@ def _identifier(value: Any, pattern: re.Pattern = _ID) -> str:
 
 
 def _default_avatar() -> dict[str, Any]:
-    """bighelp's own picture (the app icon's art), shipped in this package."""
+    """Bighelp's own picture (the app icon's art: the lifter), shipped in this package."""
     try:
         with _DEFAULT_AVATAR.open("rb") as handle:
             blob = handle.read(_MAX_AVATAR_BYTES + 1)
