@@ -374,6 +374,13 @@ grant (`PUT/DELETE /notifications/enrollments/<grantId>/live-activities/<activit
 phase, a fixed label such as "Your agent is working" or "Your agent finished", and counts. The notification
 service and Apple can read these. They never include message text.
 
+Before the app gives a card to the host, it asks which turn runs in the chat
+(`POST /notifications/enrollments/<grantId>/work`). The app asks the moment the turn starts. Hermes fires
+the turn's first hook (`pre_llm_call`) a little later, once the turn's memory and context are ready, and only
+then does the host know the turn. So the route holds its answer up to 8 seconds (`WORK_WAIT_SECONDS`) for
+running work to show in that chat. An app that was told "no work" kept the card to itself for the whole turn:
+the card then got no update with the app away, and no sealed detail.
+
 ### Sealed card detail
 
 An app that shows more on the card gives the host a key for that chat's row

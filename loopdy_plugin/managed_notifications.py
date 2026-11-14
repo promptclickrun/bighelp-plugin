@@ -95,6 +95,9 @@ _LOUD_SPACING = 30
 # How often each process looks for running turns to send again, and how long after a turn's last hook it still does.
 _CARD_REFRESH_TICK = 15
 _REFRESH_WITHOUT_HOOKS = 1800
+# The longest the work route holds its answer for a turn that is starting, and how often it looks.
+WORK_WAIT_SECONDS = 8.0
+_WORK_WAIT_TICK = 0.1
 # A rotating sign-in (the Nous Portal's lasts a day) runs out if bighelp stays closed.
 # Waking the phone this often gives it more than one chance to renew before then.
 _SIGN_IN_WAKE_SECONDS = 8 * 3600
@@ -806,28 +809,39 @@ class ManagedNotifications:
                 db.execute("DELETE FROM activities WHERE grant_id=? AND session_ref=?", (grant_id, reference))
         return {"version": 1, "grantId": grant_id, "profile": profile, "sessionId": session_id, "sessionReference": reference, "enabled": enabled}
 
-    def work_snapshot(self, grant_id: str, profile: str, session_id: str):
+    def work_snapshot(self, grant_id: str, profile: str, session_id: str, *, wait: float = 0.0):
         """Read only this process's public-hook observations, never DB starts.
 
         A current session observation is not correlation with a mobile frame.
         Retained older turns remain addressable by explicit activity registration.
+
+        The app asks the moment a turn starts. Hermes fires the turn's first hook a little later,
+        once the turn's memory and context are ready, so until then this chat has no work or only
+        its last, finished turn. `wait` holds the answer up to that many seconds for running work
+        to show. An app told "no work" kept the card to itself for the whole turn: it then got no
+        update with the app away, and no sealed detail.
         """
         grant = self.enrollment(grant_id)["grant"]
         if profile != grant["profile"]:
             raise ManagedNotificationError("notification_scope_forbidden", 403)
         self._session(profile, session_id)
-        with self._lock, self._db() as db:
-            self._require_subscription(db, grant_id, profile, session_id)
-            work = next((value for key, value in reversed(self._work.items())
-                         if key[:2] == (profile, session_id)), None)
-            snapshot = None
-            if work is not None:
-                phase, count, terminal = self._work_projection(work)
-                snapshot = {"profile": profile, "sessionId": session_id,
-                            "turnId": work["turn"], "phase": phase,
-                            "activeSubagentCount": count, "terminal": terminal,
-                            "outcome": work["outcome"], "observedAt": work["observed_at"]}
-            return {"version": 1, "grantId": grant_id, "work": snapshot}
+        deadline = time.monotonic() + max(0.0, min(float(wait), WORK_WAIT_SECONDS))
+        while True:
+            with self._lock, self._db() as db:
+                self._require_subscription(db, grant_id, profile, session_id)
+                work = next((value for key, value in reversed(self._work.items())
+                             if key[:2] == (profile, session_id)), None)
+                snapshot = None
+                if work is not None:
+                    phase, count, terminal = self._work_projection(work)
+                    snapshot = {"profile": profile, "sessionId": session_id,
+                                "turnId": work["turn"], "phase": phase,
+                                "activeSubagentCount": count, "terminal": terminal,
+                                "outcome": work["outcome"], "observedAt": work["observed_at"]}
+                if (snapshot is not None and not snapshot["terminal"]) or time.monotonic() >= deadline:
+                    return {"version": 1, "grantId": grant_id, "work": snapshot}
+            # Outside the lock, so the turn's hooks run. A host that is closing answers at once.
+            if self._stop.wait(_WORK_WAIT_TICK): deadline = 0.0
 
     def _require_subscription(self, db, grant_id: str, profile: str, session_id: str):
         # Recheck local authority after cloud/SessionDB awaits, in the transaction
