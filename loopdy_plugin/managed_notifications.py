@@ -840,7 +840,7 @@ class ManagedNotifications:
                                 "outcome": work["outcome"], "observedAt": work["observed_at"]}
                 if (snapshot is not None and not snapshot["terminal"]) or time.monotonic() >= deadline:
                     return {"version": 1, "grantId": grant_id, "work": snapshot}
-            # Outside the lock, so the turn's hooks run. A host that is closing answers at once.
+            # Outside the lock, so the turn's hooks run. This copy's close ends the wait.
             if self._stop.wait(_WORK_WAIT_TICK): deadline = 0.0
 
     def _require_subscription(self, db, grant_id: str, profile: str, session_id: str):
