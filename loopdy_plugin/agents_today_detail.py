@@ -551,7 +551,7 @@ def detail(profile: str, item_id: str, *, now: Callable[[], float] | None = None
         value = _fit(_read(home, item_id, moment))
     except (OSError, sqlite3.Error):
         # A record that can't be read now is not an item the phone can open: the answer is the same as for a gone one.
-        logger.warning("bighelp agents today detail read failed")
+        logger.warning("Bighelp agents today detail read failed")
         raise ActivityNotFound from None
     with _cache_lock:
         if len(_cache) >= 256:

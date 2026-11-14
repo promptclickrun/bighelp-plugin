@@ -53,7 +53,7 @@ HTML_SUFFIXES = (".html", ".htm")
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
-UPDATE_NOTE = "This chat's bighelp app can't show apps. Ask the person to update bighelp."
+UPDATE_NOTE = "This chat's Bighelp app can't show apps. Ask the person to update Bighelp."
 PROBLEMS = ("missing", "invalid", "too_large")
 
 
@@ -427,7 +427,7 @@ def _json(value: Any) -> str:
 def _session(context: dict[str, Any]) -> str:
     session_id = tool_session.session_id(context, "HERMES_SESSION_ID")
     if SESSION_ID.fullmatch(session_id or "") is None:
-        raise _ToolError("apps_unavailable", "Apps work only in a bighelp chat with the person.")
+        raise _ToolError("apps_unavailable", "Apps work only in a Bighelp chat with the person.")
     return session_id
 
 
@@ -435,7 +435,7 @@ def _declared(session_id: str) -> frozenset[str]:
     try:
         return card_objects.declared_for(session_id) & APP_TYPES
     except Exception as error:  # a broken store refuses, never shows a card the app can't draw
-        logger.debug("bighelp app renders lookup failed: %s", type(error).__name__)
+        logger.debug("Bighelp app renders lookup failed: %s", type(error).__name__)
         return frozenset()
 
 
@@ -524,7 +524,7 @@ def build_card(*, app_id: str, title: str, description: str, sends_answers: bool
         "schema": "loopdy.card",
         "version": 1,
         "title": title,
-        "spoken_summary": f"An app to open in bighelp: {title}.",
+        "spoken_summary": f"An app to open in Bighelp: {title}.",
         "data_sources": [],
         "root": "app",
         "elements": {"app": {"type": "html_app", "children": [], "props": {
@@ -611,13 +611,13 @@ def update_data(args: Any, context: dict[str, Any]) -> dict[str, Any]:
 
 
 SHOW_DESCRIPTION = (
-    "Show an interactive HTML app in this bighelp chat, for something people use rather than read: a small "
+    "Show an interactive HTML app in this Bighelp chat, for something people use rather than read: a small "
     "tool, a calculator or planner, a picker, a live dashboard. The person gets a card with an Open App button "
     "and uses the app full screen on their phone. Use it only when interactive fits; a plain card "
     "(bighelp_render_card) or a form is better for a simple answer. "
     "html is one self-contained page (or path: an .html file you wrote in your working folder); it may load any "
     "scripts, styles, fonts or APIs it needs. Follow prefers-color-scheme (light and dark) and fit a phone "
-    "screen (a viewport meta tag, touch-size controls). bighelp adds this page API: "
+    "screen (a viewport meta tag, touch-size controls). Bighelp adds this page API: "
     "`await window.bighelp.getData()` returns the latest data or null; "
     "`window.bighelp.onData(fn)` calls fn(data) once at start when there is data and again whenever it changes "
     "while the app is open, and returns an unsubscribe function; "
@@ -674,7 +674,7 @@ def _handler(work: Callable[..., dict[str, Any]], **options: Any) -> Callable[..
         except _ToolError as error:
             return _json({"success": False, "error": error.code, "message": error.message})
         except (OSError, sqlite3.Error) as error:
-            logger.warning("bighelp html app failed: %s", type(error).__name__)
+            logger.warning("Bighelp html app failed: %s", type(error).__name__)
             return _json({"success": False, "error": "apps_unavailable",
                           "message": "Apps aren't available on this computer right now."})
     return handle

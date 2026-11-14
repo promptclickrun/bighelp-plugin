@@ -12,34 +12,34 @@ from .sensitive import contains_sensitive_credential
 
 
 _COPY = {
-    "approval.required": ("Needs your approval", "Open bighelp to review the request."),
-    "attention.required": ("Session update", "Open bighelp to continue."),
+    "approval.required": ("Needs your approval", "Open Bighelp to review the request."),
+    "attention.required": ("Session update", "Open Bighelp to continue."),
     "session.completed": (
         "Completion alert",
-        "Open bighelp to view the finished response.",
+        "Open Bighelp to view the finished response.",
     ),
-    "session.failed": ("Session update", "Open bighelp to review what happened."),
+    "session.failed": ("Session update", "Open Bighelp to review what happened."),
     "delegation.started": (
         "Delegation started",
-        "Open bighelp to view the new delegation.",
+        "Open Bighelp to view the new delegation.",
     ),
     "delegation.updated": (
         "Session update",
-        "Open bighelp to view the latest activity.",
+        "Open Bighelp to view the latest activity.",
     ),
     "delegation.completed": (
         "Delegation complete",
-        "Open bighelp to view the completed delegation.",
+        "Open Bighelp to view the completed delegation.",
     ),
-    "task.updated": ("Session update", "Open bighelp to view the task."),
+    "task.updated": ("Session update", "Open Bighelp to view the task."),
     "job.completed": (
         "Completion alert",
-        "Open bighelp to view the scheduled task result.",
+        "Open Bighelp to view the scheduled task result.",
     ),
-    "job.failed": ("Session update", "Open bighelp to review the scheduled task."),
+    "job.failed": ("Session update", "Open Bighelp to review the scheduled task."),
     "channel.message": (
         "Hermes just messaged you!",
-        "Open bighelp to view the message.",
+        "Open Bighelp to view the message.",
     ),
 }
 
@@ -85,7 +85,7 @@ def shape_notification(
         mode = "minimal"
     title, generic_body = _COPY.get(
         event.type,
-        ("Session update", "Open bighelp to view it."),
+        ("Session update", "Open Bighelp to view it."),
     )
     detail = event.detail if isinstance(event.detail, Mapping) else {}
     agent_name = _text(detail.get("agent_name") or detail.get("sender_name"), 80)
@@ -161,7 +161,7 @@ def _event_body(event: BighelpEvent, fallback: str) -> str:
             if command:
                 return command
         if _text(detail.get("command"), 800):
-            return "Review the requested command in bighelp."
+            return "Review the requested command in Bighelp."
         return fallback
     for key in _DETAIL_KEYS.get(event.type, ()):
         value = (

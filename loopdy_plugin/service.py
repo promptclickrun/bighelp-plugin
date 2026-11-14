@@ -106,7 +106,7 @@ class BighelpService:
         if not configured:
             detail = configuration_error
         elif compatible_devices == 0:
-            detail = f"No {mode} bighelp devices are registered"
+            detail = f"No {mode} Bighelp devices are registered"
         else:
             detail = f"{mode.capitalize()} provider ready"
         return {
@@ -121,7 +121,7 @@ class BighelpService:
         self._assert_open()
         normalized = str(mode or "").strip().lower()
         if normalized not in {"managed", "direct"}:
-            raise ValueError("bighelp provider mode must be managed or direct")
+            raise ValueError("Bighelp provider mode must be managed or direct")
         retire: Any | None = None
         with self._provider_lock:
             if normalized == "direct":
@@ -223,7 +223,7 @@ class BighelpService:
                 self._live_activity_queue.put_nowait(dict(update))
                 return True
             except queue.Full:
-                logger.warning("bighelp Live Activity update queue is full")
+                logger.warning("Bighelp Live Activity update queue is full")
                 return False
 
     def update_live_activities(
@@ -311,7 +311,7 @@ class BighelpService:
                     except Exception as error:
                         failed += 1
                         logger.warning(
-                            "bighelp Live Activity update failed for %s: %s",
+                            "Bighelp Live Activity update failed for %s: %s",
                             activity_id,
                             _safe_error(error),
                         )
@@ -340,7 +340,7 @@ class BighelpService:
             except Exception as error:
                 failed += 1
                 logger.warning(
-                    "bighelp Live Activity serialization failed for %s: %s",
+                    "Bighelp Live Activity serialization failed for %s: %s",
                     activity_id,
                     _safe_error(error),
                 )
@@ -352,13 +352,13 @@ class BighelpService:
         preferences: Mapping[str, Any],
     ) -> dict[str, Any]:
         if not self.store.update_preferences(device_id, preferences):
-            raise ValueError("Unknown or revoked bighelp device")
+            raise ValueError("Unknown or revoked Bighelp device")
         return {"updated": True, "device_id": device_id}
 
     def revoke_device(self, device_id: str) -> dict[str, Any]:
         self._assert_open()
         if not self.store.revoke_device(device_id):
-            raise ValueError("Unknown or already revoked bighelp device")
+            raise ValueError("Unknown or already revoked Bighelp device")
         return {"revoked": True, "device_id": device_id}
 
     def test_notification(self, target: str = "all", *, profile: str = "default") -> dict[str, Any]:
@@ -368,7 +368,7 @@ class BighelpService:
             build_event(
                 "attention.required",
                 profile=profile,
-                detail={"message": "bighelp test notification"},
+                detail={"message": "Bighelp test notification"},
             ),
             target=target,
         )
@@ -389,8 +389,8 @@ class BighelpService:
             self._queue.put_nowait((event, target))
             return True
         except queue.Full:
-            self.store.mark_event_failed(event.event_id, "bighelp delivery queue is full")
-            logger.warning("bighelp delivery queue is full; dropped %s", event.event_id)
+            self.store.mark_event_failed(event.event_id, "Bighelp delivery queue is full")
+            logger.warning("Bighelp delivery queue is full; dropped %s", event.event_id)
             return False
 
     def deliver(self, event: BighelpEvent, *, target: str) -> dict[str, Any]:
@@ -401,7 +401,7 @@ class BighelpService:
         self.store.record_event(event, target=target)
         devices = self.store.resolve_devices(target)
         if not devices:
-            message = f"No compatible bighelp devices match {target}"
+            message = f"No compatible Bighelp devices match {target}"
             self.store.mark_event_failed(event.event_id, message)
             return {"error": message, "event_id": event.event_id}
 
@@ -481,7 +481,7 @@ class BighelpService:
                 if isinstance(error, DeliveryError) and error.invalid_token:
                     self.store.revoke_device(device["device_id"])
                 logger.warning(
-                    "bighelp %s delivery failed for event %s device %s: %s",
+                    "Bighelp %s delivery failed for event %s device %s: %s",
                     mode,
                     event.event_id,
                     device["device_id"],
@@ -512,7 +512,7 @@ class BighelpService:
                 delivery_ids[0] if delivery_ids else event.event_id,
             )
         else:
-            self.store.mark_event_failed(event.event_id, "All bighelp device deliveries failed")
+            self.store.mark_event_failed(event.event_id, "All Bighelp device deliveries failed")
         result: dict[str, Any] = {
             "success": success,
             "event_id": event.event_id,
@@ -523,7 +523,7 @@ class BighelpService:
             "queued": 0,
         }
         if not success:
-            result["error"] = "All bighelp device deliveries failed"
+            result["error"] = "All Bighelp device deliveries failed"
         return result
 
     def reconcile_receipts(self) -> dict[str, int]:
@@ -537,7 +537,7 @@ class BighelpService:
                 pending = self.store.pending_provider_receipts(mode, limit=1000)
             except Exception as error:
                 logger.warning(
-                    "bighelp %s receipt ledger read failed: %s", mode, _safe_error(error)
+                    "Bighelp %s receipt ledger read failed: %s", mode, _safe_error(error)
                 )
                 continue
             if not pending:
@@ -550,7 +550,7 @@ class BighelpService:
                 with lease:
                     results = receipts_fn([item["receipt_id"] for item in pending])
             except Exception as error:
-                logger.warning("bighelp %s receipt reconciliation failed: %s", mode, _safe_error(error))
+                logger.warning("Bighelp %s receipt reconciliation failed: %s", mode, _safe_error(error))
                 continue
             by_id = {item["receipt_id"]: item for item in pending}
             for receipt_id, receipt in results.items():
@@ -615,11 +615,11 @@ class BighelpService:
             if provider is not None:
                 return provider
             if mode == "managed":
-                raise ValueError("Complete BuzzKit notification setup in bighelp before sending alerts")
+                raise ValueError("Complete BuzzKit notification setup in Bighelp before sending alerts")
             elif mode == "direct":
                 provider = ApnsPushProvider(load_apns_config(self.store.load_apns_config() or {}))
             else:
-                raise ValueError("bighelp provider mode must be managed or direct")
+                raise ValueError("Bighelp provider mode must be managed or direct")
             self._reset_provider_bookkeeping_locked(provider)
             self._providers[mode] = provider
             return provider
@@ -863,7 +863,7 @@ class BighelpService:
                     last_recovery_scan = now
                 except Exception as error:
                     if not self._closing:
-                        logger.warning("bighelp background reconciliation failed: %s", _safe_error(error))
+                        logger.warning("Bighelp background reconciliation failed: %s", _safe_error(error))
                 continue
             try:
                 if item is None:
@@ -877,7 +877,7 @@ class BighelpService:
                     # are persisted by deliver where possible; this catch is
                     # the final containment boundary for worker continuity.
                     logger.warning(
-                        "bighelp queued delivery failed: %s", _safe_error(error)
+                        "Bighelp queued delivery failed: %s", _safe_error(error)
                     )
             finally:
                 self._queue.task_done()
@@ -963,7 +963,7 @@ class BighelpService:
                             )
             except Exception as error:
                 logger.warning(
-                    "bighelp deferred Live Activity serialization failed for %s: %s",
+                    "Bighelp deferred Live Activity serialization failed for %s: %s",
                     activity_id,
                     _safe_error(error),
                 )
@@ -984,7 +984,7 @@ class BighelpService:
                     self.update_live_activities(**item)
                 except Exception as error:
                     logger.warning(
-                        "bighelp Live Activity update skipped: %s",
+                        "Bighelp Live Activity update skipped: %s",
                         _safe_error(error),
                     )
             finally:
@@ -996,7 +996,7 @@ def _safe_error(error: Exception) -> str:
         return f"Push provider error {error.status}: {error.code}"
     if isinstance(error, ValueError):
         return str(error)[:500]
-    return f"bighelp delivery failed: {type(error).__name__}"
+    return f"Bighelp delivery failed: {type(error).__name__}"
 
 
 def _live_activity_phase(value: Any) -> str:
@@ -1088,14 +1088,14 @@ def _validate_endpoint(provider: str, endpoint_id: str) -> None:
         if len(value) < 64 or len(value) > 200 or any(character not in "0123456789abcdefABCDEF" for character in value):
             raise ValueError("Direct devices require a native APNs token")
     else:
-        raise ValueError("bighelp device provider must be managed or direct")
+        raise ValueError("Bighelp device provider must be managed or direct")
 
 
 def _validate_device_routing(device_id: str, groups: list[str]) -> None:
     verdict = validate_target(f"device:{device_id}")
     if verdict is not True:
-        raise ValueError(f"Invalid bighelp device ID: {verdict}")
+        raise ValueError(f"Invalid Bighelp device ID: {verdict}")
     for group in groups:
         verdict = validate_target(f"group:{group}")
         if verdict is not True:
-            raise ValueError(f"Invalid bighelp group ID: {verdict}")
+            raise ValueError(f"Invalid Bighelp group ID: {verdict}")

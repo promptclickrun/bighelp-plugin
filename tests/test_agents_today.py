@@ -315,7 +315,7 @@ class AgentsTodayTests(unittest.TestCase):
             (old.home / f"state.db{suffix}").unlink(missing_ok=True)
         with closing(sqlite3.connect(old.home / "state.db")) as db:
             db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL)")
-            db.execute("INSERT INTO sessions VALUES (?, 'bighelp', ?)", (BOT_CHAT, SINCE + 5))
+            db.execute("INSERT INTO sessions VALUES (?, 'Bighelp', ?)", (BOT_CHAT, SINCE + 5))
             db.commit()
         self.assertEqual(self.today(name="old"), {"items": [], "truncated": False})
         old.checkpoint(process_entry("proc_ok", "make", live_owner()))

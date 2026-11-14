@@ -105,10 +105,10 @@ def _pass() -> None:
     try:
         result = link_every_agent()
         if result["linked"] or result["failed"]:
-            logger.info("bighelp plugin links: %d copies linked, %d kept, %d agents unreadable",
+            logger.info("Bighelp plugin links: %d copies linked, %d kept, %d agents unreadable",
                         result["linked"], result["kept"], result["failed"])
     except Exception:
-        logger.warning("bighelp plugin links unavailable")
+        logger.warning("Bighelp plugin links unavailable")
     finally:
         with _state.lock:
             _state.running = False
@@ -135,7 +135,7 @@ def link_plugin_copies(source_root: Path, agent_root: Path) -> dict:
                     _swap(copy, source_root / copy.name)
                 except OSError:
                     reason = "error"
-                    logger.warning("bighelp plugin link not made: swap")
+                    logger.warning("Bighelp plugin link not made: swap")
             if reason is None:
                 linked.append(copy.name)
             else:

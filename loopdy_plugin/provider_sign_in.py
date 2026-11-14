@@ -282,7 +282,7 @@ def _publish_copilot_token(agent_id: str) -> None:
             if (token := _saved_copilot_token(("COPILOT_GITHUB_TOKEN",))) is not None:
                 _publish_env_value(*token)
     except Exception as error:  # noqa: BLE001 - the class name is safe to log, the text isn't
-        logger.warning("bighelp sign-in: publishing copilot failed (%s)", type(error).__name__)
+        logger.warning("Bighelp sign-in: publishing copilot failed (%s)", type(error).__name__)
 
 
 def _hermes_providers() -> set[str] | None:
@@ -552,7 +552,7 @@ class _Session:
                     from hermes_cli.config import save_env_value as save
                 save(variable, token)
         except Exception as error:  # noqa: BLE001 - the class name is safe to log, the text isn't
-            logger.warning("bighelp sign-in: saving %s failed (%s)", self.recipe.provider_id, type(error).__name__)
+            logger.warning("Bighelp sign-in: saving %s failed (%s)", self.recipe.provider_id, type(error).__name__)
             self._end(FAILED, "Hermes couldn't save the sign-in. Try again.")
         else:
             self._end(SIGNED_IN, "")
@@ -607,7 +607,7 @@ class _Session:
         if status == SIGNED_IN:
             with _status_lock:
                 _status_cache.clear()
-        logger.info("bighelp sign-in: %s %s", self.recipe.provider_id, status)
+        logger.info("Bighelp sign-in: %s %s", self.recipe.provider_id, status)
 
     def _stop(self) -> None:
         process = self._process

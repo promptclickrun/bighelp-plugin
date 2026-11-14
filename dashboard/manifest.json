@@ -1,6 +1,6 @@
 {
   "name": "loopdy",
-  "label": "bighelp",
+  "label": "Bighelp",
   "description": "The bighelp app's routes on this Hermes host: native features, notifications and approvals.",
   "icon": "MessageSquare",
   "version": "3.54.0",

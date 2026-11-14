@@ -87,7 +87,7 @@ def _dashboard_chats() -> dict[str, dict[str, bool]]:
                 rows.append((str(sid), str(session.get("session_key") or ""), bool(session.get("running")),
                              mirrored.get("method") if isinstance(mirrored, dict) else None))
     except Exception:
-        logger.debug("bighelp agents activity: dashboard chats unreadable")
+        logger.debug("Bighelp agents activity: dashboard chats unreadable")
         return {}
     requests = sys.modules.get("tui_gateway.server_requests")
     approvals = sys.modules.get("tools.approval")
@@ -102,7 +102,7 @@ def _dashboard_chats() -> dict[str, dict[str, bool]]:
             if not waiting and callable(getattr(approvals, "has_blocking_approval", None)):
                 waiting = bool(approvals.has_blocking_approval(key))
         except Exception:
-            logger.debug("bighelp agents activity: open requests unreadable")
+            logger.debug("Bighelp agents activity: open requests unreadable")
         entry = chats.setdefault(key, {"running": False, "waiting": False})
         entry["running"] = entry["running"] or running
         entry["waiting"] = entry["waiting"] or waiting
@@ -256,7 +256,7 @@ def activity(profiles: Iterable[str], *, background: bool = False,
             try:
                 value = _agent(profile, home, dashboard, moment, background)
             except (OSError, sqlite3.Error):
-                logger.warning("bighelp agents activity read failed: storage")
+                logger.warning("Bighelp agents activity read failed: storage")
                 value = None
             with _cache_lock:
                 if len(_cache) >= 4 * MAX_AGENTS:

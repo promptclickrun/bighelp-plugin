@@ -63,7 +63,7 @@ class StoreTests(unittest.TestCase):
         self.store.brief_owner(CHAT)
         self.store.note(CHAT, SAM, "", now=200)
         self.assertEqual(self.store.speaker_note(CHAT, now=201),
-                         "[bighelp] This message is from someone who hasn't saved a name in the bighelp app.")
+                         "[Bighelp] This message is from someone who hasn't saved a name in the Bighelp app.")
 
     def test_a_rename_after_the_brief_is_announced(self):
         self.store.note(CHAT, JUNO, "Juno", now=100)
@@ -133,7 +133,7 @@ class HermesSideTests(unittest.TestCase):
     def test_hook_adds_a_note_only_in_bighelp_chats(self):
         store = people.store_for_profile("default")
         store.note(CHAT, SAM, "Sam")
-        self.assertEqual(people._pre_llm_call(platform="bighelp", session_id=CHAT)["context"][:9], "[bighelp]")
+        self.assertEqual(people._pre_llm_call(platform="bighelp", session_id=CHAT)["context"][:9], "[Bighelp]")
         for platform in ("telegram", "tui", "cron", ""):
             self.assertIsNone(people._pre_llm_call(platform=platform, session_id=CHAT))
         self.assertIsNone(people._pre_llm_call(platform="bighelp", session_id=CHAT, parent_session_id="p"))

@@ -75,7 +75,7 @@ class RoomPresence:
                     (key, *values, seen_at))
                 db.execute("DELETE FROM presence WHERE seen_at < ?", (seen_at - NOTE_LIFETIME_SECONDS,))
         except (OSError, sqlite3.Error):
-            logger.warning("bighelp room presence note failed: storage")
+            logger.warning("Bighelp room presence note failed: storage")
             return False
         return True
 
@@ -98,7 +98,7 @@ class RoomPresence:
                         WHERE seen_at > ? AND seen_at > ? AND {where} ORDER BY seen_at LIMIT ?""",
                     (after, self._clock() - NOTE_LIFETIME_SECONDS, *params, MAX_ROWS)).fetchall()
         except (OSError, sqlite3.Error):
-            logger.warning("bighelp room presence read failed: storage")
+            logger.warning("Bighelp room presence read failed: storage")
             return []
         return [dict(row) for row in rows]
 

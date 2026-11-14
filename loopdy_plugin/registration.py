@@ -87,7 +87,7 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
         from .agent_board import register as register_agent_board
         register_agent_board(ctx)
     except (OSError, ImportError, sqlite3.Error):
-        logger.warning("bighelp agent board unavailable")
+        logger.warning("Bighelp agent board unavailable")
     # Who is writing in each bighelp chat, as the app reports it.
     from .people import register as register_people
     register_people(ctx)
@@ -106,7 +106,7 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
         from .spaces import on_start as spaces_on_start
         spaces_on_start(profile)
     except Exception as error:
-        logger.warning("bighelp spaces start-up check failed: %s", type(error).__name__)
+        logger.warning("Bighelp spaces start-up check failed: %s", type(error).__name__)
     # An agent tells the person something now, when they aren't in the chat.
     from .notify_tool import register as register_notify_tool
     register_notify_tool(ctx)
@@ -132,11 +132,11 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
             from .workflow_api import ensure_on_start
             ensure_on_start()
         except ImportError:
-            logger.debug("bighelp workflows unavailable")
+            logger.debug("Bighelp workflows unavailable")
 
     ctx.register_platform(
         name="loopdy",
-        label="bighelp",
+        label="Bighelp",
         adapter_factory=adapter_factory,
         check_fn=check_requirements,
         validate_config=validate_config,
@@ -144,7 +144,7 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
         required_env=[],
         install_hint=(
             "Only for the legacy push setup: run `hermes bighelp configure-apns`. "
-            "The bighelp app does not need this platform."
+            "The Bighelp app does not need this platform."
         ),
         env_enablement_fn=env_enablement,
         cron_deliver_env_var="LOOPDY_HOME_TARGET",
@@ -200,8 +200,8 @@ def register(ctx: Any, *, service: Any | None = None) -> None:
     )
     ctx.register_cli_command(
         name=CLI_COMMAND,
-        help="Update and inspect the bighelp plugin",
-        description="Manage the bighelp plugin on this Hermes host.",
+        help="Update and inspect the Bighelp plugin",
+        description="Manage the Bighelp plugin on this Hermes host.",
         setup_fn=setup_cli,
         handler_fn=cli_handler,
     )
@@ -284,7 +284,7 @@ def _register_notification_observer(ctx: Any, hook: str, callback: Any) -> None:
             callback(**payload)
         except Exception:
             # Never reflect notification state, payloads, or exception bodies.
-            logger.warning("bighelp tool-start notification observation unavailable")
+            logger.warning("Bighelp tool-start notification observation unavailable")
         # None preserves the tool name, arguments, result, and policy decisions.
         return None
 
@@ -424,7 +424,7 @@ def _queue_live_activity_update(service: Any, **update: Any) -> None:
     if not str(update.get("session_id") or "").strip():
         return
     if not service.enqueue_live_activity_update(**update):
-        logger.warning("bighelp Live Activity update was not queued")
+        logger.warning("Bighelp Live Activity update was not queued")
 
 
 def setup_cli(parser: Any) -> None:
@@ -489,7 +489,7 @@ def setup_cli(parser: Any) -> None:
 
     update = actions.add_parser(
         "update",
-        help="Install the latest bighelp plugin release",
+        help="Install the latest Bighelp plugin release",
     )
     update.add_argument(
         "--restart",
@@ -579,7 +579,7 @@ def handle_cli(
         if health.get("mode") == "managed" and not health.get("configured"):
             # Nothing builds this legacy "managed" provider any more: the app's notifications are
             # managed_notifications.py, counted under "notifications".
-            health = {**health, "detail": "Not used: the bighelp app sets up notifications (see notifications)"}
+            health = {**health, "detail": "Not used: the Bighelp app sets up notifications (see notifications)"}
         _print_json(
             {
                 "devices": [
@@ -640,7 +640,7 @@ def handle_cli(
             raise ValueError(str(verdict))
         _print_json(service.test_notification(target=target, profile=profile))
         return
-    raise ValueError("Unknown bighelp command")
+    raise ValueError("Unknown Bighelp command")
 
 
 def _handle_telemetry_cli(args: Any) -> None:
@@ -751,7 +751,7 @@ def _handle_files_cli(args: Any) -> None:
             )
         else:
             raise WorkspaceFilesError(
-                "INVALID_REQUEST", "Unknown bighelp Files command"
+                "INVALID_REQUEST", "Unknown Bighelp Files command"
             )
     except WorkspaceFilesError as error:
         _print_json(error.envelope())

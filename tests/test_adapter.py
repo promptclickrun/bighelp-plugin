@@ -190,7 +190,7 @@ class AdapterTests(unittest.TestCase):
         service.health = lambda: {
             "configured": True,
             "ready": False,
-            "detail": "No managed bighelp devices are registered",
+            "detail": "No managed Bighelp devices are registered",
             "compatible_devices": 0,
         }
         adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
@@ -307,13 +307,13 @@ class AdapterTests(unittest.TestCase):
 
     def test_a_failed_delivery_is_reported_to_hermes(self) -> None:
         service = _Service()
-        service.deliver = lambda event, *, target: {"error": "No compatible bighelp devices match all"}
+        service.deliver = lambda event, *, target: {"error": "No compatible Bighelp devices match all"}
         adapter = BighelpAdapter(PlatformConfig(enabled=True), service=service)
 
         result = asyncio.run(adapter.send("all", "Update"))
 
         self.assertFalse(result.success)
-        self.assertIn("No compatible bighelp devices", result.error)
+        self.assertIn("No compatible Bighelp devices", result.error)
 
     def test_connect_records_the_gateway_lifecycle_for_plugin_updates(self) -> None:
         loaded = []
@@ -360,7 +360,7 @@ class AdapterTests(unittest.TestCase):
             self.assertFalse(adapter_module.is_connected(PlatformConfig(enabled=False)))
             self.assertEqual(adapter_module.env_enablement(), {
                 "home_target": "device:phone",
-                "home_channel": {"chat_id": "device:phone", "name": "bighelp"},
+                "home_channel": {"chat_id": "device:phone", "name": "Bighelp"},
             })
 
     def test_media_sends_never_reach_a_phone_as_attachments(self) -> None:
@@ -370,7 +370,7 @@ class AdapterTests(unittest.TestCase):
         result = asyncio.run(standalone_send(
             PlatformConfig(enabled=True), "all", "Picture", media_files=["/tmp/fixture.png"], service=service))
 
-        self.assertEqual(result, {"error": "bighelp proactive notifications do not accept attachments"})
+        self.assertEqual(result, {"error": "Bighelp proactive notifications do not accept attachments"})
         self.assertEqual(asyncio.run(adapter.get_chat_info("all")), {"name": "all", "type": "notification"})
         self.assertEqual(service.deliveries, [])
 

@@ -103,7 +103,7 @@ def probe() -> str | None:
         name = type(error).__name__
         if name not in _store_errors_logged:
             _store_errors_logged.add(name)
-            logger.warning("bighelp workflows unavailable: the store can't be opened (%s)", name)
+            logger.warning("Bighelp workflows unavailable: the store can't be opened (%s)", name)
         return "store_unavailable"
     return None
 
@@ -141,7 +141,7 @@ def ensure_on_start() -> None:
             from .workflow_coordinator import ensure_coordinator
             ensure_coordinator(workflows_root())
         except Exception as error:
-            logger.debug("bighelp workflows: coordinator check skipped (%s)", type(error).__name__)
+            logger.debug("Bighelp workflows: coordinator check skipped (%s)", type(error).__name__)
     threading.Thread(target=start, name="bighelp-workflows-ensure", daemon=True).start()
 
 
@@ -419,14 +419,14 @@ def _execute(request: Request, owner: Any, operation: Callable[..., dict], body:
         try:
             result = operation(store, body, Mutation(request_id=request_id, check=check))
         except WorkflowError as error:
-            logger.info("bighelp workflows request refused: %s", error.code)
+            logger.info("Bighelp workflows request refused: %s", error.code)
             raise NativeAPIError(error.status, error.code, error.message) from None
         if starts_work:
             try:
                 from .workflow_coordinator import ensure_coordinator
                 ensure_coordinator(store.root)
             except Exception as error:
-                logger.warning("bighelp workflows: coordinator start failed (%s)", type(error).__name__)
+                logger.warning("Bighelp workflows: coordinator start failed (%s)", type(error).__name__)
         return result
     finally:
         reset_hermes_home_override(token)

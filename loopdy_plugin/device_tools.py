@@ -142,7 +142,7 @@ _GEOFENCES = (
     + _ACCESS.format("Arriving and leaving")
 )
 _ALARMS = (
-    "bighelp's own alarms and timers (iOS 26+; never the Clock app's). create takes a label and "
+    "Bighelp's own alarms and timers (iOS 26+; never the Clock app's). create takes a label and "
     "exactly one of time, date (ISO-8601) or timerSeconds; update replaces the schedule." + _ACCESS.format("Alarms and timers")
 )
 _MUSIC = (
@@ -152,7 +152,7 @@ _MUSIC = (
 )
 _FOCUS = (
     "Read the user's current Focus (active, name, note for agents) to respect it; it can't be changed. active "
-    "false may mean no bighelp filter." + _ACCESS.format("Focus")
+    "false may mean no Bighelp filter." + _ACCESS.format("Focus")
 )
 _SHORTCUTS = (
     "Run an Apple Shortcut the user allowed: list gives the only names you may run; run takes one and optional "
@@ -160,7 +160,7 @@ _SHORTCUTS = (
     + _ACCESS.format("Shortcuts")
 )
 _NAVIGATION = (
-    "Show the user where a setting or page is in bighelp, when they ask where something is or how to find it. "
+    "Show the user where a setting or page is in Bighelp, when they ask where something is or how to find it. "
     "Call places with their words (query), then open the best match's id with a short note on what they are "
     "looking at (bot: an agent id, for a page inside one bot). It only moves between pages and points at "
     "controls; it never changes a setting or taps Save, Send or Delete. Tell the user what you opened."
@@ -216,12 +216,12 @@ def register(ctx: Any) -> None:
         ),
         (
             "iphone_location",
-            "Where the user is now, from their iPhone: latitude, longitude, accuracy in meters, time and nearby address. Needs Location on in bighelp, app open in the foreground; call it only when the request needs where they are. precise false means approximate: a rough area of about horizontalAccuracyMeters, no street.",
+            "Where the user is now, from their iPhone: latitude, longitude, accuracy in meters, time and nearby address. Needs Location on in Bighelp, app open in the foreground; call it only when the request needs where they are. precise false means approximate: a rough area of about horizontalAccuracyMeters, no street.",
             location_schema,
         ),
         (
             "iphone_appearance",
-            "Change how bighelp looks, only when the user asks: get shows the mode, color and the app's color names; "
+            "Change how Bighelp looks, only when the user asks: get shows the mode, color and the app's color names; "
             "set takes mode (system, light or dark) and/or color (a name, or #rrggbb). unknown_color: call get and "
             "pick a name. Works while this chat is open, unless turned off in Settings > Device access.",
             appearance_schema,

@@ -20,7 +20,7 @@ SECTION_ID = "bighelp"
 
 # Hermes caps every plugin's sections together at 8,000 characters.
 CHAT_BRIEF = """\
-You're talking with the user in bighelp, their iPhone, iPad and Vision Pro app for this Hermes host. \
+You're talking with the user in Bighelp, their iPhone, iPad and Vision Pro app for this Hermes host. \
 It's a chat app, not a terminal and not Hermes Desktop.
 - Replies render as Markdown. To send a file, picture or video, put MEDIA:/absolute/path on its own \
 line; it shows in the chat.
@@ -35,7 +35,7 @@ bighelp_render_card contact, place or music component, not a text list. If refus
 category (health, relationships, finance, career, interests, productivity or other). Feed posts can carry \
 files (files: absolute paths).
 - Reminders, check-ins and scheduled updates: create a Hermes cron job for this agent with deliver \
-"local". When it runs, bighelp notifies the user with the run's reply (if they turned on notifications \
+"local". When it runs, Bighelp notifies the user with the run's reply (if they turned on notifications \
 for you); "local" stops Hermes also posting it to another channel. Write the job so its reply is the \
 message, most important words first. Don't deliver to "loopdy"; that's the retired Link inbox.
 - To tell the user something now when they're not in the chat (a long job finished): \
@@ -44,7 +44,7 @@ bighelp_send_notification. Replies already notify them.
 iphone_geofences, iphone_alarms, iphone_music, iphone_focus, iphone_shortcuts: use when asked, app open. \
 One that's off asks the user with a card, so call it; don't send them to Settings. After \
 permission_declined, don't retry it in this chat. Health trends: bighelp_render_chart.
-- iphone_appearance sets bighelp's look (mode, chat color).
+- iphone_appearance sets Bighelp's look (mode, chat color).
 - iphone_navigation opens a page in the app to show where something is: call places with the user's words, \
 then open the best match.
 - Something interactive (a tool, a live dashboard): bighelp_show_app, an HTML page opened from \
@@ -58,9 +58,9 @@ Hermes asks them to approve.
 CHAT_BRIEF_GUIDE = 'Full guide: skill_view("loopdy:bighelp").'
 
 ELSEWHERE_NOTE = """\
-The user also has the bighelp app for this agent. To reach them there later (a reminder, a check-in, a \
-scheduled update), create a Hermes cron job for this agent with deliver "local"; bighelp notifies them \
-with the run's reply if they turned on notifications. For bighelp cards, Feed, Ideas and Goals, see \
+The user also has the Bighelp app for this agent. To reach them there later (a reminder, a check-in, a \
+scheduled update), create a Hermes cron job for this agent with deliver "local"; Bighelp notifies them \
+with the run's reply if they turned on notifications. For Bighelp cards, Feed, Ideas and Goals, see \
 skill_view("loopdy:bighelp").\
 """
 
@@ -70,10 +70,10 @@ _UNATTENDED = frozenset({"cron", "subagent", "kanban", "tool", "bot_room", "webh
 _SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"
 # Folder name, description. Registered as ``loopdy:<folder>``.
 SKILLS = (
-    ("bighelp", "Start here for anything in the bighelp app: where you are, cards, forms, Feed, Ideas "
+    ("bighelp", "Start here for anything in the Bighelp app: where you are, cards, forms, Feed, Ideas "
                 "and Goals, reminders and notifications, secure input and iPhone tools."),
-    ("generative-ui", "Every bighelp card tool, with payload rules and examples."),
-    ("custom-theme-authoring", "Making color themes the bighelp app can import."),
+    ("generative-ui", "Every Bighelp card tool, with payload rules and examples."),
+    ("custom-theme-authoring", "Making color themes the Bighelp app can import."),
 )
 
 
@@ -103,7 +103,7 @@ def _workspace_line(session: Mapping[str, Any]) -> str:
         from . import workspace_root
         workspace = workspace_root.resolve(profile)
     except Exception as error:  # the brief must never fail a turn
-        logger.debug("bighelp workspace brief skipped: %s", type(error).__name__)
+        logger.debug("Bighelp workspace brief skipped: %s", type(error).__name__)
         return ""
     if workspace.origin != workspace_root.HERMES_WORKSPACE:
         return ""
@@ -121,10 +121,10 @@ def register(ctx: Any) -> None:
                            frontmatter={"name": name, "description": description})
     register_section = getattr(ctx, "register_system_prompt_section", None)
     if not callable(register_section):
-        logger.info("bighelp chat brief unavailable: Hermes has no plugin prompt sections")
+        logger.info("Bighelp chat brief unavailable: Hermes has no plugin prompt sections")
         return
     try:
         register_section(SECTION_ID, prompt_section)
     except ValueError:
         # Already registered in this process (another profile scope or a reload).
-        logger.info("bighelp chat brief already registered")
+        logger.info("Bighelp chat brief already registered")

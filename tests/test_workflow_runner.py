@@ -423,7 +423,7 @@ class StageSessionTests(unittest.TestCase):
         return folder
 
     def test_a_stage_session_is_known_by_the_brief_of_a_live_attempt(self):
-        brief = "# Workflow stage: Draft\n\nYou are one stage of the bighelp workflow \"Notes\" (run 1).\n"
+        brief = "# Workflow stage: Draft\n\nYou are one stage of the Bighelp workflow \"Notes\" (run 1).\n"
         self.attempt(brief)
         self.assertFalse(runner.in_workflow_stage("s-1", environ={}))
         self.assertTrue(runner.in_workflow_stage("s-1", brief, environ={}))

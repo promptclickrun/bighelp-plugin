@@ -180,7 +180,7 @@ class BighelpStore:
             device_id = ""
             group = _identifier(value.split(":", 1)[1], "group_id")
         else:
-            raise ValueError("bighelp target must be all, device:<id>, or group:<id>")
+            raise ValueError("Bighelp target must be all, device:<id>, or group:<id>")
         devices = [
             item
             for item in self.list_devices()
@@ -505,7 +505,7 @@ class BighelpStore:
     def set_provider_mode(self, mode: str) -> None:
         requested = str(mode or "").strip().lower()
         if requested not in {"managed", "direct"}:
-            raise ValueError("bighelp provider mode must be managed or direct")
+            raise ValueError("Bighelp provider mode must be managed or direct")
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO metadata(key, value) VALUES ('provider_mode', ?) "
@@ -1228,7 +1228,7 @@ class BighelpStore:
             or len(set(choices)) != len(choices)
             or not set(choices).issubset({"once", "session", "always", "deny"})
         ):
-            raise ValueError("bighelp approval choices are invalid")
+            raise ValueError("Bighelp approval choices are invalid")
         with self._connect() as connection:
             connection.execute(
                 """
@@ -1251,7 +1251,7 @@ class BighelpStore:
     def respond_approval(self, approval_id: str, choice: str) -> bool:
         normalized = str(choice or "").strip().lower()
         if normalized not in {"once", "session", "always", "deny"}:
-            raise ValueError("bighelp approval response is invalid")
+            raise ValueError("Bighelp approval response is invalid")
         now = int(time.time())
         with self._connect() as connection:
             row = connection.execute(
@@ -2624,14 +2624,14 @@ def _provider_mode(value: Any) -> str:
     if normalized == "relay":
         return "managed"
     if normalized not in {"managed", "direct"}:
-        raise ValueError("bighelp provider mode must be managed or direct")
+        raise ValueError("Bighelp provider mode must be managed or direct")
     return normalized
 
 
 def _device_provider(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     if normalized not in {"managed", "direct", "relay", "legacy_relay"}:
-        raise ValueError("bighelp device provider must be managed, direct, or relay")
+        raise ValueError("Bighelp device provider must be managed, direct, or relay")
     return normalized
 
 

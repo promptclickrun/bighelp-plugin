@@ -101,7 +101,7 @@ def catalog_url() -> str:
     if origin is None:
         if value not in _refused_overrides:  # once: the sign-in poller asks every few seconds
             _refused_overrides.add(value)
-            logger.warning("bighelp catalog address override refused")
+            logger.warning("Bighelp catalog address override refused")
         return DEFAULT_CATALOG_URL
     return origin
 
@@ -341,9 +341,9 @@ def _poll_in_background(home: Path) -> None:
         try:
             wait_for_login(home)
         except CatalogError as error:
-            logger.info("bighelp catalog sign-in stopped: %s", error.code)
+            logger.info("Bighelp catalog sign-in stopped: %s", error.code)
         except Exception:  # noqa: BLE001 - a background thread must never take the host down
-            logger.warning("bighelp catalog sign-in poller failed")
+            logger.warning("Bighelp catalog sign-in poller failed")
         finally:
             with _lock:
                 _pollers.discard(key)
@@ -769,7 +769,7 @@ def _approval_text(template: dict, login: str) -> str:
         lines = [f"Blueprint for the {template['board'].capitalize()} board ({template['category']})"]
         body = template["text"]
     preview = body if len(body) <= APPROVAL_PREVIEW else body[:APPROVAL_PREVIEW] + "…"
-    return (f"Submit this template to the public bighelp Template Catalog as GitHub user @{login}? A reviewer "
+    return (f"Submit this template to the public Bighelp Template Catalog as GitHub user @{login}? A reviewer "
             "reads it first. If it's approved, anyone can see it, with your GitHub name.\n\n"
             + "\n".join(lines) + "\n\n" + preview)
 
@@ -783,7 +783,7 @@ def _consent(template: dict, login: str) -> None:
     try:
         answer = _approve(_approval_text(template, login), f"bighelp-catalog-submit:{digest}")
     except Exception:
-        logger.warning("bighelp catalog submission approval failed")
+        logger.warning("Bighelp catalog submission approval failed")
         raise CatalogError("not_approved", "The approval prompt failed, so nothing was submitted.") from None
     if not isinstance(answer, Mapping) or answer.get("approved") is not True:
         message = answer.get("message") if isinstance(answer, Mapping) else None
@@ -876,7 +876,7 @@ def check_statuses(home: Path | None = None, *, force: bool = False, notify: Not
         try:
             post(receipt)
         except Exception:  # noqa: BLE001 - a Feed failure must not lose the status we just saved
-            logger.warning("bighelp catalog result could not be posted to Feed")
+            logger.warning("Bighelp catalog result could not be posted to Feed")
     return changed
 
 
@@ -891,7 +891,7 @@ _BRIDGE = (" Call it directly when it is in your tool list; when Hermes has hidd
            "tool_describe and tool_call to run this exact tool.")
 
 LOGIN_DESCRIPTION = (
-    "Sign this computer in to the bighelp Template Catalog with GitHub, so you can submit templates for "
+    "Sign this computer in to the Bighelp Template Catalog with GitHub, so you can submit templates for "
     "the user. action 'start' returns a code, a link and a QR picture: show the code, the link, and put the "
     "returned media line on its own line so the QR shows in chat (they tap the link on this device, or scan "
     "the QR with another). They approve on GitHub; sign-in finishes by itself. 'status' says whether "
@@ -906,7 +906,7 @@ LOGIN_PARAMETERS = {
 }
 
 SUBMIT_DESCRIPTION = (
-    "Submit a template to the public bighelp Template Catalog for review, credited to the user's GitHub name. "
+    "Submit a template to the public Bighelp Template Catalog for review, credited to the user's GitHub name. "
     "Only when the user asked for this template to be submitted. The user approves each submission in Hermes' "
     "approval prompt; scheduled and unattended runs can't submit. Templates that hold keys or passwords are "
     "refused. A reviewer reads every submission before anyone else sees it, and the result shows up in the "
@@ -1017,7 +1017,7 @@ def _after_turn(**_payload: Any) -> None:
             return
         threading.Thread(target=check_statuses, args=(home,), name="bighelp-catalog-status", daemon=True).start()
     except Exception:  # noqa: BLE001 - hooks must never break a turn
-        logger.debug("bighelp catalog status check skipped")
+        logger.debug("Bighelp catalog status check skipped")
 
 
 def register(ctx: Any) -> None:
@@ -1039,7 +1039,7 @@ def register(ctx: Any) -> None:
 # MARK: - CLI (`hermes bighelp catalog …`)
 
 def setup_cli(actions: Any) -> None:
-    catalog = actions.add_parser("catalog", help="Sign in to submit templates to the bighelp Template Catalog")
+    catalog = actions.add_parser("catalog", help="Sign in to submit templates to the Bighelp Template Catalog")
     catalog_actions = catalog.add_subparsers(dest="bighelp_catalog_action", required=True)
     catalog_actions.add_parser("login", help="Sign in with GitHub (shows a code, a link and a QR)")
     catalog_actions.add_parser("status", help="Show sign-in and recent submissions")

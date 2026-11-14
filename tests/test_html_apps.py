@@ -99,7 +99,7 @@ class ShowAppTests(ToolCase):
         self.assertEqual(props["app_id"], result["app_id"])
         self.assertEqual(1, result["revision"])
         self.assertEqual("Trip planner", result["card"]["title"])
-        self.assertEqual("An app to open in bighelp: Trip planner.", result["card"]["spoken_summary"])
+        self.assertEqual("An app to open in Bighelp: Trip planner.", result["card"]["spoken_summary"])
         self.assertIn("Open App", result["note"])
         self.assertIn("next message", result["note"])
         app = self.host.store.get(props["app_id"])
@@ -168,7 +168,7 @@ class ShowAppTests(ToolCase):
         self.assertEqual(limit, self.host.store.get(result["app_id"]).html_bytes)
 
     def test_a_chat_whose_app_cant_draw_apps_is_refused(self):
-        update = "This chat's bighelp app can't show apps. Ask the person to update bighelp."
+        update = "This chat's Bighelp app can't show apps. Ask the person to update Bighelp."
         self.assertEqual(update, self.assert_refused(self.host.call(
             "bighelp_show_app", {"title": "T", "description": "D", "html": PAGE}, session=OTHER_CHAT),
             "apps_unavailable"))

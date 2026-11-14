@@ -24,8 +24,8 @@ from loopdy_plugin.native_device_tools import NativeDeviceToolHub
 
 DECLINED_NOTE = ("The person chose not to turn on this iPhone tool in this chat. Answer without it, and don't "
                  "call it again in this chat unless they ask.")
-DENIED_NOTE = ("iOS didn't allow bighelp to use this. The person can allow it in the iPhone's Settings app under "
-               "bighelp, then ask again.")
+DENIED_NOTE = ("iOS didn't allow Bighelp to use this. The person can allow it in the iPhone's Settings app under "
+               "Bighelp, then ask again.")
 TIMEOUT_NOTE = "Nobody answered the request to turn on this iPhone tool. Ask the person if they want to try again."
 
 

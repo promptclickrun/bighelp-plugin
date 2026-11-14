@@ -277,7 +277,7 @@ class MyTemplatesStore:
     @staticmethod
     def _skip(reason: str) -> None:
         # A fixed code only: file names and contents stay on the computer.
-        logger.warning("bighelp saved template skipped: %s", reason)
+        logger.warning("Bighelp saved template skipped: %s", reason)
         return None
 
     def _write(self, name: str, encoded: bytes) -> None:

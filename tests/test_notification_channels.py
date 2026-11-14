@@ -85,7 +85,7 @@ class ChannelAlertTests(unittest.TestCase):
         self.assertEqual(self.alerted(), [])
         for turn, session in enumerate(("chat-1", "old-1", "room-1")):
             self.reply(session, turn=f"turn-{turn}")
-        self.assertEqual(len(self.alerted()), 3, "bighelp, an older bighelp build's chat and a Group Chat")
+        self.assertEqual(len(self.alerted()), 3, "Bighelp, an older Bighelp build's chat and a Group Chat")
 
     def test_questions_and_approvals_follow_their_channel(self):
         grant = dict(self.grants[self.grant_id])

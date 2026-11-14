@@ -71,21 +71,21 @@ def main(argv: list[str] | None = None) -> int:
             manager,
             args.operation_id,
             "blocked",
-            "Another process owns the bighelp plugin installation lock.",
+            "Another process owns the Bighelp plugin installation lock.",
         )
     except UpdateBlocked:
         _transition_if_possible(
             manager,
             args.operation_id,
             "blocked",
-            "The bighelp plugin update was blocked before installation. Review the host with Plugin Doctor.",
+            "The Bighelp plugin update was blocked before installation. Review the host with Plugin Doctor.",
         )
     except Exception:
         _transition_if_possible(
             manager,
             args.operation_id,
             "failed",
-            "The bighelp plugin update failed. The previous installation remains available for recovery.",
+            "The Bighelp plugin update failed. The previous installation remains available for recovery.",
         )
     finally:
         if args.service_label and sys.platform == "darwin":
@@ -116,7 +116,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "resolving",
-            "Finding the latest bighelp plugin release.",
+            "Finding the latest Bighelp plugin release.",
         )
         target, version = _resolve_latest_release(manager.hermes_home)
         # Never move a host backwards: a checkout at or past the latest release stays.
@@ -127,7 +127,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "resolved",
-            f"The latest bighelp plugin release is {version}.",
+            f"The latest Bighelp plugin release is {version}.",
             target_revision=target,
         )
         operation = manager._worker_operation(operation_id)
@@ -140,7 +140,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "up_to_date",
-            "The installed and active bighelp plugin already match the latest revision.",
+            "The installed and active Bighelp plugin already match the latest revision.",
         )
         return
 
@@ -148,7 +148,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "validating_installation",
-            "Validating the current bighelp plugin installation.",
+            "Validating the current Bighelp plugin installation.",
         )
 
         staging_root = manager.data_root / "staging"
@@ -167,7 +167,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             manager._worker_transition(
                 operation_id,
                 "backing_up",
-                "Saving the previous bighelp plugin installation for recovery.",
+                "Saving the previous Bighelp plugin installation for recovery.",
                 prior_revision=prior_revision,
                 backup_path=str(backup_root),
             )
@@ -176,7 +176,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
             manager._worker_transition(
                 operation_id,
                 "installing",
-                "Installing the validated bighelp plugin revision.",
+                "Installing the validated Bighelp plugin revision.",
             )
             _install_revision(manager, target)
 
@@ -185,7 +185,7 @@ def _run_operation(manager: PluginUpdateManager, operation_id: str) -> None:
         manager._worker_transition(
             operation_id,
             "installed",
-            "The bighelp plugin update is installed.",
+            "The Bighelp plugin update is installed.",
         )
 
     operation = manager._worker_operation(operation_id)
@@ -236,20 +236,20 @@ def _latest_release_tag() -> str:
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             if response.status != 200:
-                raise UpdateFailed("Could not read the latest bighelp plugin release")
+                raise UpdateFailed("Could not read the latest Bighelp plugin release")
             body = response.read(_MAX_RELEASE_BYTES + 1)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        raise UpdateFailed("Could not read the latest bighelp plugin release") from exc
+        raise UpdateFailed("Could not read the latest Bighelp plugin release") from exc
     if len(body) > _MAX_RELEASE_BYTES:
-        raise UpdateFailed("The latest bighelp plugin release is too large to read")
+        raise UpdateFailed("The latest Bighelp plugin release is too large to read")
     try:
         release = json.loads(body)
     except ValueError as exc:
-        raise UpdateFailed("The latest bighelp plugin release is unreadable") from exc
+        raise UpdateFailed("The latest Bighelp plugin release is unreadable") from exc
     tag = release.get("tag_name") if isinstance(release, dict) else None
     if (not isinstance(tag, str) or not _RELEASE_TAG.fullmatch(tag)
             or release.get("draft") is not False or release.get("prerelease") is not False):
-        raise UpdateFailed("The latest bighelp plugin release is invalid")
+        raise UpdateFailed("The latest Bighelp plugin release is invalid")
     return tag
 
 
@@ -262,7 +262,7 @@ def _resolve_latest_release(hermes_home: Path) -> tuple[str, str]:
         env=_process_env(hermes_home, git=True),
     )
     if result.returncode != 0:
-        raise UpdateFailed("Could not resolve the latest bighelp plugin release")
+        raise UpdateFailed("Could not resolve the latest Bighelp plugin release")
     refs: dict[str, str] = {}
     for line in result.stdout.splitlines():
         fields = line.split()
@@ -271,7 +271,7 @@ def _resolve_latest_release(hermes_home: Path) -> tuple[str, str]:
     # An annotated tag lists the commit it points at as the peeled ("^{}") entry.
     revision = refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}", "")
     if not _REVISION.fullmatch(revision):
-        raise UpdateFailed("The latest bighelp plugin release has no valid commit")
+        raise UpdateFailed("The latest Bighelp plugin release has no valid commit")
     return revision, _RELEASE_TAG.fullmatch(tag).group(1)
 
 
@@ -350,7 +350,7 @@ def _recognized_installation(manager: PluginUpdateManager) -> tuple[str, str, st
     # against the authoritative app repository at the recorded commit.
     if parsed.scheme == "file" and subdir == "plugins/loopdy":
         return revision, APP_SOURCE_URL, subdir
-    raise UpdateBlocked("Installed bighelp source is unrecognized")
+    raise UpdateBlocked("Installed Bighelp source is unrecognized")
 
 
 def _is_github_repository(value: str, repositories: tuple[str, ...]) -> bool:
@@ -376,7 +376,7 @@ def _verify_installed_tree(
         _checkout_revision(source_url, revision, repository, manager.hermes_home)
         reference = repository / subdir if subdir else repository
         if _tree_digest(reference) != _tree_digest(manager.plugin_root):
-            raise UpdateBlocked("Installed bighelp files are locally modified")
+            raise UpdateBlocked("Installed Bighelp files are locally modified")
 
 
 def _checkout_revision(
@@ -412,7 +412,7 @@ def _validate_staged_plugin(plugin_root: Path, hermes_home: Path) -> None:
     except OSError as exc:
         raise UpdateBlocked("Staged plugin manifest is unavailable") from exc
     if not re.search(r"(?m)^name:\s*loopdy\s*$", manifest_text):
-        raise UpdateBlocked("Staged plugin identity is not bighelp")
+        raise UpdateBlocked("Staged plugin identity is not Bighelp")
 
     # Added privileges require an attended host decision before replacing code.
     try:

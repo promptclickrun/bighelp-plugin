@@ -141,7 +141,7 @@ def register(ctx: Any) -> bool:
         schema={
             "name": "bighelp_react_to_message",
             "description": (
-                "React to the person's message in the bighelp app with one emoji, the way "
+                "React to the person's message in the Bighelp app with one emoji, the way "
                 "you'd tapback in iMessage: something funny gets a 😂, good news or warmth a "
                 "❤️, a plan you're on board with a 👍. If a reaction says it all it can be the "
                 "whole reply: then reply with just [SILENT] and nothing else, and the app shows "

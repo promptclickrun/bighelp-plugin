@@ -36,7 +36,7 @@ _BodyT = TypeVar("_BodyT", bound=BaseModel)
 
 
 def _error_response(error: NativeAPIError) -> JSONResponse:
-    logger.warning("bighelp native request rejected: %s", error.code)
+    logger.warning("Bighelp native request rejected: %s", error.code)
     return JSONResponse(status_code=error.status, content={"error": {
         "code": error.code, "message": error.message,
         "retryable": error.status == 503, "details": getattr(error, "details", None) or {},
@@ -73,7 +73,7 @@ class _NativeRoute(APIRoute):
             except Exception as error:
                 # Auth providers and storage may include secrets/paths in exception
                 # text; the class name is fixed and safe to log.
-                logger.error("bighelp native request failed: native_service_unavailable (%s)",
+                logger.error("Bighelp native request failed: native_service_unavailable (%s)",
                              type(error).__name__)
                 _report_error(503, "native_service_unavailable")
                 return _error_response(NativeAPIError(503, "native_service_unavailable",
@@ -276,7 +276,7 @@ def _record_serving_runtime(profile: str | None) -> None:
         from .plugin_update import production_manager
         production_manager(profile).record_runtime_loaded()
     except Exception:  # update status can fail closed; the app's connection never does
-        logger.warning("bighelp plugin update status unavailable")
+        logger.warning("Bighelp plugin update status unavailable")
 
 
 @router.get("/context")
@@ -288,11 +288,11 @@ async def context(request: Request) -> Response:
     try:
         durable_sessions.install()
     except Exception:  # never let it fail the context
-        logger.warning("Durable bighelp sessions unavailable")
+        logger.warning("Durable Bighelp sessions unavailable")
     try:
         plugin_links.refresh_in_background()
     except Exception:
-        logger.warning("bighelp plugin links unavailable")
+        logger.warning("Bighelp plugin links unavailable")
     if request.query_params:
         raise NativeAPIError(422, "invalid_request", "Native context takes no query or body.")
     async for chunk in request.stream():
@@ -1076,7 +1076,7 @@ def _skills_import(body: _SkillImport) -> dict:
         raise NativeAPIError(error.status, error.code, error.message, error.details) from None
     except Exception as error:
         # Hermes' writers may carry host paths in their text; only the class name is logged.
-        logger.error("bighelp skill import failed: skill_import_failed (%s)", type(error).__name__)
+        logger.error("Bighelp skill import failed: skill_import_failed (%s)", type(error).__name__)
         raise NativeAPIError(503, "skill_import_failed", "The skill couldn't be added. Nothing was changed.") from None
 
 
@@ -1113,7 +1113,7 @@ def _vault_link(profile: str | None, body: _VaultLink) -> dict:
     except VaultLinkError as error:
         raise NativeAPIError(error.status, error.code, error.message, error.details) from None
     except Exception as error:
-        logger.error("bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
+        logger.error("Bighelp vault link failed: vault_unavailable (%s)", type(error).__name__)
         raise NativeAPIError(503, "vault_unavailable", "This computer's vault can't be opened.") from None
 
 
@@ -1171,7 +1171,7 @@ def _live_alerts_call(operation, *args, **kwargs):
     except ManagedNotificationError as error:
         # The app only hears "unavailable"; the host owner needs the fixed cause (a folder anyone else
         # can open, a key that isn't valid), so it goes to the log and to host telemetry.
-        logger.warning("bighelp live alerts unavailable: %s", error.code)
+        logger.warning("Bighelp live alerts unavailable: %s", error.code)
         _report_error(503, error.code)
         raise NativeAPIError(503, "live_alerts_unavailable", "Instant alerts are unavailable.") from None
 
@@ -1765,7 +1765,7 @@ def _spaces_list(body: _SpacesList) -> dict:
             agents[agent] = "profile_not_found" if error.code == "profile_not_found" else "unavailable"
             continue
         except Exception as error:  # one bot's locked or broken store never fails the others
-            logger.warning("bighelp spaces: one agent's spaces couldn't be listed (%s)", type(error).__name__)
+            logger.warning("Bighelp spaces: one agent's spaces couldn't be listed (%s)", type(error).__name__)
             agents[agent] = "unavailable"
             continue
         agents[agent] = "ok"

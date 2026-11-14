@@ -187,8 +187,8 @@ class _Lapse:
     askable: frozenset[str] = frozenset()
 
 
-_CONTRACT_PREFIX = "bighelp device tool "
-PHONE_UNAVAILABLE_NOTE = "bighelp isn't open on the phone right now. Ask the person to open bighelp, then try again."
+_CONTRACT_PREFIX = "Bighelp device tool "
+PHONE_UNAVAILABLE_NOTE = "Bighelp isn't open on the phone right now. Ask the person to open Bighelp, then try again."
 # The phone refuses contacts.create and calendar.create in a chat holding the person's picture (docs/IMAGE_DRAFTS.md).
 REVIEW_REQUIRED_NOTE = ("Something read from a picture is saved only after the person reviews it. Make a draft "
                         "with bighelp_draft_contact or bighelp_draft_event instead. Don't try again with this tool.")
@@ -196,8 +196,8 @@ REVIEW_REQUIRED_NOTE = ("Something read from a picture is saved only after the p
 PERMISSION_NOTES = {
     "permission_declined": ("The person chose not to turn on this iPhone tool in this chat. Answer without it, "
                             "and don't call it again in this chat unless they ask."),
-    "permission_denied": ("iOS didn't allow bighelp to use this. The person can allow it in the iPhone's Settings "
-                          "app under bighelp, then ask again."),
+    "permission_denied": ("iOS didn't allow Bighelp to use this. The person can allow it in the iPhone's Settings "
+                          "app under Bighelp, then ask again."),
     "permission_timeout": ("Nobody answered the request to turn on this iPhone tool. Ask the person if they want "
                            "to try again."),
 }
@@ -580,7 +580,7 @@ class NativeDeviceToolHub:
                 self._retire(channel, keep=True)
                 self.channels.pop(channel.channel_id, None)
             if held:
-                logger.info("bighelp native device channel replaced: the same phone reconnected")
+                logger.info("Bighelp native device channel replaced: the same phone reconnected")
             if len(self.channels) >= MAX_CHANNELS:
                 raise NativeDeviceToolError("channel_capacity", status=503)
             channel = _Channel(
@@ -690,7 +690,7 @@ class NativeDeviceToolHub:
             lapse = self._recent_lapse(profile, session_id)
             if lapse is None:
                 # Fixed words only: the agent, chat and call are the person's.
-                logger.warning("bighelp phone tool call failed: phone_unavailable (no_channel)")
+                logger.warning("Bighelp phone tool call failed: phone_unavailable (no_channel)")
                 raise NativeDeviceToolError("phone_unavailable")
             return None, lapse
 
@@ -817,10 +817,10 @@ class NativeDeviceToolHub:
             known = self.profile_session_validator(profile, session_id)
         except Exception:
             # Never the error's text: it can name the chat or a path.
-            logger.warning("bighelp phone tool call failed: phone_unavailable (session_check_failed)")
+            logger.warning("Bighelp phone tool call failed: phone_unavailable (session_check_failed)")
             return _failed_result(None, "phone_unavailable")
         if not known:
-            logger.warning("bighelp phone tool call failed: phone_unavailable (session_unknown)")
+            logger.warning("Bighelp phone tool call failed: phone_unavailable (session_unknown)")
             return _failed_result(None, "phone_unavailable")
         if operation in _REVIEWED_CREATES and self._holds_picture(profile, session_id):
             # Something read from a picture is saved only after the person reviews it: answered here, so the
@@ -985,7 +985,7 @@ class NativeDeviceToolHub:
             return bool(self.picture_chat(profile, self._stored_ids(session_id)))
         except Exception as exc:
             # An unreadable history doesn't block a create: the phone's own fence decides.
-            logger.warning("bighelp picture fence skipped: %s", type(exc).__name__)
+            logger.warning("Bighelp picture fence skipped: %s", type(exc).__name__)
             return False
 
     def _stored_ids(self, *session_ids: str) -> list[str]:
@@ -1020,14 +1020,14 @@ class NativeDeviceToolHub:
             picture = device_photos.store_picture(image, directory)
         except (device_photos.PhotoRefusal, OSError, ImportError, ValueError) as exc:
             # Only a fixed code is logged: the picture's bytes and its path are the user's.
-            logger.warning("bighelp phone photo not stored: %s", getattr(exc, "code", type(exc).__name__))
+            logger.warning("Bighelp phone photo not stored: %s", getattr(exc, "code", type(exc).__name__))
             return _failed_result(result.get("requestId"), getattr(exc, "code", "photo_unavailable"))
         if session_id:
             try:
                 # The chat that read it may make a photo draft from it (image_drafts.py).
                 device_photos.record_fetched(directory, self._stored_ids(session_id), picture["path"])
             except (OSError, sqlite3.Error) as exc:
-                logger.warning("bighelp phone photo not recorded: %s", type(exc).__name__)
+                logger.warning("Bighelp phone photo not recorded: %s", type(exc).__name__)
         return {**result, "payload": {**rest, "image": picture}}
 
 
@@ -1087,7 +1087,7 @@ def register_middleware(
     register = getattr(ctx, "register_middleware", None)
     if not callable(register):
         logger.warning(
-            "bighelp native feature %r NOT advertised: the plugin host does not "
+            "Bighelp native feature %r NOT advertised: the plugin host does not "
             "expose a callable register_middleware surface, so the native tool "
             "execution middleware could not be installed. The iOS capability "
             "probe will report the feature as missing even though the plugin "
@@ -1097,14 +1097,14 @@ def register_middleware(
         from hermes_cli.middleware import TOOL_EXECUTION_MIDDLEWARE, VALID_MIDDLEWARE
     except ImportError as exc:
         logger.warning(
-            "bighelp native feature %r NOT advertised: could not import "
+            "Bighelp native feature %r NOT advertised: could not import "
             "hermes_cli.middleware (%s). The host Hermes version predates the "
             "public execution-middleware surface; native device tools are "
             "unavailable until the host is upgraded.", CAPABILITY, exc)
         return False
     if TOOL_EXECUTION_MIDDLEWARE not in VALID_MIDDLEWARE:
         logger.warning(
-            "bighelp native feature %r NOT advertised: %r is not in the host's "
+            "Bighelp native feature %r NOT advertised: %r is not in the host's "
             "VALID_MIDDLEWARE %r. The host's middleware surface does not "
             "include tool execution.", CAPABILITY, TOOL_EXECUTION_MIDDLEWARE,
             tuple(VALID_MIDDLEWARE))
@@ -1150,7 +1150,7 @@ def register_middleware(
         register(TOOL_EXECUTION_MIDDLEWARE, execute)
     except (AttributeError, TypeError, ValueError) as exc:
         logger.warning(
-            "bighelp native feature %r NOT advertised: the host rejected the "
+            "Bighelp native feature %r NOT advertised: the host rejected the "
             "middleware callback registration (%s).", CAPABILITY, exc)
         return False
     on_unload = getattr(ctx, "on_unload", None)
@@ -1171,7 +1171,7 @@ def register_middleware(
 
         on_unload(unload)
         logger.info(
-            "bighelp native feature %r advertised for profile %r: native tool "
+            "Bighelp native feature %r advertised for profile %r: native tool "
             "execution middleware is registered with the host lifecycle.",
             CAPABILITY, profile)
     else:
@@ -1179,7 +1179,7 @@ def register_middleware(
         # phone leases; ``available()`` remains false and the HTTP gate will fail
         # closed.  Keep the callback registration result true for probe contexts.
         logger.warning(
-            "bighelp native feature %r will NOT be advertised to the iOS "
+            "Bighelp native feature %r will NOT be advertised to the iOS "
             "capability probe: the host exposed register_middleware but no "
             "callable on_unload lifecycle, so available() remains false and "
             "native device-tool HTTP requests will fail closed.", CAPABILITY)

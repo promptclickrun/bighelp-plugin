@@ -211,7 +211,7 @@ def _v2_handler(
         )
         if value["component"] == "form":
             if store is None or not hasattr(store, "create_form_request"):
-                raise ValueError("bighelp form storage is unavailable")
+                raise ValueError("Bighelp form storage is unavailable")
             store.create_form_request(
                 request_id=value["action"]["request_id"],
                 profile=value["action"]["owner"]["profile"],
@@ -235,7 +235,7 @@ def _await_handler(*, store: Any, profile: str, now: Callable[[], datetime]):
         if not isinstance(payload, dict) or set(payload) != {"request_id"}:
             raise ValueError("await arguments must contain only request_id")
         if store is None or not hasattr(store, "consume_form_response"):
-            raise ValueError("bighelp form storage is unavailable")
+            raise ValueError("Bighelp form storage is unavailable")
         try:
             value = store.consume_form_response(
                 request_id=payload["request_id"],
@@ -256,7 +256,7 @@ def _template_store(store: Any) -> Any:
         hasattr(store, name)
         for name in ("list_card_templates", "get_card_template")
     ):
-        raise ValueError("bighelp card template storage is unavailable")
+        raise ValueError("Bighelp card template storage is unavailable")
     return store
 
 
@@ -321,7 +321,7 @@ def _template_get_handler(*, store: Any, profile: str):
             template_id=template_id,
         )
         if template is None:
-            raise ValueError("bighelp card template was not found")
+            raise ValueError("Bighelp card template was not found")
         return canonical_card_json({
             "template": template,
             **_template_details(store, profile).get(template["id"], {}),
@@ -349,7 +349,7 @@ def _template_render_handler(
             template_id=template_id,
         )
         if template is None:
-            raise ValueError("bighelp card template was not found")
+            raise ValueError("Bighelp card template was not found")
         values = _validated_template_parameters(template["parameters_schema"], parameters)
         document = _substitute_template_parameters(
             template["document"],
@@ -592,8 +592,8 @@ def _template_tool_description(action: str) -> str:
         if action == "Render" else ""
     )
     return (
-        f"{action} profile-installed bighelp Card templates for the direct callable native "
-        "bighelp renderer. Call it when visible in the current tool list. When progressively "
+        f"{action} profile-installed Bighelp Card templates for the direct callable native "
+        "Bighelp renderer. Call it when visible in the current tool list. When progressively "
         "disclosed, use tool_search, tool_describe, and tool_call to invoke this exact tool."
         + delivery
     )
@@ -621,10 +621,10 @@ def register(
             schema={
                 "name": name,
                 "description": (
-                    f"Render a bounded bighelp {component} display-only card. "
+                    f"Render a bounded Bighelp {component} display-only card. "
                     "The tool call alone does not display the card: include the returned "
                     "display_markdown exactly once in the assistant answer. "
-                    "This is a direct callable native bighelp renderer. Call it directly "
+                    "This is a direct callable native Bighelp renderer. Call it directly "
                     "when it is visible in the current tool list. When Hermes has "
                     "progressively disclosed it and it is absent, use the official "
                     "tool_search, tool_describe, and tool_call bridge to invoke this "
@@ -642,8 +642,8 @@ def register(
             schema={
                 "name": name,
                 "description": (
-                    f"Render a bounded bighelp {component} native v2 card. This is a direct callable "
-                    "native bighelp renderer. The tool call alone does not display the card: include "
+                    f"Render a bounded Bighelp {component} native v2 card. This is a direct callable "
+                    "native Bighelp renderer. The tool call alone does not display the card: include "
                     "the returned display_markdown exactly once in the assistant answer. Call it "
                     "directly when it is visible in the current "
                     "tool list. When Hermes has progressively disclosed it and it is absent, use "
@@ -666,9 +666,9 @@ def register(
         schema={
             "name": "bighelp_render_card",
             "description": (
-                "Render one bounded static native bighelp Card from the finite component catalog. "
+                "Render one bounded static native Bighelp Card from the finite component catalog. "
                 "All displayed values must be embedded in the payload and data_sources must be empty; "
-                "live Card data refresh is unavailable in this release. This is the direct callable native bighelp renderer. "
+                "live Card data refresh is unavailable in this release. This is the direct callable native Bighelp renderer. "
                 "Call this renderer directly when it is visible in the current tool list. When Hermes has progressively "
                 "disclosed it and it is absent, use the official tool_search, tool_describe, "
                 "and tool_call bridge to invoke this exact renderer; do not substitute or "
@@ -686,7 +686,7 @@ def register(
         schema={
             "name": "bighelp_await_form_response",
             "description": (
-                "Read one exact-session bighelp form response that an older bighelp app saved on the host. "
+                "Read one exact-session Bighelp form response that an older Bighelp app saved on the host. "
                 "Current apps send a form's answers as the user's next message instead, so call this only "
                 "if the user says they sent the form and no answers arrived. Call this tool directly; it must "
                 "not be routed through tool_search, tool_describe, or tool_call."

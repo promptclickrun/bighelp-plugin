@@ -75,7 +75,7 @@ def require(payload: Any, session_id: str, renders: Renders) -> bool:
     try:
         declared = known(renders(session_id)) if session_id else frozenset()
     except Exception as error:  # a broken store must refuse, never show an unsupported card
-        logger.debug("bighelp card objects lookup failed: %s", type(error).__name__)
+        logger.debug("Bighelp card objects lookup failed: %s", type(error).__name__)
         declared = frozenset()
     missing = sorted(wanted - declared)
     if missing:

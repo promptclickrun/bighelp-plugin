@@ -1,12 +1,12 @@
-# bighelp plugin installed
+# Bighelp plugin installed
 
 Restart the Hermes gateway and dashboard the way you normally do so the plugin loads.
 
-In the bighelp app, add this host by its address on your local network or Tailscale and sign in with the host's
-own login. No bighelp account, pairing code or public URL is needed. Hermes keeps owning chats, tools and
+In the Bighelp app, add this host by its address on your local network or Tailscale and sign in with the host's
+own login. No Bighelp account, pairing code or public URL is needed. Hermes keeps owning chats, tools and
 approvals.
 
-Notifications are optional: turn them on for this host in the app. With current bighelp builds, notification content is end-to-end encrypted
+Notifications are optional: turn them on for this host in the app. With current Bighelp builds, notification content is end-to-end encrypted
 for your phone.
 
 Host telemetry is on: the plugin sends numbers about turns, tools and alerts, tied to a random host ID (never text, paths or
@@ -17,5 +17,5 @@ Agents: call a visible `bighelp_render_*` tool directly to show a card in the cu
 progressively disclosed it and it isn't visible, use the official tool bridge (`tool_search`, `tool_describe`,
 `tool_call`) to run that exact tool. Examples: `skill_view("loopdy:generative-ui")`.
 
-Agents learn the rest on their own: chats from the app come with a short bighelp brief, and
+Agents learn the rest on their own: chats from the app come with a short Bighelp brief, and
 `skill_view("loopdy:bighelp")` covers cards, Feed, Ideas and Goals, reminders and notifications.

@@ -50,10 +50,10 @@ def release_locks_left_by_restart() -> None:
     try:
         released = release_orphaned_leases(set())
     except Exception:
-        logger.warning("bighelp: chat locks left by a restart were not released (release_failed)")
+        logger.warning("Bighelp: chat locks left by a restart were not released (release_failed)")
         return
     if released:
-        logger.info("bighelp: released %d chat lock(s) left by the previous run of this process", released)
+        logger.info("Bighelp: released %d chat lock(s) left by the previous run of this process", released)
 
 
 def schedule(*, execv=os.execv, delay: float = _DELAY_SECONDS, timer=threading.Timer) -> dict[str, Any]:
@@ -69,7 +69,7 @@ def schedule(*, execv=os.execv, delay: float = _DELAY_SECONDS, timer=threading.T
 
     def restart() -> None:
         global _scheduled
-        logger.warning("bighelp: restarting this Hermes process to load an updated plugin")
+        logger.warning("Bighelp: restarting this Hermes process to load an updated plugin")
         for stream in (sys.stdout, sys.stderr):
             try:
                 stream.flush()
@@ -78,7 +78,7 @@ def schedule(*, execv=os.execv, delay: float = _DELAY_SECONDS, timer=threading.T
         try:
             execv(command[0], command)
         except OSError:
-            logger.exception("bighelp: in-place restart failed; the process keeps running")
+            logger.exception("Bighelp: in-place restart failed; the process keeps running")
             with _lock:
                 _scheduled = False
 

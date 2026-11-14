@@ -352,7 +352,7 @@ def _layout(value: Any, *, now: datetime) -> dict[str, Any]:
         message = (
             "Saved templates hold their values in the layout; data_sources must be empty."
             if error.code == "live_data_unavailable"
-            else f"The layout isn't a valid bighelp card: {error}."
+            else f"The layout isn't a valid Bighelp card: {error}."
         )
         raise _Rejected("invalid_layout", message, card_error=error.code) from None
 

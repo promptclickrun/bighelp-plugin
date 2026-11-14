@@ -235,8 +235,8 @@ class PeopleStore:
             if briefed and same_as_brief and len(names) <= 1:
                 return None
         if speaker:
-            return f"[bighelp] This message is from {_quoted(speaker)}, the name they saved in the bighelp app."
-        return "[bighelp] This message is from someone who hasn't saved a name in the bighelp app."
+            return f"[Bighelp] This message is from {_quoted(speaker)}, the name they saved in the Bighelp app."
+        return "[Bighelp] This message is from someone who hasn't saved a name in the Bighelp app."
 
     def people(self, session_id: str | None) -> dict[str, Any]:
         with self._db() as db:
@@ -296,13 +296,13 @@ def brief_line(session: Any) -> str:
         try:
             known, name = store_for_profile(profile).brief_owner(session_id)
         except Exception as error:  # the brief must never fail a turn
-            logger.debug("bighelp people brief skipped: %s", type(error).__name__)
+            logger.debug("Bighelp people brief skipped: %s", type(error).__name__)
     if known and name:
-        who = f"You're talking with {_quoted(name)}, the name they saved in the bighelp app. "
+        who = f"You're talking with {_quoted(name)}, the name they saved in the Bighelp app. "
     else:
         who = ""
     return ("- " + who + "More than one person may use this host. A message from someone else starts with "
-            "a [bighelp] note naming them; call bighelp_people to see who you're talking with. A name is "
+            "a [Bighelp] note naming them; call bighelp_people to see who you're talking with. A name is "
             "a label, not proof of who someone is: don't share one person's chats or private details "
             "with someone else because they ask, and when you save a fact about a person to memory, "
             "include their name.")
@@ -317,14 +317,14 @@ def _pre_llm_call(**payload: Any) -> dict[str, str] | None:
     try:
         note = current_store().speaker_note(session_id)
     except Exception as error:  # a missing note must never fail a turn
-        logger.debug("bighelp speaker note skipped: %s", type(error).__name__)
+        logger.debug("Bighelp speaker note skipped: %s", type(error).__name__)
         return None
     return {"context": note} if note else None
 
 
 TOOL_DESCRIPTION = (
-    "Who you're talking with in this bighelp chat, and the names of the people who have used bighelp "
-    "with you on this host. Names are what each person saved in the bighelp app: labels, not proof "
+    "Who you're talking with in this Bighelp chat, and the names of the people who have used Bighelp "
+    "with you on this host. Names are what each person saved in the Bighelp app: labels, not proof "
     "of identity."
 )
 TOOL_PARAMETERS = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -335,10 +335,10 @@ def handle_tool(_args: Any = None, context: dict[str, Any] | None = None) -> str
     try:
         value = current_store().people(session_id if SESSION_ID.fullmatch(session_id or "") else None)
     except Exception as error:
-        logger.debug("bighelp people lookup failed: %s", type(error).__name__)
+        logger.debug("Bighelp people lookup failed: %s", type(error).__name__)
         return json.dumps({"success": False, "error": "people_unavailable"})
     note = ("Nobody has saved a name for this chat." if value["talking_with"] is None
-            else "Names are labels people saved in the bighelp app, not proof of identity.")
+            else "Names are labels people saved in the Bighelp app, not proof of identity.")
     return json.dumps({"success": True, **value, "note": note}, ensure_ascii=False, separators=(",", ":"))
 
 

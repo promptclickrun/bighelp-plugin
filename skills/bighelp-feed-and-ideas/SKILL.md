@@ -1,11 +1,11 @@
 ---
 name: bighelp-feed-and-ideas
-description: Use when the user wants regular updates, briefings, news, ideas or goal tracking surfaced in the bighelp app's Feed, Ideas or Goals.
+description: Use when the user wants regular updates, briefings, news, ideas or goal tracking surfaced in the Bighelp app's Feed, Ideas or Goals.
 ---
 
-# bighelp Feed, Ideas and Goals
+# Bighelp Feed, Ideas and Goals
 
-The bighelp app shows three boards next to the chat. You write to them with the
+The Bighelp app shows three boards next to the chat. You write to them with the
 `bighelp_board` tool:
 
 | Board | Action | What it is |

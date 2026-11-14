@@ -182,7 +182,7 @@ def find_runs(calls: Iterable[tuple[str, str]], *, now: Callable[[], float] | No
         try:
             found = _runs_for_agent(path, hashes, clock)
         except (OSError, sqlite3.Error):
-            logger.warning("bighelp agent talk read failed: storage")
+            logger.warning("Bighelp agent talk read failed: storage")
             continue
         per_message: dict[str, int] = {}
         for run in sorted(found, key=lambda value: value["startedAt"], reverse=True):

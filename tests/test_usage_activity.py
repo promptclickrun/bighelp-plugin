@@ -37,7 +37,7 @@ class _Home:
             for index, (started, model, input_tokens, output_tokens, cost, messages) in enumerate(rows):
                 db.execute(
                     "INSERT INTO sessions (id, source, model, started_at, input_tokens, output_tokens, "
-                    "estimated_cost_usd, message_count) VALUES (?, 'bighelp', ?, ?, ?, ?, ?, ?)",
+                    "estimated_cost_usd, message_count) VALUES (?, 'Bighelp', ?, ?, ?, ?, ?, ?)",
                     (f"s{index}", model, started, input_tokens, output_tokens, cost, messages))
 
 

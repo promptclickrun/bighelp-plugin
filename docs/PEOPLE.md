@@ -19,7 +19,7 @@ with one host, agents now know which of them is writing.
      send none, which means basic components only.
 2. The chat brief names whoever started the chat.
 3. Once a second person writes in a chat, each message carries a one-line
-   `[bighelp] This message is from {"person":"Sam"}` note through Hermes'
+   `[Bighelp] This message is from {"person":"Sam"}` note through Hermes'
    `pre_llm_call` hook. Hermes keeps that note only in a hidden copy of the
    message for the model, so the chat and its history show what was typed.
 4. `bighelp_people` tells the agent who's writing now and who else has used
