@@ -396,6 +396,11 @@ bytes and cannot read them. A note that could hold a credential is left out. The
 [`card_detail.py`](../loopdy_plugin/card_detail.py), and `fixtures/contracts/sealed-card-v1-vector.json` is
 shared with the app's tests.
 
+The detail also says what kind of answer waits (`a`): `q` for a question, `c` for a command, `a` for an
+approval to review in the app. `c` means the card's `q` is the whole command: one printable line of at most
+90 characters that was not cut, folded or left out. Only then may the app offer Approve and Deny on the card.
+Every other approval shows its description, and the person reads the command in the app first.
+
 A card with detail gets an update for each new step, at most one every 8 seconds. A new step alone is sent
 with `quiet: true`, which the service sends at low priority, except that one update in every 30 seconds is not
 quiet. A question, a command that waits for approval and the end of the turn go at once. A chat without a key

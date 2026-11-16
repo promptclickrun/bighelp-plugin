@@ -104,6 +104,37 @@ class SealedCardUpdateTests(ManagedNotificationTests):
         self.tool("post_tool_call", "read_file")
         self.assertNotIn("quiet", self.pending())
 
+    def approval(self, hook: str, **fields):
+        self.service.observe(hook, profile="default", session_id="native-session", turn_id="turn-a",
+                             surface="gateway", **fields)
+
+    def test_the_card_says_what_kind_of_answer_waits(self):
+        self.bind()
+        # A question: the person answers in words, so the card only says it is one.
+        self.tool("pre_tool_call", "clarify", question="Send the order for $47.00?")
+        self.assertEqual(self.detail(self.pending())["a"], "q")
+        self.tool("post_tool_call", "clarify")
+        self.assertNotIn("a", self.detail(self.pending()))
+        # A short command is shown whole, so the phone may offer Approve and Deny beside it.
+        self.now += 9
+        self.approval("pre_approval_request", command="rm -rf build/cache", description="recursive delete")
+        detail = self.detail(self.pending())
+        self.assertEqual((detail["q"], detail["a"]), ("rm -rf build/cache", "c"))
+        self.approval("post_approval_response", command="rm -rf build/cache", choice="once")
+        self.assertNotIn("a", self.detail(self.pending()))
+
+    def test_a_command_the_card_cannot_show_whole_is_reviewed_in_the_app(self):
+        self.bind()
+        long = "find . -name '*.log' -mtime +30 -print0 | xargs -0 rm -f && echo done > /tmp/cleanup-finished.txt && date"
+        for command in (long, "echo one\necho two", "echo  two  spaces"):
+            self.approval("pre_approval_request", command=command, description="deletes files")
+            detail = self.detail(self.pending())
+            self.assertEqual((detail["q"], detail["a"]), ("deletes files", "a"), command)
+            self.service.drain_pending()
+            self.approval("post_approval_response", command=command, choice="deny")
+            self.service.drain_pending()
+            self.now += 9
+
     def test_a_question_waits_on_the_card_and_the_reply_shows_at_the_end(self):
         self.bind()
         self.tool("pre_tool_call", "clarify", question="Send the order for $47.00?")

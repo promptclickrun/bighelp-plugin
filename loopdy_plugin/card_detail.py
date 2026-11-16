@@ -12,6 +12,8 @@ The JSON's keys are short because five rows share one 4 KB push:
   v 1 · b turn start · s steps so far · t tool in progress · n its note
   tr last finished steps, newest first: {t tool, c how many in a row, n note}
   say the model's latest words between steps · q the question that waits
+  a what kind of answer q waits for: "q" a question, "c" a command shown whole (the phone
+    may offer Approve and Deny beside it), "a" an approval to review in the app
   p the reply's first lines · h helper goals · cu/cm context tokens used/window · m model
 The phone words the steps itself from the tool names (it has the translations).
 `fixtures/contracts/sealed-card-v1-vector.json` is shared with the app's opener.
@@ -37,6 +39,8 @@ MAX_SEALED_CHARS = 1_200
 _MAX_PLAINTEXT_BYTES = 840
 _AAD_LABEL = "bighelp-card-v1|"
 _TRAIL = 3
+# The most of a command the phone's card shows in full beside Approve.
+_COMMAND_CHARS = 90
 
 
 def key_from(value: Any) -> bytes | None:
@@ -51,7 +55,7 @@ def key_from(value: Any) -> bytes | None:
 
 def new_detail(started: int) -> dict[str, Any]:
     return {"started": int(started), "steps": 0, "tool": "", "note": "", "trail": [], "say": "",
-            "question": "", "preview": "", "goals": {}, "used": None, "window": None, "model": ""}
+            "question": "", "ask": "", "preview": "", "goals": {}, "used": None, "window": None, "model": ""}
 
 
 def _line(value: Any, limit: int) -> str:
@@ -60,6 +64,18 @@ def _line(value: Any, limit: int) -> str:
     text = " ".join(value.split())
     if not text or contains_sensitive_credential(text): return ""
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def whole_command(command: Any) -> str:
+    """The command exactly as the card will show it, or nothing when the card cannot show all of it.
+
+    A yes given on the card is a yes to these characters, so only one short printable line counts:
+    nothing the card would cut, fold or leave out.
+    """
+    if not isinstance(command, str): return ""
+    text = command.strip()
+    if not text or len(text) > _COMMAND_CHARS or not text.isprintable(): return ""
+    return text if _line(text, _COMMAND_CHARS) == text else ""
 
 
 def _site(value: Any) -> str:
@@ -134,7 +150,9 @@ def plaintext(detail: dict[str, Any], phase: str) -> bytes:
         if detail["note"]: body["n"] = detail["note"]
     if detail["trail"]: body["tr"] = [dict(step) for step in detail["trail"]]
     if detail["say"] and not terminal: body["say"] = detail["say"]
-    if phase == "waiting" and detail["question"]: body["q"] = _line(detail["question"], 200)
+    if phase == "waiting" and detail["question"]:
+        body["q"] = _line(detail["question"], 200)
+        if body["q"] and detail.get("ask") in ("q", "c", "a"): body["a"] = detail["ask"]
     if terminal and detail["preview"]: body["p"] = _line(detail["preview"], 280)
     goals = [goal for goal in detail["goals"].values() if goal][:2]
     if goals and not terminal: body["h"] = goals
@@ -152,6 +170,8 @@ def plaintext(detail: dict[str, Any], phase: str) -> bytes:
     for key in ("p", "q"):
         while len(encoded()) > _MAX_PLAINTEXT_BYTES and len(body.get(key, "")) > 40:
             body[key] = body[key][:len(body[key]) // 2].rstrip() + "…"
+    # A command that was cut is no longer the one a yes would run.
+    if body.get("a") == "c" and body.get("q") != detail["question"]: body["a"] = "a"
     if len(encoded()) > _MAX_PLAINTEXT_BYTES:
         # Tool names or what is left in a script that takes many bytes a character: the timer and count alone.
         body = {"v": VERSION, "b": detail["started"], "s": detail["steps"]}

@@ -1637,10 +1637,11 @@ class ManagedNotifications:
                 card_detail.tool_started(work["detail"], payload.get("tool_name"), payload.get("args"))
                 question = _clarify_question(payload.get("args")) if payload.get("tool_name") == "clarify" else ""
                 work["detail"]["question"] = question
+                work["detail"]["ask"] = "q" if question else ""
                 work["phase"] = "waiting" if question else "using_tool"
             elif hook == "post_tool_call":
                 card_detail.tool_finished(work["detail"], payload.get("tool_name"), payload.get("args"))
-                work["detail"]["question"] = ""
+                work["detail"]["question"] = work["detail"]["ask"] = ""
                 work["phase"] = "using_tool"
             work["observed_at"] = int(self.clock())
             phase, active_count, terminal = self._work_projection(work)
@@ -1661,7 +1662,11 @@ class ManagedNotifications:
             if work is None or work["terminal"] or work["outcome"] is not None: return
             work.setdefault("detail", card_detail.new_detail(work["observed_at"]))
             asking = hook == "pre_approval_request"
-            work["detail"]["question"] = self._rich_text(payload.get("description") or payload.get("command")) if asking else ""
+            # A short command is shown whole, so the phone may take the answer on the card. Anything
+            # longer shows its description, and the person reads the command in the app first.
+            command = card_detail.whole_command(payload.get("command")) if asking else ""
+            work["detail"]["question"] = (command or self._rich_text(payload.get("description") or payload.get("command"))) if asking else ""
+            work["detail"]["ask"] = ("c" if command else "a") if asking else ""
             work["phase"] = "waiting" if asking else "using_tool"
             phase, active_count, terminal = self._work_projection(work)
             self._queue_activity(profile, session_id, turn, phase, active_count, terminal, detail=work["detail"])
