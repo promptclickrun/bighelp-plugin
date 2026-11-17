@@ -61,6 +61,8 @@ PROCESS_FEATURES = (
     "native-agent-deliveries-v1",
     "native-chat-live-v1",
     "native-spaces-v1",
+    "native-voice-history-v1",
+    "native-goal-categories-v1",
 )
 
 

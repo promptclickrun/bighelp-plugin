@@ -6,7 +6,8 @@ import unittest
 
 from loopdy_plugin.live_voice_provider import LiveProviderError
 from loopdy_plugin.native_context import NativeContext, NativeAPIError
-from loopdy_plugin.native_voice import NativeVoiceHub, _Offer
+from loopdy_plugin.native_voice import NativeVoiceHub, _Offer, _Transcript
+from loopdy_plugin.voice_history import Snapshot
 from pydantic import ValidationError
 
 SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
@@ -52,8 +53,13 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
             self.mints.append((instructions, voice, key))
             return {"transport": "websocket", "url": "wss://gemini.example/ws", "token": "auth_tokens/one",
                     "model": "models/gemini-3.8-live", "expiresAt": 1_900_000_000}
+        self.snapshot = Snapshot()
+        self.read_chats = []
+        def history(profile, session):
+            self.read_chats.append((profile, session))
+            return self.snapshot
         self.hub = NativeVoiceHub(provider_factory=factory, lease_seconds=30, brief=brief,
-                                  gemini_mint=mint, gemini_key=lambda: "gemini-key")
+                                  gemini_mint=mint, gemini_key=lambda: "gemini-key", history=history)
         self.owner = NativeContext("fixture", "alice", None, "default", ("native-voice-v1",), "runtime")
         self.fields = {"agentId": "default", "sessionId": "stored", "voiceId": "voice_fixture",
                        "provider": "codex_subscription", "voice": "cove", "sdp": SDP}
@@ -196,6 +202,60 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
             await self.hub.offer(self.owner, fields)  # The voice ID is spent.
         await self.hub.offer(self.owner, dict(self.fields, voiceId="voice_next"))  # GPT-Live still starts.
         self.assertEqual(len(self.providers), 1)
+
+    # Every call continues the chat it opens in.
+
+    CHAT = (("user", "My locker code is 4417."), ("assistant", "Got it, 4417."))
+
+    def chat(self, **extra):
+        self.snapshot = Snapshot(tuple({"role": role, "text": text} for role, text in self.CHAT), **extra)
+
+    async def test_gpt_live_starts_with_the_chats_messages_as_items_with_their_roles(self):
+        self.chat(working="Sort my downloads.")
+        await self.offer()
+        kwargs = self.providers[0].create_kwargs
+        self.assertEqual(self.read_chats, [("default", "stored")], "The chat the offer names, read before the call")
+        self.assertEqual([(entry["role"], entry["text"]) for entry in kwargs["context"]], list(self.CHAT))
+        self.assertIn("continues the chat", kwargs["instructions"])
+        self.assertIn('<request>\nSort my downloads.\n</request>', kwargs["instructions"])
+
+    async def test_gemini_gets_the_same_chat_in_its_locked_instruction(self):
+        self.chat(summary="Prefers trains.")
+        await self.hub.offer(self.owner, dict(self.fields, provider="gemini", voice="Charon", sdp=""))
+        instructions = self.mints[0][0]
+        self.assertIn("continues the chat", instructions)
+        self.assertIn("Prefers trains.", instructions)
+        self.assertIn('{"role": "user", "text": "My locker code is 4417."}', instructions)
+        self.assertIn('{"role": "assistant", "text": "Got it, 4417."}', instructions)
+
+    async def test_an_empty_chat_starts_as_before(self):
+        await self.offer()
+        self.assertEqual(self.providers[0].create_kwargs["instructions"], "You are default.")
+        self.assertEqual(self.providers[0].create_kwargs["context"], [])
+
+    async def test_the_oldest_messages_give_way_to_a_long_brief(self):
+        self.hub.brief = lambda *args, **kwargs: "x" * 12_000
+        self.snapshot = Snapshot(tuple({"role": "user", "text": f"{index} " + "y" * 700} for index in range(10)))
+        await self.offer()
+        kwargs = self.providers[0].create_kwargs
+        from loopdy_plugin.live_voice_provider import _instructions
+        self.assertLessEqual(len(_instructions(kwargs["instructions"], kwargs["context"]).encode()), 16_000)
+        self.assertTrue(0 < len(kwargs["context"]) < 10)
+        self.assertTrue(kwargs["context"][-1]["text"].startswith("9 "), "The newest stays")
+
+    def test_a_transcript_names_finished_lines_with_their_roles(self):
+        body = {"agentId": "default", "sessionId": "stored", "voiceId": "voice_fixture",
+                "items": [{"id": "u1", "role": "user", "text": "Hi", "at": 1_794_000_000},
+                          {"id": "a1", "role": "assistant", "text": "Hello", "interrupted": True, "extra": 1}]}
+        items = _Transcript.model_validate(body).model_dump()["items"]
+        self.assertEqual(items[0]["at"], 1_794_000_000.0)
+        self.assertTrue(items[1]["interrupted"])
+        for bad in ({"id": "u1", "role": "system", "text": "Hi"}, {"id": "u1", "role": "user", "text": ""},
+                    {"id": "bad id", "role": "user", "text": "Hi"}):
+            with self.assertRaises(ValidationError):
+                _Transcript.model_validate(dict(body, items=[bad]))
+        with self.assertRaises(ValidationError):
+            _Transcript.model_validate(dict(body, items=[]))
 
     async def test_gemini_failure_reports_the_providers_fixed_reason(self):
         async def refused(*args, **kwargs):

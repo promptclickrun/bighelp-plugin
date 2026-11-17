@@ -9,6 +9,7 @@ from loopdy_plugin.agent_board import (
     ANSWER_MEMORY_SECONDS, GOAL_CATEGORIES, MAX_FILES, TOOL_PARAMETERS, ActivityRecorder, BoardError, BoardStore,
     MAX_ITEMS_PER_KIND, handle_tool, tool_category,
 )
+from loopdy_plugin.goal_categories import MAX_CATEGORIES, CategoryStore, GoalCategoryError
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 32
 
@@ -18,7 +19,8 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.store = BoardStore(self.root / "board")
+        self.categories = CategoryStore(self.root / "goal-categories.json")
+        self.store = BoardStore(self.root / "board", categories=self.categories.list)
 
     def test_posts_copy_images_and_reject_non_images(self):
         image = self.root / "porch.png"
@@ -60,7 +62,8 @@ class AgentBoardStoreTests(unittest.TestCase):
                                            "productivity", "other"))
         goal = self.store.publish("goal", title="Run a 10k", category="Health", item_id="10k")
         self.assertEqual(goal["category"], "health")
-        self.assertEqual(self.store.publish("goal", title="Call more often")["category"], "")
+        self.assertEqual(self.store.publish("goal", title="Call more often")["category"], "other",
+                         "A goal with no category shows under other")
         with self.assertRaises(BoardError):
             self.store.publish("goal", title="Nope", category=3)
         # Republishing without one keeps it; update_goal can move it.
@@ -76,7 +79,7 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual(self.store.publish("idea", title="Plan", category="health")["category"], "")
 
     def test_the_agent_sets_and_sees_goal_categories(self):
-        self.assertEqual(TOOL_PARAMETERS["properties"]["category"]["enum"], list(GOAL_CATEGORIES))
+        self.assertNotIn("enum", TOOL_PARAMETERS["properties"]["category"], "Each computer has its own list")
         created = json.loads(handle_tool({"action": "goal", "title": "Save for Lisbon", "category": "finance",
                                           "id": "lisbon"}, self.store))
         self.assertEqual(created["kind"], "goal")
@@ -88,6 +91,85 @@ class AgentBoardStoreTests(unittest.TestCase):
                                       self.store))
         self.assertNotIn("error", pets, "Off the list is filed, not refused")
         self.assertEqual(self.store.items(("goal",))[0]["category"], "other")
+        self.assertEqual(pets["category"], "other")
+        self.assertIn("no goal category named 'pets'", pets["note"], "The agent is told where the goal went")
+        self.assertNotIn("note", created)
+
+    def test_a_computer_keeps_its_own_goal_categories(self):
+        self.assertEqual([category.id for category in self.categories.list()], list(GOAL_CATEGORIES))
+        homelab = self.categories.add("  Home  lab ", "🖥️")
+        self.assertEqual((homelab.id, homelab.name, homelab.icon), ("home-lab", "Home lab", "🖥️"))
+        self.assertEqual([category.id for category in self.categories.list()][-2:], ["home-lab", "other"],
+                         "Other stays last")
+        # A goal goes in by the category's name or its ID, and the app gets the name and icon to show.
+        goal = self.store.publish("goal", title="Audit the SSH keys", category="HOME LAB", item_id="keys")
+        self.assertEqual((goal["category"], goal["categoryName"], goal["categoryIcon"]), ("home-lab", "Home lab", "🖥️"))
+        # A new name keeps the ID, so the goals stay in it.
+        self.categories.update("home-lab", name="Infrastructure")
+        self.assertEqual(self.store.items(("goal",))[0]["categoryName"], "Infrastructure")
+        self.assertEqual(self.store.update_goal("keys", category="infrastructure")["category"], "home-lab")
+        for name, code in (("infrastructure", "category_exists"), ("", "invalid_category"),
+                           ("x" * 41, "invalid_category"), (7, "invalid_category")):
+            with self.assertRaises(GoalCategoryError) as refused:
+                self.categories.add(name)
+            self.assertEqual(refused.exception.code, code)
+        with self.assertRaises(GoalCategoryError):
+            self.categories.add("Words", "not an emoji")
+        for change in (lambda: self.categories.delete("other"), lambda: self.categories.update("other", name="Misc")):
+            with self.assertRaises(GoalCategoryError) as refused:
+                change()
+            self.assertEqual(refused.exception.code, "category_fixed")
+        with self.assertRaises(GoalCategoryError) as refused:
+            self.categories.delete("nope")
+        self.assertEqual(refused.exception.code, "category_not_found")
+
+    def test_a_removed_categorys_goals_show_under_other_and_come_back_with_it(self):
+        self.categories.add("Home lab")
+        self.store.publish("goal", title="Audit the SSH keys", category="home-lab", item_id="keys")
+        self.store.publish("goal", title="Run a 10k", category="health", item_id="10k")
+        self.categories.delete("home-lab")
+        self.categories.delete("Health")
+        shown = {goal["id"]: goal["category"] for goal in self.store.items(("goal",))}
+        self.assertEqual(shown, {"keys": "other", "10k": "other"})
+        # Naming the category it already has, or none, never moves it: the stored name stays.
+        self.store.publish("goal", title="Audit the SSH keys", category="home-lab", note="Half done", item_id="keys")
+        self.store.update_goal("keys", category="home-lab", note="Done")
+        self.store.update_goal("10k", note="Week 2")
+        # A built-in category someone removed takes no new goals by its words either.
+        self.assertEqual(self.store.publish("goal", title="Gym three times a week")["category"], "other")
+        self.assertEqual(self.categories.add("Home lab").id, "home-lab")
+        self.assertEqual(self.categories.add("health").id, "health")
+        shown = {goal["id"]: goal["category"] for goal in self.store.items(("goal",))}
+        self.assertEqual((shown["keys"], shown["10k"]), ("home-lab", "health"))
+
+    def test_the_agent_changes_the_categories_the_way_the_app_does(self):
+        def tool(**args):
+            return json.loads(handle_tool(args, self.store, self.categories))
+        self.assertEqual([row["id"] for row in tool(action="categories")["categories"]], list(GOAL_CATEGORIES))
+        added = tool(action="add_category", name="Home lab", icon="🖥️")
+        self.assertTrue(added["ok"])
+        self.assertIn({"id": "home-lab", "name": "Home lab", "icon": "🖥️"}, added["categories"])
+        self.assertEqual(tool(action="goal", title="Clean the notes vault", category="Home lab")["category"], "home-lab")
+        renamed = tool(action="update_category", category="Home lab", name="Infrastructure")
+        self.assertIn("Infrastructure", [row["name"] for row in renamed["categories"]])
+        self.assertIn("categories", tool(action="list", kind="goal"))
+        self.assertNotIn("categories", tool(action="list", kind="feed"))
+        self.assertIn("error", tool(action="update_category", category="Infrastructure"))
+        self.assertIn("error", tool(action="remove_category", category="other"))
+        self.assertIn("error", tool(action="add_category", name="infrastructure"))
+        removed = tool(action="remove_category", category="infrastructure")
+        self.assertNotIn("home-lab", [row["id"] for row in removed["categories"]])
+
+    def test_a_category_list_that_cant_be_read_is_the_built_in_one(self):
+        for index in range(MAX_CATEGORIES - len(GOAL_CATEGORIES)):
+            self.categories.add(f"Extra {index}")
+        with self.assertRaises(GoalCategoryError) as refused:
+            self.categories.add("One too many")
+        self.assertEqual(refused.exception.code, "too_many_categories")
+        self.categories.path.write_text('{"categories": [{"id": "../x", "name": "Bad"}, {"id": "ok", "name": "Ok"}, 7]}')
+        self.assertEqual([category.id for category in self.categories.list()], ["ok", "other"])
+        self.categories.path.write_text("not json")
+        self.assertEqual([category.id for category in self.categories.list()], list(GOAL_CATEGORIES))
 
     def test_a_goal_lands_in_the_category_it_means(self):
         # The agent names a category off the list, or puts it where an idea's section goes.
@@ -101,13 +183,13 @@ class AgentBoardStoreTests(unittest.TestCase):
         self.assertEqual(self.store.publish("goal", title="Pay off the credit card")["category"], "finance")
         self.assertEqual(self.store.publish("goal", title="Get the promotion at work")["category"], "career")
         self.assertEqual(self.store.publish("goal", title="Inbox under 20 every Friday")["category"], "productivity")
-        self.assertEqual(self.store.publish("goal", title="Something nice")["category"], "")
+        self.assertEqual(self.store.publish("goal", title="Something nice")["category"], "other")
 
     def test_an_idea_in_a_category_section_becomes_a_goal_in_that_category(self):
         health = self.store.publish("idea", title="Walk after lunch", section="Health")
         money = self.store.publish("idea", title="Cheaper phone plan", section="Money")
         self.assertEqual(self.store.promote_idea(health["id"])["category"], "health")
-        self.assertEqual(self.store.promote_idea(money["id"])["category"], "")
+        self.assertEqual(self.store.promote_idea(money["id"])["category"], "other")
 
     def test_dismissed_items_hide_and_republishing_restores(self):
         item = self.store.publish("goal", title="Package watch", section="tracking", item_id="pkg")
