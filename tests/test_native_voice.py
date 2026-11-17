@@ -217,7 +217,7 @@ class NativeVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.read_chats, [("default", "stored")], "The chat the offer names, read before the call")
         self.assertEqual([(entry["role"], entry["text"]) for entry in kwargs["context"]], list(self.CHAT))
         self.assertIn("continues the chat", kwargs["instructions"])
-        self.assertIn('"Sort my downloads."', kwargs["instructions"])
+        self.assertIn('<request>\nSort my downloads.\n</request>', kwargs["instructions"])
 
     async def test_gemini_gets_the_same_chat_in_its_locked_instruction(self):
         self.chat(summary="Prefers trains.")

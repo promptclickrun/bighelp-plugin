@@ -48,6 +48,12 @@ ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,179}")
 _JSON_PREFIX = "\x00json:"
 _SUMMARY_MARK = "COMPACTION SUMMARY BELOW]"
+# Hermes puts a handoff note for its own model before a summary ("[CONTEXT COMPACTION — REFERENCE ONLY] …
+# do not call tools, and wait for a new user message … avoid repeating it:") and an end marker after it.
+# Neither is for the voice model: the note would tell it to do nothing.
+_SUMMARY_NOTES = ("[CONTEXT COMPACTION", "[CONTEXT SUMMARY]")
+_SUMMARY_NOTE_END = "avoid repeating it:"
+_SUMMARY_END = "--- END OF CONTEXT SUMMARY"
 # What a person wrote (or steered into a running turn); Hermes' notices about its own work are left out.
 _PERSON_KINDS = frozenset({"", "steer"})
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -86,7 +92,7 @@ def snapshot(profile: str, session_id: str, *, now: float | None = None) -> Snap
         path = _state_db(profile)
         if path is None or not SESSION_ID.fullmatch(session_id):
             return Snapshot()
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)) as db:
+        with closing(_read_only(path, timeout=1)) as db:
             chat = _chat(db, profile, session_id)
             if chat is None:
                 return Snapshot()
@@ -130,35 +136,54 @@ def save(profile: str, session_id: str, voice_id: str, items: list[dict[str, Any
         raise VoiceHistoryError("voice_chat_unavailable")
     from hermes_state import SessionDB
     with _lock_for(path):
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)) as db:
-            chat = _chat(db, profile, session_id)
-            if chat is None:
-                raise VoiceHistoryError("voice_chat_unavailable")
-            root, tip = chat
-            if _running(db, (session_id, root, tip), now):
-                raise VoiceHistoryError("voice_chat_busy")
-        ledger = _Ledger(path.parent / "plugin-data" / "loopdy" / "voice_history.sqlite3")
-        saved, known = [], []
-        with closing(SessionDB(db_path=path)) as store:
-            stamps = "timestamp" in inspect.signature(store.append_message).parameters
-            for item in items:
-                if not ledger.claim(root, voice_id, item["id"], now):
-                    known.append(item["id"])
-                    continue
-                text = item["text"].strip()
-                if item["role"] == "assistant" and item.get("interrupted") and not text.endswith("…"):
-                    text += "…"  # The person cut the reply off here.
-                extra = {}
-                if stamps and isinstance(item.get("at"), (int, float)):
-                    extra["timestamp"] = min(now, max(now - MAX_ITEM_AGE_SECONDS, float(item["at"])))
-                try:
-                    store.append_message(tip, item["role"], text, **extra)
-                except Exception:
-                    ledger.release(root, voice_id, item["id"])
-                    raise
-                saved.append(item["id"])
-        ledger.prune(now)
+        try:
+            with closing(_read_only(path, timeout=5)) as db:
+                chat = _chat(db, profile, session_id)
+                if chat is None:
+                    raise VoiceHistoryError("voice_chat_unavailable")
+                root, tip = chat
+                ids = (session_id, root, tip)
+                if _running(db, ids, now):
+                    raise VoiceHistoryError("voice_chat_busy")
+                ledger = _Ledger(path.parent / "plugin-data" / "loopdy" / "voice_history.sqlite3")
+                saved, known = [], []
+                with closing(SessionDB(db_path=path)) as store:
+                    stamps = "timestamp" in inspect.signature(store.append_message).parameters
+                    for item in items:
+                        # Control characters never go into a chat (a line that starts with NUL reads as
+                        # Hermes' own structured content), and a line with no words is no message.
+                        text = _CONTROL.sub(" ", item["text"]).strip()
+                        if not text:
+                            known.append(item["id"])
+                            continue
+                        # A typed message can start a turn between two lines: the rest wait for its end.
+                        if _running(db, ids, time.time()):
+                            raise VoiceHistoryError("voice_chat_busy")
+                        if not ledger.claim(root, voice_id, item["id"], now):
+                            known.append(item["id"])
+                            continue
+                        if item["role"] == "assistant" and item.get("interrupted") and not text.endswith("…"):
+                            text += "…"  # The person cut the reply off here.
+                        extra = {}
+                        if stamps and isinstance(item.get("at"), (int, float)):
+                            extra["timestamp"] = min(now, max(now - MAX_ITEM_AGE_SECONDS, float(item["at"])))
+                        try:
+                            store.append_message(tip, item["role"], text, **extra)
+                        except Exception:
+                            ledger.release(root, voice_id, item["id"])
+                            raise
+                        saved.append(item["id"])
+                ledger.prune(now)
+        except (sqlite3.Error, OSError) as error:
+            # A locked or unreadable store: nothing is known to be lost, so the app tries again.
+            logger.warning("Bighelp voice history: chat not written (%s)", type(error).__name__)
+            raise VoiceHistoryError("voice_chat_busy") from None
     return {"saved": saved, "known": known}
+
+
+def _read_only(path: Path, *, timeout: float) -> sqlite3.Connection:
+    """The agent's store, opened for reading. ``as_uri`` escapes a home folder with ``#``, ``?`` or ``%``."""
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
 
 
 def _state_db(profile: str) -> Path | None:
@@ -216,8 +241,12 @@ def _summary(db: sqlite3.Connection, tip: str) -> str:
         return ""
     row = db.execute("SELECT content FROM messages WHERE session_id = ? AND _compressed_summary = 1 "
                      "ORDER BY id DESC LIMIT 1", (tip,)).fetchone()
-    text = _text(row[0]) if row else ""
-    return text.split(_SUMMARY_MARK, 1)[-1].strip()
+    text = (_text(row[0]) if row else "").split(_SUMMARY_MARK, 1)[-1].strip()
+    if text.startswith(_SUMMARY_NOTES):
+        # The note is one line; its last words are the same in every Hermes that wrote one.
+        end = text.find(_SUMMARY_NOTE_END, 0, 4000)
+        text = text[end + len(_SUMMARY_NOTE_END):] if end >= 0 else text.partition("\n")[2]
+    return text.split(_SUMMARY_END, 1)[0].strip()
 
 
 def _running(db: sqlite3.Connection, ids: tuple[str, ...], now: float) -> bool:

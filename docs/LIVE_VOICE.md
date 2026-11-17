@@ -28,15 +28,16 @@ A call opens in one chat, and it carries that chat on in both directions (`nativ
 
 - **Into the call.** Before the voice model listens, the `offer` reads the chat the app names (`agentId`,
   `sessionId`) from that agent's own `state.db`: its newest messages with their roles, the summary Hermes wrote
-  when it compacted the older part, and the request a turn is still working on. Tool calls, tool results and
-  Hermes' own notices stay out. Every provider gets the same snapshot: up to 16 messages, at most 800 characters
+  when it compacted the older part (without the note and end marker Hermes puts around it for its own model),
+  and the request a turn is still working on. Tool calls, tool results and Hermes' own notices stay out. Every provider gets the same snapshot: up to 16 messages, at most 800 characters
   each and 8,000 bytes together, fenced in the instructions as data with each message's role. On GPT-Live the
   oldest give way first when the brief and the chat don't fit in 16,000 bytes. The brief tells the model to
   carry the chat on: answer from it, don't greet as if it were new, and don't repeat earlier answers.
 - **Back into the chat.** `POST …/voice/transcript` takes the call's finished lines: `voiceId` and up to 32
   `items`, each `{id, role: user|assistant, text (up to 4,000 characters), interrupted, at}`. Each line becomes an
   ordinary message in the chat (on the newest part of a compacted chat), stamped with the time it was said. A
-  reply the person cut off ends with "…". Nothing runs: Hermes adds rows another writer saved to the chat's live
+  reply the person cut off ends with "…". Control characters are taken out, and a line with no words is not
+  saved. A store that can't be written answers `voice_chat_busy`, as a running turn does, so the app tries again. Nothing runs: Hermes adds rows another writer saved to the chat's live
   history at its next turn, so the next typed message knows what was said. Requests the voice model handed over
   are already their own turns in the chat, and are never sent again.
 - **Order and at most once.** The plugin writes only while no turn runs in the chat (Hermes' turn lease, or this

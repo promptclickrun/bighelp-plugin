@@ -452,6 +452,8 @@ async def request(operation: str, request: Request):
     elif operation == "poll":
         value = _HUB.poll(owner, fields, after=body.after)
     elif operation == "transcript":
+        if voice_history.CAPABILITY not in owner.features:
+            raise _reject("voice_history_unavailable", 503)
         # Not tied to a call this process holds: a Gemini call is the phone's, and the words of a call
         # that ended, or whose connection changed, still belong in its chat.
         value = await _save_transcript(fields)
