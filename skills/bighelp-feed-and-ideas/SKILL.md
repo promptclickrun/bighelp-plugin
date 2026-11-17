@@ -53,13 +53,23 @@ The Bighelp app shows three boards next to the chat. You write to them with the
 - **Goals:** create each once with a stable `id` (for example
   `package-hollywood-feed`), then `update_goal` with a fresh `note` whenever it
   changes. Mark `status: done` when it is finished.
-- **Goal categories:** set `category` on every goal to the one that fits best:
-  `health`, `relationships`, `finance`, `career`, `interests`, `productivity`,
-  or `other` when none does. The app groups goals by it. When the user starts
-  from the app's Create a goal list, their message names the category (for
-  example "add it to my Goals under Health"); use exactly that one. To move a
-  goal, `update_goal` with a new `category`. Older plugins have no categories;
-  if the tool refuses `category`, leave it out.
+- **Goal categories:** set `category` on every goal to the one that fits best.
+  A computer starts with `health`, `relationships`, `finance`, `career`,
+  `interests`, `productivity` and `other` (for when none fits), and the user
+  can change that list in the app's Goals. `categories` (and `list`) shows the
+  list this computer has now; name a category by its `id` or its `name`. The
+  app groups goals by it. When the user starts from the app's Create a goal
+  list, their message names the category (for example "add it to my Goals
+  under Health"); use exactly that one. To move a goal, `update_goal` with a
+  new `category`. Older plugins have no categories; if the tool refuses
+  `category`, leave it out.
+- **Changing the categories:** only when the user asks. `add_category` with a
+  `name` and, if you like, one emoji as `icon`; `update_category` with the
+  `category` and its new `name` or `icon`; `remove_category` with the
+  `category`. The list is the computer's, shared by every agent on it. Goals
+  of a removed category show under Other, so say that before you remove one
+  that has goals. Other can't be renamed or removed. If a goal's answer has a
+  `note` that its category isn't on the list, tell the user and offer to add it.
 
 ## Files on a post
 
