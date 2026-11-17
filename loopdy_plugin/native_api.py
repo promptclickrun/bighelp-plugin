@@ -466,6 +466,14 @@ class _BoardLog(_Body):
     limit: StrictInt = Field(default=100, ge=1, le=200)
 
 
+class _BoardCategories(_Body):
+    """One change to this computer's goal categories. The text is checked by ``goal_categories``."""
+    action: Literal["add", "update", "delete"]
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")
+    name: str | None = Field(default=None, max_length=200)
+    icon: str | None = Field(default=None, max_length=64)
+
+
 def _board_response(value: dict, context: NativeContext, request_id: str, maximum: int) -> Response:
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
                          sort_keys=True, allow_nan=False).encode("utf-8")
@@ -478,6 +486,7 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; refresh before retrying.")
     from hermes_cli.profiles import profile_exists
+    from . import goal_categories
     from .agent_board import BoardError, identity, media_payload, session_titles, store_for_profile
 
     if not profile_exists(body.agentId):
@@ -487,6 +496,9 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
         if operation == "list" and isinstance(body, _BoardList):
             result = {"items": store.items(tuple(body.kinds), limit=body.limit,
                                            include_dismissed=body.includeDismissed)}
+            if goal_categories.CAPABILITY in owner.features:
+                # The computer's own list, in its order: the app groups goals and starts new ones by it.
+                result["goalCategories"] = [category.payload() for category in store.categories()]
         elif operation == "update" and isinstance(body, _BoardUpdate):
             result = {"item": store.set_flags(body.itemId, liked=body.liked, dismissed=body.dismissed,
                                               status=body.status, rating=body.rating, reason=body.reason,
@@ -506,6 +518,17 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
             result = {"activity": [{**row, "title": titles.get(row["sessionId"], "")} for row in rows]}
         elif operation == "identity":
             result = identity(body.agentId)
+        elif operation == "categories" and isinstance(body, _BoardCategories):
+            categories = goal_categories.store()
+            if body.action == "add":
+                categories.add(body.name, body.icon)
+            elif body.id is None or (body.action == "update" and body.name is None and body.icon is None):
+                raise NativeAPIError(422, "invalid_request", "The board request is invalid.")
+            elif body.action == "update":
+                categories.update(body.id, name=body.name, icon=body.icon)
+            else:
+                categories.delete(body.id)
+            result = {"goalCategories": [category.payload() for category in categories.list()]}
         elif operation == "approvals" and isinstance(body, _BoardLog):
             rows = store.approvals(body.limit)
             titles = session_titles(body.agentId, [row["sessionId"] for row in rows])
@@ -514,6 +537,10 @@ def _board(request: Request, owner: NativeContext, body: _Body, operation: str) 
             raise NativeAPIError(422, "invalid_request", "The board request is invalid.")
     except BoardError:
         raise NativeAPIError(404, "board_item_unavailable", "That item is no longer available.") from None
+    except goal_categories.GoalCategoryError as error:
+        # The message is for the person: the app shows it under the field.
+        status = {"category_not_found": 404, "categories_unavailable": 503}.get(error.code, 409)
+        raise NativeAPIError(status, error.code, str(error)) from None
     if native_context(request) != owner:
         raise NativeAPIError(412, "context_changed", "The native context changed; reconcile the outcome.")
     return {"agentId": body.agentId, **result}
@@ -555,6 +582,12 @@ async def board_promote(request: Request) -> Response:
 async def board_accept(request: Request) -> Response:
     from .agent_board import ANSWERS_CAPABILITY
     return await _board_request(request, _BoardItem, "accept", MAX_BODY_BYTES, ANSWERS_CAPABILITY)
+
+
+@router.post("/board/categories")
+async def board_categories(request: Request) -> Response:
+    from .goal_categories import CAPABILITY as categories_capability
+    return await _board_request(request, _BoardCategories, "categories", MAX_BODY_BYTES, categories_capability)
 
 
 @router.post("/board/media")

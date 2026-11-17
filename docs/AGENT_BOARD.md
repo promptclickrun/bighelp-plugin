@@ -36,7 +36,7 @@ All take `agentId` and follow the native context/ETag/request-ID contract.
 
 | Route | Body | Returns |
 |---|---|---|
-| `board/list` | `kinds`, `limit`, `includeDismissed` | `items` (goals with `category`) |
+| `board/list` | `kinds`, `limit`, `includeDismissed` | `items` (goals with `category`), and `goalCategories` with `native-goal-categories-v1` |
 | `board/update` | `itemId`, `liked`, `dismissed`, `status` (goals); with feedback: `rating` (`up`/`down`/`none`), `reason` (thumbs down, 120 chars), `read` | `item` |
 | `board/media` | `itemId`, `index` | `mimeType`, base64 `data` |
 | `board/activity` | `limit` | `activity` with Hermes' session `title` |
@@ -60,11 +60,39 @@ With `native-agent-board-goal-categories-v1`:
 
 Goals carry `category`: one of `health`, `relationships`, `finance`, `career`,
 `interests`, `productivity` or `other`, or `""` for none. Agents set it with the
-tool's `goal` and `update_goal` actions; anything outside the list is refused.
-Republishing a goal without a category keeps the one it had. Feed posts and
-ideas always have `""`. Making an idea a goal keeps its `section` as the
-category when the section is one of those names. Goals from before this have no
-category, and the app shows them under Other.
+tool's `goal` and `update_goal` actions. A name outside the list is not refused:
+it becomes the built-in category it means ("Fitness" is `health`), else `other`,
+and the tool's answer says so. Republishing a goal without a category keeps the
+one it had. Feed posts and ideas always have `""`. Making an idea a goal keeps
+its `section` as the category when the section is one of those names. Goals from
+before this have no category, and the app shows them under Other.
+
+With `native-goal-categories-v1`:
+
+Each computer has its own list of goal categories, for every agent on it
+(`goal_categories.py`; the file is `plugin-data/loopdy/goal-categories.json` at
+the Hermes root). Until someone changes it, it is the seven above. A category is
+`id` (lowercase letters, digits and dashes, made from its first name and never
+changed), `name` (40 characters) and `icon` (one emoji, or empty). A computer
+keeps at most 24. `other` is always there, always last, and keeps its name.
+
+- `board/list` also returns `goalCategories`, in the list's order. Each goal
+  carries the `category` it shows under now, with `categoryName` and
+  `categoryIcon`. An app from before this still reads `category`.
+- `board/categories` changes the list: `action` is `add` (`name`, optional
+  `icon`), `update` (`id`, then `name` or `icon`) or `delete` (`id`). It returns
+  the new `goalCategories`. A refusal's message is for the person: 409 for a
+  name in use (`category_exists`), a full list (`too_many_categories`), bad text
+  (`invalid_category`) or a change to `other` (`category_fixed`), 404 for
+  `category_not_found`.
+- Agents change the same list with the tool's `categories`, `add_category`,
+  `update_category` and `remove_category` actions, when the user asks, and name
+  a goal's category by its `id` or its `name`.
+- A goal's stored category is never rewritten when the list changes. A goal
+  whose category was removed shows under `other`; add a category with that name
+  again and its goals are back. Naming the category a goal already has, on
+  `goal` or `update_goal`, keeps it even when the list no longer has it.
+- A renamed category keeps its `id`, so its goals stay in it.
 
 With `native-agent-board-files-v1`:
 

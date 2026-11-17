@@ -23,8 +23,10 @@ import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from . import goal_categories
+from .goal_categories import Category, GoalCategoryError
 from .naming import TOOLSET
 
 logger = logging.getLogger(__name__)
@@ -44,8 +46,9 @@ TOOL_NAME = "bighelp_board"
 KINDS = ("feed", "idea", "goal")
 GOAL_SECTIONS = ("tracking", "goal")
 GOAL_STATUSES = ("active", "done")
-# The app's fixed list, in its order. "other" is the app's "Something else".
-GOAL_CATEGORIES = ("health", "relationships", "finance", "career", "interests", "productivity", "other")
+# The built-in list, in its order: what a computer has until someone changes its own
+# (``goal_categories``). "other" is the app's "Something else".
+GOAL_CATEGORIES = tuple(category.id for category in goal_categories.DEFAULTS)
 MAX_TITLE = 200
 MAX_BODY = 4_000
 MAX_NOTE = 600
@@ -135,17 +138,24 @@ def _infer_category(*texts: Any) -> str:
     return leaders[0] if len(leaders) == 1 else ""
 
 
-def _category(value: Any) -> str:
-    """A goal's category, or "" for none. A name off the list ("Fitness", "Hobbies") becomes the
-    category it means, and anything else is filed under other rather than refused."""
+def _inferred(categories: tuple[Category, ...], *texts: Any) -> str:
+    """The built-in category these words point to, when this computer still has it."""
+    category = _infer_category(*texts)
+    return category if any(category == listed.id for listed in categories) else ""
+
+
+def _category(value: Any, categories: tuple[Category, ...] = goal_categories.DEFAULTS) -> str:
+    """A goal's category, or "" for none: one of this computer's, by ID or by name. A name off the
+    list ("Fitness", "Hobbies") becomes the built-in category it means, and anything else is filed
+    under other rather than refused."""
     if value is None:
         return ""
     if not isinstance(value, str):
         raise BoardError("category must be text.")
-    category = value.strip().lower()
-    if not category or category in GOAL_CATEGORIES:
-        return category
-    return _infer_category(category) or "other"
+    if not value.strip():
+        return ""
+    listed = goal_categories.find(value, categories)
+    return listed.id if listed else _inferred(categories, value.strip().lower()) or goal_categories.OTHER
 
 
 def _image_type(head: bytes) -> tuple[str, str] | None:
@@ -160,8 +170,10 @@ def _image_type(head: bytes) -> tuple[str, str] | None:
 
 
 class BoardStore:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, categories: Callable[[], tuple[Category, ...]] = goal_categories.current):
         self.directory = directory
+        # This computer's goal categories, read at each use: the person or an agent can change them.
+        self.categories = categories
         self.media = directory / "board-media"
         self.path = directory / "board.sqlite3"
         self._lock = threading.RLock()
@@ -250,7 +262,9 @@ class BoardStore:
             status = (status or "active").lower()
             if status not in GOAL_STATUSES:
                 raise BoardError("A goal's status must be active or done.")
-            category = _category(category)
+            categories = self.categories()
+            named = category.strip().lower() if isinstance(category, str) else ""
+            category = _category(category, categories)
         else:
             status = ""
             category = ""
@@ -276,9 +290,12 @@ class BoardStore:
                 raise BoardError("The user said not now to this idea recently. Don't offer it again yet; "
                                  "offer something different.")
             created = existing["created"] if existing else now
+            if kind == "goal" and existing and named and named == existing["category"]:
+                # The category it already has stays, also one this computer no longer lists.
+                category = named
             if kind == "goal" and not category and not (existing and existing["category"]):
                 # No category yet: the goal's own words usually say ("Run a 10k" is health).
-                category = _infer_category(title, body, note)
+                category = _inferred(categories, title, body, note)
             if file_rows is None:
                 file_rows = json.loads(existing["files"]) if existing else []
             db.execute("""INSERT INTO items(id,kind,title,body,icon,section,status,note,links,images,source,category,
@@ -311,7 +328,10 @@ class BoardStore:
             next_status = row["status"] if status is None else str(status).lower()
             if next_status not in GOAL_STATUSES:
                 raise BoardError("A goal's status must be active or done.")
-            next_category = row["category"] if category is None else _category(category)
+            next_category = row["category"]
+            # Naming the category it already has changes nothing, also one this computer no longer lists.
+            if category is not None and not (isinstance(category, str) and category.strip().lower() == next_category):
+                next_category = _category(category, self.categories())
             db.execute("UPDATE items SET note=?, status=?, category=?, updated=? WHERE id=?",
                        (next_note, next_status, next_category, time.time() if now is None else now, item_id))
             return self._item(db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
@@ -374,10 +394,10 @@ class BoardStore:
         if row is None:
             raise BoardError("No idea has that id.")
         # An idea filed under a category's name ("Health") keeps it as a goal.
-        section = row["section"].strip().lower()
+        listed = goal_categories.find(row["section"], self.categories())
         goal = self.publish("goal", title=row["title"], body=row["body"], icon=row["icon"], section="goal",
                             source=row["source"] or "From an idea",
-                            category=section if section in GOAL_CATEGORIES else None, now=now)
+                            category=listed.id if listed else None, now=now)
         self._answer(item_id, "goal", now)
         self.set_flags(item_id, dismissed=True)
         return goal
@@ -417,7 +437,7 @@ class BoardStore:
         with self._db() as db:
             rows = db.execute("""SELECT * FROM items WHERE kind='idea' AND dismissed=1 AND answer!=''
                                  AND answered>=? ORDER BY answered DESC LIMIT ?""", (since, limit)).fetchall()
-        return [self._item(row) for row in rows]
+        return self._items(rows)
 
     def remove(self, item_id: Any) -> bool:
         item_id = _clean(item_id, 64, field="id", required=True)
@@ -436,7 +456,7 @@ class BoardStore:
         with self._db() as db:
             rows = db.execute(f"SELECT * FROM items WHERE {where} ORDER BY created DESC LIMIT ?",
                               (*kinds, limit)).fetchall()
-            return [self._item(row) for row in rows]
+            return self._items(rows)
 
     def image(self, item_id: str, index: int) -> tuple[str, bytes]:
         with self._db() as db:
@@ -561,8 +581,12 @@ class BoardStore:
             for file in self.media.glob(f"{row['id']}-*"):
                 file.unlink(missing_ok=True)
 
-    @staticmethod
-    def _item(row) -> dict:
+    def _items(self, rows) -> list[dict]:
+        categories = self.categories()
+        return [self._item(row, categories) for row in rows]
+
+    def _item(self, row, categories: tuple[Category, ...] | None = None) -> dict:
+        shown = self._shown_category(row, self.categories() if categories is None else categories)
         images = []
         for index, image in enumerate(json.loads(row["images"])):
             images.append({"url": image["url"]} if "url" in image
@@ -579,9 +603,25 @@ class BoardStore:
             "rating": {-1: "down", 1: "up"}.get(row["rating"], "none"), "reason": row["reason"],
             "read": bool(row["read"]), "answer": row["answer"] or "none",
             # When the person answered; 0 for none. The app shows "Started today" under Completed.
-            "answeredAt": int(row["answered"]) if row["answer"] else 0, "category": row["category"],
+            "answeredAt": int(row["answered"]) if row["answer"] else 0,
+            # A goal's category as this computer lists it now, with the name and icon the app shows.
+            "category": shown.id if shown else row["category"],
+            "categoryName": shown.name if shown else "", "categoryIcon": shown.icon if shown else "",
             "createdAt": int(row["created"]), "updatedAt": int(row["updated"]),
         }
+
+    @staticmethod
+    def _shown_category(row, categories: tuple[Category, ...]) -> Category | None:
+        """Where a goal shows: its stored category while this computer lists it; one without a
+        category goes where its words point; anything else is under other. The stored name stays."""
+        if row["kind"] != "goal":
+            return None
+        by_id = {category.id: category for category in categories}
+        stored = row["category"]
+        if stored not in by_id:
+            stored = (not stored and _inferred(categories, row["title"], row["body"], row["note"])) \
+                or goal_categories.OTHER
+        return by_id.get(stored)
 
     # MARK: Activity and approvals
 
@@ -708,7 +748,10 @@ TOOL_DESCRIPTION = (
     "post with that id; 'idea' proposes something you could do for the user; "
     "'goal' adds or updates a Goal (section 'tracking' for things you watch, 'goal' for the user's "
     "own goals) with a short status note and a category; 'update_goal' changes a goal's note or category, "
-    "or marks it done; "
+    "or marks it done; 'categories' lists this computer's goal categories, which the user also manages in "
+    "the app's Goals, and 'add_category' (name, optional icon), 'update_category' (category, then a new "
+    "name or icon) and 'remove_category' (category) change them, only when the user asks; goals of a "
+    "removed category show under Other; "
     "'list' shows recent items with the user's rating (up/down), reason and read state, so you can "
     "update rather than duplicate and post more of what they rate up, plus 'answered': ideas the user "
     "said yes, goal or not now to in the last 30 days; 'remove' deletes one. "
@@ -720,7 +763,8 @@ TOOL_PARAMETERS = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "action": {"type": "string", "enum": ["post", "idea", "goal", "update_goal", "list", "remove"]},
+        "action": {"type": "string", "enum": ["post", "idea", "goal", "update_goal", "list", "remove", "categories",
+                                              "add_category", "update_category", "remove_category"]},
         "id": {"type": "string", "maxLength": 64,
                "description": "Stable id to update an existing post, goal or idea instead of adding a new one."},
         "title": {"type": "string", "maxLength": MAX_TITLE},
@@ -731,10 +775,15 @@ TOOL_PARAMETERS = {
                     "description": "Ideas: a short category like Health or Shopping. Goals: tracking or goal."},
         "note": {"type": "string", "maxLength": MAX_NOTE, "description": "A goal's latest status in one line."},
         "status": {"type": "string", "enum": list(GOAL_STATUSES)},
-        "category": {"type": "string", "enum": list(GOAL_CATEGORIES),
-                     "description": "Goals: always set the one that fits best (a fitness goal is "
-                                    "'health', a budget is 'finance'). The app shows each goal in that "
-                                    "category's section; 'other' only when none fits."},
+        "category": {"type": "string", "maxLength": goal_categories.MAX_NAME,
+                     "description": "Goals: always set the one of this computer's goal categories that fits "
+                                    "best, by id or name. A computer starts with " + ", ".join(GOAL_CATEGORIES)
+                                    + " (a fitness goal is 'health', a budget is 'finance'); 'categories' "
+                                    "lists the ones it has now. The app shows each goal in that category's "
+                                    "section; 'other' only when none fits. For update_category and "
+                                    "remove_category: which category."},
+        "name": {"type": "string", "maxLength": goal_categories.MAX_NAME,
+                 "description": "add_category: the new category's name. update_category: its new name."},
         "images": {"type": "array", "maxItems": MAX_IMAGES, "items": {"type": "string"},
                    "description": "Absolute image file paths on this computer or https URLs."},
         "files": {"type": "array", "maxItems": MAX_FILES, "items": {"type": "string"},
@@ -751,7 +800,25 @@ TOOL_PARAMETERS = {
 }
 
 
-def handle_tool(args: dict, store: BoardStore | None = None) -> str:
+_CATEGORY_ACTIONS = ("categories", "add_category", "update_category", "remove_category")
+
+
+def _change_categories(action: str, args: dict, categories: goal_categories.CategoryStore) -> dict:
+    """The agent's side of the app's Goals › Categories: the same list, the same rules."""
+    if action == "add_category":
+        categories.add(args.get("name"), args.get("icon"))
+    elif action == "update_category":
+        if args.get("name") is None and args.get("icon") is None:
+            raise BoardError("Give the category a new name or icon.")
+        categories.update(args.get("category") or args.get("id"), name=args.get("name"), icon=args.get("icon"))
+    elif action == "remove_category":
+        categories.delete(args.get("category") or args.get("id"))
+    listed = {"categories": [category.payload() for category in categories.list()]}
+    return listed if action == "categories" else {"ok": True, **listed}
+
+
+def handle_tool(args: dict, store: BoardStore | None = None,
+                categories: goal_categories.CategoryStore | None = None) -> str:
     store = store or current_store()
     action = args.get("action")
     try:
@@ -785,17 +852,29 @@ def handle_tool(args: dict, store: BoardStore | None = None) -> str:
                 "answered": [{"id": item["id"], "title": item["title"], "section": item["section"],
                               "answer": item["answer"], "rating": item["rating"], "reason": item["reason"]}
                              for item in answered],
-            })
+            } | ({"categories": [category.payload() for category in store.categories()]}
+                 if kind in (None, "goal") else {}))
         elif action == "remove":
             return json.dumps({"removed": store.remove(args.get("id"))})
+        elif action in _CATEGORY_ACTIONS:
+            return json.dumps(_change_categories(action, args, categories or goal_categories.store()))
         else:
-            raise BoardError("action must be post, idea, goal, update_goal, list or remove.")
-    except BoardError as error:
+            raise BoardError("action must be post, idea, goal, update_goal, list, remove, categories, "
+                             "add_category, update_category or remove_category.")
+    except (BoardError, GoalCategoryError) as error:
         return json.dumps({"error": str(error)})
     result = {"ok": True, "id": item["id"], "kind": item["kind"],
               "shownIn": {"feed": "Feed", "idea": "Ideas", "goal": "Goals"}[item["kind"]]}
     if item["files"]:
         result["files"] = len(item["files"])
+    if item["kind"] == "goal":
+        result["category"] = item["category"]
+        named = args.get("category")
+        if isinstance(named, str) and named.strip() and goal_categories.find(named, store.categories()) is None:
+            # Filed where its words point, or under other: say so, so the agent can add the category.
+            result["note"] = (f"This computer has no goal category named {named.strip()[:goal_categories.MAX_NAME]!r}, "
+                              f"so the goal is under {item['category']!r}. 'categories' lists them; "
+                              "'add_category' adds one when the user wants it.")
     return json.dumps(result)
 
 

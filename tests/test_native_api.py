@@ -261,6 +261,7 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.voice_history import available as voice_history_available
         if "native-voice-v1" in expected and voice_history_available():
             expected.append("native-voice-history-v1")
+        expected.append("native-goal-categories-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")
@@ -788,7 +789,32 @@ class NativeAPITests(unittest.TestCase):
         self.assertEqual(items[0]["images"], [{"index": 0, "mimeType": "image/png"}, {"url": "https://example.com/a.jpg"}])
         self.assertNotIn(str(self.home), listed.text)
         goals = {item["id"]: item for item in board("list", {"agentId": "default", "kinds": ["goal"]}).json()["items"]}
-        self.assertEqual((goals["run"]["category"], goals["pkg"]["category"]), ("health", ""))
+        self.assertEqual((goals["run"]["category"], goals["pkg"]["category"]), ("health", "other"))
+
+        # The computer's own goal categories: the list comes with the board, and the app changes it.
+        listed = board("list", {"agentId": "default", "kinds": ["goal"]}).json()
+        self.assertEqual([row["id"] for row in listed["goalCategories"]],
+                         ["health", "relationships", "finance", "career", "interests", "productivity", "other"])
+        added = board("categories", {"agentId": "default", "action": "add", "name": "Home lab", "icon": "🖥️"})
+        self.assertEqual(added.status_code, 200, added.text)
+        self.assertIn({"id": "home-lab", "name": "Home lab", "icon": "🖥️"}, added.json()["goalCategories"])
+        store.update_goal("pkg", category="Home lab")
+        renamed = board("categories", {"agentId": "default", "action": "update", "id": "home-lab", "name": "Homelab"})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        goals = {item["id"]: item for item in board("list", {"agentId": "default", "kinds": ["goal"]}).json()["items"]}
+        self.assertEqual((goals["pkg"]["category"], goals["pkg"]["categoryName"], goals["pkg"]["categoryIcon"]),
+                         ("home-lab", "Homelab", "🖥️"))
+        taken = board("categories", {"agentId": "default", "action": "add", "name": "homelab"})
+        self.assertEqual((taken.status_code, taken.json()["error"]["code"]), (409, "category_exists"))
+        self.assertIn("Homelab", taken.json()["error"]["message"])
+        self.assertEqual(board("categories", {"agentId": "default", "action": "delete", "id": "other"}).status_code, 409)
+        self.assertEqual(board("categories", {"agentId": "default", "action": "delete", "id": "nope"}).status_code, 404)
+        self.assertEqual(board("categories", {"agentId": "default", "action": "update", "id": "home-lab"}).status_code,
+                         422)
+        self.assertEqual(board("categories", {"agentId": "default", "action": "delete", "id": "home-lab"}).status_code,
+                         200)
+        goals = {item["id"]: item for item in board("list", {"agentId": "default", "kinds": ["goal"]}).json()["items"]}
+        self.assertEqual(goals["pkg"]["category"], "other", "A removed category's goals show under other")
 
         liked = board("update", {"agentId": "default", "itemId": post["id"], "liked": True})
         self.assertTrue(liked.json()["item"]["liked"])

@@ -109,7 +109,7 @@ launchd, systemd and Hermes Desktop continue to supervise it. Chats that run on 
 
 | Feature | What you get in bighelp | Details |
 | --- | --- | --- |
-| Agent board | Each agent's Feed, Ideas, Goals, Activity and approval history, next to its chat. Agents post with the `bighelp_board` tool. Feed posts can carry files that you can open, save and share. | [Agent board](docs/AGENT_BOARD.md) |
+| Agent board | Each agent's Feed, Ideas, Goals, Activity and approval history, next to its chat. Agents post with the `bighelp_board` tool. Feed posts can carry files that you can open, save and share. Each computer has its own list of goal categories: you add, rename and delete them in the app's Goals, or you ask an agent to. | [Agent board](docs/AGENT_BOARD.md) |
 | Files tab | An agent's working folder, the files that the agent made or changed recently, and the pictures and videos that it sent. Read-only. In Simple Bot mode, each bot's Files tab shows the folder of that bot. Other screens show the folder of the agent that serves the app. | [Files tab](docs/APPS_ARTIFACTS_AND_MEDIA.md) |
 | Cards | Native cards in chat: summaries, metrics, lists, timelines, charts, forms, checklists, weather, scores, stock quotes and more, through the `bighelp_render_*` tools. Agents show a person, place or song they found as a contact, place or music card with action buttons. Agents can save a layout as a private card template and use it again with new values. | [Cards guide](docs/CARDS.md) |
 | Reactions | Agents can react to your messages with an emoji (`bighelp_react_to_message`). | |

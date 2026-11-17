@@ -27,7 +27,7 @@ LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1",
                  "native-agents-background-v1", "native-agents-today-v1",
                  "native-agents-today-detail-v1", "native-computer-screen-v1",
                  "native-uploads-small-pieces-v1", "native-agent-deliveries-v1", "native-chat-live-v1",
-                 "native-spaces-v1", "native-voice-history-v1")
+                 "native-spaces-v1", "native-voice-history-v1", "native-goal-categories-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -604,4 +604,10 @@ def _native_features(
         features.append(voice_history_capability)
     else:
         skip(voice_history_capability, "live voice or Hermes' session store is unavailable on this host.")
+    # The computer's own goal categories: `board/list` names them, and `board/categories` changes them.
+    from .goal_categories import CAPABILITY as goal_categories_capability, available as goal_categories_available
+    if "native-agent-board-goal-categories-v1" in features and goal_categories_available():
+        features.append(goal_categories_capability)
+    else:
+        skip(goal_categories_capability, "the agent board or a POSIX host is unavailable.")
     return profile, tuple(features)
