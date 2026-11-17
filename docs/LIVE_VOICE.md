@@ -22,6 +22,32 @@ All five operations are `POST /api/plugins/loopdy/native/voice/<operation>` with
 checks (see [Native workspace API](NATIVE_WORKSPACE_API.md)). The plugin advertises `native-voice-v1`. The routes
 don't check that feature themselves: they check the native session, the context ETag and that the agent exists.
 
+## A call continues its chat
+
+A call opens in one chat, and it carries that chat on in both directions (`native-voice-history-v1`).
+
+- **Into the call.** Before the voice model listens, the `offer` reads the chat the app names (`agentId`,
+  `sessionId`) from that agent's own `state.db`: its newest messages with their roles, the summary Hermes wrote
+  when it compacted the older part, and the request a turn is still working on. Tool calls, tool results and
+  Hermes' own notices stay out. Every provider gets the same snapshot: up to 16 messages, at most 800 characters
+  each and 8,000 bytes together, fenced in the instructions as data with each message's role. On GPT-Live the
+  oldest give way first when the brief and the chat don't fit in 16,000 bytes. The brief tells the model to
+  carry the chat on: answer from it, don't greet as if it were new, and don't repeat earlier answers.
+- **Back into the chat.** `POST …/voice/transcript` takes the call's finished lines: `voiceId` and up to 32
+  `items`, each `{id, role: user|assistant, text (up to 4,000 characters), interrupted, at}`. Each line becomes an
+  ordinary message in the chat (on the newest part of a compacted chat), stamped with the time it was said. A
+  reply the person cut off ends with "…". Nothing runs: Hermes adds rows another writer saved to the chat's live
+  history at its next turn, so the next typed message knows what was said. Requests the voice model handed over
+  are already their own turns in the chat, and are never sent again.
+- **Order and at most once.** The plugin writes only while no turn runs in the chat (Hermes' turn lease, or this
+  dashboard running it), so a spoken line never lands inside a turn. A busy chat answers 409
+  `voice_chat_busy`, and the app sends the same lines again later. Each line is saved at most once per call and
+  `id` (`plugin-data/loopdy/voice_history.sqlite3` in the agent's home, kept 30 days), so a retry after a lost
+  answer or a reconnect never doubles one. The answer lists the IDs written now (`saved`) and before (`known`). A
+  chat that isn't this agent's answers 409 `voice_chat_unavailable`.
+
+Reads and writes stay in the one chat the request names, in the agent it names, on this computer.
+
 ## Providers
 
 - **Codex subscription** (default): GPT-Live on the Codex subscription signed in on the host. The phone never
@@ -103,7 +129,8 @@ on top of the model's line.
 
 ## What the plugin keeps
 
-Nothing lasting. The person's name, place and time zone go into that call's instructions to the voice provider,
-and the plugin doesn't keep them. Call state lives in memory and is dropped when the call closes or the plugin unloads. The
-plugin doesn't run prompts, store transcripts or schedule work; the conversation lives in Hermes' normal
-history.
+Nothing of its own beyond the call. The person's name, place and time zone, and the chat's newest messages, go
+into that call's instructions to the voice provider, and the plugin doesn't keep them. Call state lives in memory
+and is dropped when the call closes or the plugin unloads. What was said on the call is saved in the chat itself,
+in Hermes' normal history; the plugin keeps only which lines it saved (call and line IDs, no text). It doesn't run
+prompts or schedule work.

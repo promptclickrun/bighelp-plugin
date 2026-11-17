@@ -258,6 +258,9 @@ class NativeAPITests(unittest.TestCase):
         from loopdy_plugin.spaces import available as spaces_available
         if spaces_available():
             expected.append("native-spaces-v1")
+        from loopdy_plugin.voice_history import available as voice_history_available
+        if "native-voice-v1" in expected and voice_history_available():
+            expected.append("native-voice-history-v1")
         self.assertEqual(value["features"], expected)
         self.assertEqual(value["servingProfileId"], "default")
         self.assertEqual(result.headers["cache-control"], "no-store")

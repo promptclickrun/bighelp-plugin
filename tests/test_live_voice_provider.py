@@ -156,6 +156,20 @@ class LiveVoiceProviderTests(unittest.TestCase):
             "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", PublicLiveProvider.default_instructions, "marin", ())
         self.assertEqual(public["session"]["delegation"], {"type": "client"})
 
+    def test_both_gpt_live_options_carry_the_chat_with_each_messages_role(self):
+        from loopdy_plugin.live_voice_provider import CodexLiveProvider, PublicLiveProvider
+
+        chat = ({"role": "user", "text": "My locker code is 4417."}, {"role": "assistant", "text": "Got it."})
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+        codex = CodexLiveProvider(auth=_Auth())._create_payload(sdp, "You are Nova.", "cove", chat)
+        public = PublicLiveProvider(mode="api_key", api_key="test-key")._create_payload(sdp, "You are Nova.", "marin", chat)
+        for payload in (codex, public):
+            instructions = payload["session"]["instructions"]
+            self.assertTrue(instructions.startswith("You are Nova."))
+            self.assertIn('[{"role": "user", "text": "My locker code is 4417."}, '
+                          '{"role": "assistant", "text": "Got it."}]', instructions)
+        self.assertEqual(public["session"]["input"], [])
+
     def test_subscription_instructions_cover_delegation_and_continued_turns(self):
         from loopdy_plugin.live_voice_provider import CodexLiveProvider, DEFAULT_INSTRUCTIONS
 

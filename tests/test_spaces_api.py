@@ -73,12 +73,14 @@ class SpacesRouteTests(unittest.TestCase):
 
     # MARK: The feature
 
-    def test_the_feature_is_advertised_last(self):
+    def test_the_feature_is_advertised_among_the_late_ones(self):
         full = self.client.get(PREFIX + "/context", headers={"Authorization": "Bearer fixture-alice",
                                                              "X-Bighelp-Features": "all"})
-        self.assertIn(FEATURE, full.json()["features"])
+        features = full.json()["features"]
+        self.assertIn(FEATURE, features)
         self.assertIn(FEATURE, LATE_FEATURES)
-        self.assertEqual(FEATURE, full.json()["features"][-1])
+        # Older apps get the list cut at 64: everything from here on is a feature they don't know.
+        self.assertTrue(set(features[features.index(FEATURE):]) <= set(LATE_FEATURES))
 
     def test_a_host_without_scheduled_tasks_leaves_the_feature_out_and_refuses_the_routes(self):
         self.available.return_value = False

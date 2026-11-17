@@ -829,12 +829,10 @@ class PublicLiveProvider(_LiveTransport):
     def _create_payload(self, sdp: str, instructions: str, voice: str, context: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if voice not in self.voices:
             raise LiveProviderError("unsupported_voice")
-        _instructions(instructions, context)  # shared size/role checks, not wire shape
-        history = [{"type": "message", "role": item["role"], "content": [{
-            "type": "output_text" if item["role"] == "assistant" else "input_text", "text": item["text"],
-        }]} for item in context]
-        return {"session": {"model": "gpt-live-1", "instructions": instructions,
-                            "input": history, "store": False,
+        # The chat rides in the instructions with each message's role, as for Codex and Gemini: one shape
+        # every provider reads the same way. `input` stays empty, as every call so far has sent it.
+        return {"session": {"model": "gpt-live-1", "instructions": _instructions(instructions, context),
+                            "input": [], "store": False,
                             "audio": {"output": {"voice": voice}}, "delegation": {"type": "client"}},
                 "transport": {"type": "webrtc", "sdp": sdp}}
 

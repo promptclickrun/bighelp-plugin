@@ -8,6 +8,10 @@ the resulting answer here. Provider credentials never leave this process.
 Every call's voice model is the agent itself: its brief comes from the agent's
 name and SOUL.md (``voice_brief``). GPT-Live calls hold their sideband here; a
 Gemini call is only a single-use token, and the phone holds the whole session.
+
+A call continues the chat it opens in: every provider starts with that chat's
+newest messages, its summary and the work still running (``voice_history``), and
+the app saves what was said back into it (``transcript``) once each line ends.
 """
 from __future__ import annotations
 
@@ -24,17 +28,19 @@ from typing import Literal
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationInfo, field_validator
 
-from . import gemini_live, voice_brief
+from . import gemini_live, voice_brief, voice_history
 from .native_context import NativeAPIError, NativeContext, native_context
 from .live_voice_provider import (
     MAX_PROVIDER_EVENT_NAME_BYTES, MAX_PROVIDER_EVENT_TYPES,
-    LiveProviderError, make_live_provider, validate_audio_sdp,
+    LiveProviderError, _instructions as instructions_with_context, make_live_provider, validate_audio_sdp,
 )
 
 CAPABILITY = "native-voice-v1"
 GEMINI_CAPABILITY = "native-voice-gemini-v1"
 logger = logging.getLogger(__name__)
 _FIXED_NAME = re.compile(r"[a-z_]{1,48}")
+# GPT-Live refuses longer instructions, and Codex's carry the chat's messages too.
+MAX_INSTRUCTIONS_BYTES = 16_000
 
 
 def _reject(code="voice_unavailable", status=409):
@@ -84,9 +90,11 @@ class _Call:
 
 class NativeVoiceHub:
     def __init__(self, *, provider_factory=make_live_provider, lease_seconds=60, setup_seconds=40,
-                 brief=voice_brief.for_profile, gemini_mint=gemini_live.mint, gemini_key=gemini_live.api_key):
+                 brief=voice_brief.for_profile, gemini_mint=gemini_live.mint, gemini_key=gemini_live.api_key,
+                 history=voice_history.snapshot):
         self.factory = provider_factory
         self.brief = brief
+        self.history = history
         self.gemini_mint = gemini_mint
         self.gemini_key = gemini_key
         self.lease_seconds = lease_seconds
@@ -129,8 +137,10 @@ class NativeVoiceHub:
                 async with asyncio.timeout(self.setup_seconds):
                     with _profile_scope(fields["agentId"]):
                         instructions = self.brief(fields["agentId"], delegation="client", **_brief_context(fields))
+                    instructions, context = await self._continued(fields, instructions)
+                    with _profile_scope(fields["agentId"]):
                         answer = await call.provider.create(
-                            fields["sdp"], instructions=instructions, voice=fields["voice"])
+                            fields["sdp"], instructions=instructions, voice=fields["voice"], context=context)
             except TimeoutError:
                 raise LiveProviderError("setup_timeout") from None
             if call.closed:
@@ -160,10 +170,24 @@ class NativeVoiceHub:
                         self.gemini_key())
         try:
             instructions, key = await asyncio.to_thread(brief_and_key)
+            # Gemini's token locks its whole setup, so the chat rides in the system instruction.
+            instructions = instructions_with_context(*await self._continued(fields, instructions))
             connect = await self.gemini_mint(instructions, fields["voice"], key=key)
         except LiveProviderError as error:
             raise _provider_rejection(error) from None
         return {"voiceId": fields["voiceId"], **connect}
+
+    async def _continued(self, fields, instructions):
+        """The brief and conversation items for a call that continues its chat: how to carry it on, then the
+        chat's newest messages, as many as GPT-Live's instructions limit leaves room for. The snapshot is
+        read before the voice model listens, so its first answer already knows the chat."""
+        snapshot = await asyncio.to_thread(self.history, fields["agentId"], fields["sessionId"])
+        instructions += voice_brief.continuation(messages=bool(snapshot.entries), summary=snapshot.summary,
+                                                 working=snapshot.working)
+        context = list(snapshot.entries)
+        while context and len(instructions_with_context(instructions, context).encode("utf-8")) > MAX_INSTRUCTIONS_BYTES:
+            context.pop(0)  # The oldest goes first.
+        return instructions, context
 
     async def _event(self, call, event):
         if call.closed or not isinstance(event, dict):
@@ -347,6 +371,36 @@ def _brief_context(fields: dict) -> dict:
             "time_zone": fields.get("timeZone", "")}
 
 
+class _SpokenItem(BaseModel):
+    """One finished line of the call: what the person said, or what the voice model said back."""
+    model_config = ConfigDict(extra="ignore", strict=True)
+    id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=voice_history.MAX_ITEM_CHARS)
+    # The person cut the reply off: it ends where they did.
+    interrupted: bool = False
+    # When the line ended, in seconds since 1970.
+    at: float | None = None
+
+    @field_validator("at", mode="before")
+    @classmethod
+    def _seconds(cls, value: object) -> object:
+        return float(value) if type(value) is int else value
+
+
+class _Transcript(_Voice):
+    items: list[_SpokenItem] = Field(min_length=1, max_length=voice_history.MAX_ITEMS)
+
+
+async def _save_transcript(fields: dict) -> dict:
+    try:
+        saved = await asyncio.to_thread(voice_history.save, fields["agentId"], fields["sessionId"],
+                                        fields["voiceId"], fields["items"])
+    except voice_history.VoiceHistoryError as error:
+        raise NativeAPIError(409, error.code, "The chat can't take the call's words right now.") from None
+    return {"voiceId": fields["voiceId"], **saved}
+
+
 class _Poll(_Voice):
     after: StrictInt = Field(ge=0, le=9_007_199_254_740_991)
 
@@ -369,7 +423,8 @@ def _has_gemini_key(agent_id: str) -> bool:
 
 async def request(operation: str, request: Request):
     from .native_api import _body, _precondition, _response
-    models = {"status": _Status, "offer": _Offer, "poll": _Poll, "result": _Result, "close": _Voice}
+    models = {"status": _Status, "offer": _Offer, "poll": _Poll, "result": _Result, "close": _Voice,
+              "transcript": _Transcript}
     if operation not in models:
         raise _reject("unknown_voice_operation", 404)
     owner = native_context(request)
@@ -396,6 +451,10 @@ async def request(operation: str, request: Request):
         value = {"available": configured, "enabled": True, "provider": body.provider, "interruptSupported": False}
     elif operation == "poll":
         value = _HUB.poll(owner, fields, after=body.after)
+    elif operation == "transcript":
+        # Not tied to a call this process holds: a Gemini call is the phone's, and the words of a call
+        # that ended, or whose connection changed, still belong in its chat.
+        value = await _save_transcript(fields)
     else:
         value = await getattr(_HUB, operation)(owner, fields)
     if native_context(request) != owner:

@@ -27,7 +27,7 @@ LATE_FEATURES = ("native-device-permission-request-v1", "native-marketplace-v1",
                  "native-agents-background-v1", "native-agents-today-v1",
                  "native-agents-today-detail-v1", "native-computer-screen-v1",
                  "native-uploads-small-pieces-v1", "native-agent-deliveries-v1", "native-chat-live-v1",
-                 "native-spaces-v1")
+                 "native-spaces-v1", "native-voice-history-v1")
 FULL_FEATURES_HEADER = "x-bighelp-features"
 PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _startup_advertisement_logged = False
@@ -598,4 +598,10 @@ def _native_features(
         features.append(spaces_capability)
     else:
         skip(spaces_capability, "this Hermes has no scheduled tasks here.")
+    # A voice call continues its chat: the offer reads it, and `voice/transcript` saves what was said into it.
+    from .voice_history import CAPABILITY as voice_history_capability, available as voice_history_available
+    if "native-voice-v1" in features and voice_history_available():
+        features.append(voice_history_capability)
+    else:
+        skip(voice_history_capability, "live voice or Hermes' session store is unavailable on this host.")
     return profile, tuple(features)
